@@ -8,16 +8,15 @@ all: src/*
 
 server: src/server_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/cloud-rmi.h src/config.h
 	@echo " * Building rmi-server binary ..."
-	@gcc -g -lm src/server_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c -o rmi-server
+	gcc -g -lm src/server_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c -o rmi-server -D ENABLE_LINUX_FEATURES
 
 client: src/client_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/cloud-rmi.h src/config.h src/client.h
 	@echo " * Building rmi-client binary ..."
-	@gcc -g -lm src/client_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c -o rmi-client
+	gcc -g -lm src/client_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c -o rmi-client -D ENABLE_LINUX_FEATURES
 
 proxy: src/client_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/server.c src/client.c src/cloud-rmi.h src/config.h src/client.h
 	@echo " * Building rmi-client binary ..."
-	@gcc -g -lm src/client_main.c src/base64.c src/cloud-rmi.c src/config.c src/protocol.c src/handle_call.c src/client.c src/server.c src/proxy.c -o rmi-proxy
-
+	gcc -g -lm src/server_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/client.c src/protocol.c src/server.c src/proxy.c -o rmi-proxy -D PROXY_SUPPORT -D ENABLE_LINUX_FEATURES
 
 install:
 	@echo "Installing rmi-server ..."
