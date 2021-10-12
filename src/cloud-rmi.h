@@ -8,7 +8,7 @@
 #define BUF_SZ 10240
 
 #ifdef ENABLE_LINUX_FEATURES
-	#define CHILD_STACK_SZ  	65535  /* BUF_SZ * 10 was ok as well */
+	#define CHILD_STACK_SZ  	BUF_SZ * 24   // seems safe above BUF_SZ * 10 up to version 0.91
 
 	#ifndef DISABLE_WORKER_REUSE  
 		/* These are just default values */
