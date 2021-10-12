@@ -16,5 +16,12 @@ to install it on local system.
 Add after `gcc` command using `-D` argument (e.g. `gcc ... -D ENABLE_LINUX_FEATURES`)
  
 - ENABLE_LINUX_FEATURES	- use Linux glibc features
+- PROXY_SUPPORT			- enable proxy support for server
 - DISABLE_WORKER_REUSE	- don't use prefork frozen worker proccess manager
+
+### Development
+
+## Notes
+
+- CHILD_STACK_SZ 		- for versions until 0.9 value of `BUF_SZ * 10` is sufficient, increase and test well for possible segmentation faults when adding new variables! (Default value: BUF_SZ * 24)
 

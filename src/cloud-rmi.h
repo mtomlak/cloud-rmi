@@ -3,7 +3,7 @@
 #include <string.h>
 
 #define APP_NAME "CloudRMI"
-#define APP_VERSION "0.9"
+#define APP_VERSION "0.9.1"
 #define PROTOCOL_VERSION "1.0"
 #define BUF_SZ 10240
 
