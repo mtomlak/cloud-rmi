@@ -329,14 +329,25 @@ void proxy_send_stats(int sock)
    int i, j;
    struct proxy_server *proxy;
 
-   stream_writeln(sock, "Hostname:\tPort:\tConnections (free/total):");
+   stream_writeln(sock, "Proxy Server Info:\nHostname:\tPort:\tConnections (free/total):");
 
    for (i = 0; i < proxy_count; i++) {
       proxy = proxy_list_get(i);
       stream_writeln(sock,  "%s\t%i\t%i/%i", proxy->hostname, proxy->port, proxy_get_spare_conn_count(i), proxy->conn_count);
+
+      // If the proxy has client connections, print them
+      if (proxy->conn_count > 0) {
+          stream_writeln(sock, "Client Connections for Proxy %i:", proxy->proxy_id);
+          stream_writeln(sock, "Connection ID:\tProxy ID:\tSocket:\tIs Busy:");
+          for (j = 0; j < proxy->conn_count; j++) {
+              struct proxy_conn *conn = &proxy->conns[j];
+              stream_writeln(sock, "%i\t\t%i\t\t%i\t%i", conn->conn_id, conn->proxy_id, conn->sock, conn->is_busy);
+          }
+      }
    }
    stream_write(sock, "\n\n");   // end data with empty line
 }
+
 
 int proxy_pass_raw_cmd(int proxy_num, struct conn_state *client_conn, char *cmd)
 {
