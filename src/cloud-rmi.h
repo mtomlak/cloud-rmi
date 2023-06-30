@@ -97,6 +97,7 @@ struct server_iface_entry *server_get_iface_entry(char *iface_name);
 int read_iface_config(char *config_file);
 struct helper_proc_state *new_helper_state(void *stack, int stack_size);
 void server_send_stats(int sock);
+void child_exit_self(void *stack, int stack_size);
 // protocol.c
 void handle_connection(int sock);
 // handle_call.c

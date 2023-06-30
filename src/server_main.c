@@ -39,6 +39,13 @@ void show_help(char *this_cmd)
 #ifdef PROXY_SUPPORT
 	printf(" - compiled with Proxy support (protocol %s)\n", PROXY_PROTOCOL_VERSION);
 #endif
+#ifdef LEGACY_STREAM
+   printf(" - compiled with legacy stream implementation\n");
+#endif
+#ifdef PROTO_EXTENSIONS
+   printf(" - compiled with protocol extensions: %s\n", PROTO_EXTENSIONS);
+#endif
+
 	printf("\nUsage: \n");
 	printf("\t%s < flags | options >\n", basename(this_cmd));
 	printf("\t%s --help | -h\n", basename(this_cmd));

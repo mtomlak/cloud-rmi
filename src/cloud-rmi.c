@@ -39,6 +39,7 @@ void die_err(char *errstr)
    exit(1);
 }
 
+#ifdef LEGACY_STREAM
 /**
  * Writes formatted string to the stream, similar usage as sprintf().
  * 
@@ -227,6 +228,171 @@ int stream_readlns(int sock, char* line, int max_size)
 
    return size;
 }
+
+#else
+
+void handle_error(const char *message) {
+    perror(message);
+    // Optionally, you can exit or handle the error differently
+}
+
+int stream_write(int sock, char *format, ...)
+{
+    char buf[BUF_SZ + 1];
+    int bytes;
+    va_list argptr;
+
+    va_start(argptr, format);
+    int ret = vsnprintf(buf, BUF_SZ, format, argptr);
+    va_end(argptr);
+
+    if (ret < 0 || ret >= BUF_SZ) {
+        handle_error("stream_write() -- vsnprintf() failed or output truncated");
+        return -1;
+    }
+
+    bytes = write(sock, buf, strlen(buf));
+
+    if (bytes < 0) {
+        handle_error("stream_write() -- ERROR writing to socket");
+        return -1;
+    }
+    
+    if (var_debug)
+        printf("OUT: |%s|\n", buf);
+
+    return bytes;
+}
+
+int stream_writeln(int sock, char *format, ...)
+{
+    char buf[(BUF_SZ + 1)];
+    int bytes_written;
+
+    va_list argptr;
+    va_start(argptr, format);
+
+    int bytes = vsnprintf(buf, BUF_SZ - 1, format, argptr);
+    if (bytes < 0 || bytes >= BUF_SZ - 1) {
+        handle_error("stream_writeln() -- vsnprintf() failed");
+        va_end(argptr);
+        return -1;
+    }
+    va_end(argptr);
+
+    buf[bytes] = '\n';   // append newline
+    buf[bytes + 1] = '\0'; // null-terminate
+
+    bytes_written = write(sock, buf, strlen(buf));
+
+    if (bytes_written < 0) {
+        handle_error("stream_writeln() -- ERROR writing to socket");
+        return -1;
+    }
+    if (var_debug)
+        printf("OUT: |%s|\n", buf);
+
+    return bytes_written;
+}
+
+int stream_read(int sock, char* buf, int buf_size)
+{
+    int bytes;
+
+    bytes = read(sock, buf, buf_size - 1);
+
+    if (bytes < 0) {
+        handle_error("stream_read() -- ERROR reading from socket");
+        return -1;
+    }
+    
+    buf[bytes] = '\0'; // Null-terminate the buffer to safely print it
+
+    if (var_debug)
+        printf("IN: |%s|\n", buf);
+
+    return bytes;
+}
+
+int stream_readln(int sock, char* line, int max_size)
+{
+    int bytes, size = 0;
+    char chr_buf;
+
+    memset(line, 0, max_size);
+
+    while((bytes = read(sock, &chr_buf, 1)) > 0)  {
+        if (chr_buf == '\n' || chr_buf == '\r') {
+            if (size) break;
+            continue;
+        }
+
+        if (size < max_size - 1) {
+            line[size++] = chr_buf;
+        }
+    }
+
+    if (bytes < 0) {
+        handle_error("stream_readln() -- ERROR reading from socket");
+        return -1;
+    }
+    
+    if (var_debug)
+        printf("IN: |%s|\n", line);
+
+    return size;
+}
+
+int stream_readlns(int sock, char* line, int max_size)
+{
+    int bytes, size = 0;
+    int lnbr_count = 0;
+    char chr_buf;
+
+    memset(line, 0, max_size);
+
+    do {
+        bytes = read(sock, &chr_buf, 1);
+
+        if (bytes < 0) {
+            handle_error("stream_readlns() -- ERROR reading from socket");
+            return -1;
+        }
+
+        // Exit on null character
+        if (chr_buf == '\0')
+            break;
+
+        // Filter carriage return
+        if (chr_buf == '\r')
+            continue;
+
+        // Stop on empty line
+        if (chr_buf == '\n') {
+            lnbr_count++;
+
+            if (lnbr_count > 1) {
+                line[size - 1] = '\0';  // remove last linefeed
+                break;
+            }
+        } else {
+            lnbr_count = 0;
+        }
+
+        if (size < max_size - 1) {
+            line[size++] = chr_buf;
+        }
+
+    } while (bytes > 0);
+
+    if (var_debug)
+        printf("IN: |%s|\n", line);
+
+    return size;
+}
+
+
+#endif
 
 
 /**

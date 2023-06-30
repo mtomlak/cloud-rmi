@@ -13,6 +13,8 @@
 #include <signal.h>
 #include "cloud-rmi.h"
 #include "config.h"
+#include <sys/wait.h>
+#include <time.h>
 
 /**
  * Provides TCP server functionality, handles multiple connections by forking.
@@ -409,7 +411,7 @@ void manager_handle_sigterm(int signum)
 
 int start_worker_manager(void *arg)
 {
-   int chldsig, sec_passed = 0;
+   int sec_passed = 0;
    struct helper_proc_state *rcvd_state;
    struct helper_proc_state state;
    struct sigaction action;
@@ -445,7 +447,7 @@ int start_worker_manager(void *arg)
             create_spare_children_proc(MIN_SPARE_WORKERS);
          }
       }
-      waitpid(-1, chldsig, WNOHANG);   // keep collecting child signals // server_remove_spare_child
+      waitpid(-1, NULL, WNOHANG);   // keep collecting child signals // server_remove_spare_child
       sleep(1);
       sec_passed++;
    }
@@ -542,7 +544,6 @@ int server_start(int port_num)
    int sockfd, newsockfd, clilen;
    char buffer[BUF_SZ];
    struct sockaddr_in serv_addr, cli_addr;
-   int chldsig;
 
 #ifdef REUSE_WORKER_PROC
    /* Get ready some spare children */
@@ -562,7 +563,7 @@ int server_start(int port_num)
 
    /* Set socket option to enable port reuse */
    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int)) < 0)
-      error("setsockopt(SO_REUSEADDR) failed");
+      die_err("setsockopt(SO_REUSEADDR) failed");
    
    /* Initialize socket structure */
    bzero((char *) &serv_addr, sizeof(serv_addr));
@@ -605,7 +606,7 @@ int server_start(int port_num)
 #endif
 
       /* Collect finished child proccesses */
-      waitpid(-1, chldsig, WNOHANG);
+      waitpid(-1, NULL, WNOHANG);
 
    } /* end of while */
 

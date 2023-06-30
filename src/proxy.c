@@ -33,6 +33,9 @@ int proxy_manager_pipe[2];
 int var_proxy_min_spare_conns = 3;
 struct proxy_iface_entry *proxy_iface_map;
 
+// refered from inside
+int proxy_get_spare_conn_count(int proxy_id);
+
 
 //
 // Proxy list management
