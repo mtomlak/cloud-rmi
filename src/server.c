@@ -747,7 +747,12 @@ int read_iface_config(char *config_file)
    bzero(iface_short, BUF_SZ);
    bzero(file_short, BUF_SZ);
 
-   if((fp = fopen(config_file, "r")) == NULL) {
+   if((fp = fopen(config_file, "r")) == NULL) { 
+      free(line);
+      free(iface);
+      free(file);
+      free(iface_short);
+      free(file_short);
       return 0;
    }
 
