@@ -15,6 +15,7 @@
 #include "config.h"
 #include <sys/wait.h>
 #include <time.h>
+//#include <syscall.h>
 
 /**
  * Provides TCP server functionality, handles multiple connections by forking.
@@ -25,11 +26,24 @@
  */
 
 #ifdef ENABLE_LINUX_FEATURES
-/**
- * Enables cloned child proccess to free it's own stack and exit
- * 
- * @param state struct child_proc_state
- */
+
+void child_exit_self(void *stack, int stack_size)
+{
+   // stack size not used in this implementation
+    free(stack);
+    _exit(0);
+}
+
+/*
+void child_exit_self(void *stack, int stack_size) 
+{
+    if (stack_size < 0)
+        return;
+
+    syscall(SYS_munmap, stack, (size_t)stack_size);
+    syscall(SYS_exit, 0);
+}
+
 void child_exit_self(void *stack, int stack_size)
 {
    // Call that allows child to clean up it's own stack
@@ -43,8 +57,9 @@ void child_exit_self(void *stack, int stack_size)
              "syscall\n" :: "g" (stack), "g" (stack_size)
              );
 }
+*/
 
-   #ifdef REUSE_WORKER_PROC
+#ifdef REUSE_WORKER_PROC
 
 void init_spare_children_list()
 {
