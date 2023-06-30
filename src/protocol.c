@@ -133,7 +133,7 @@ int handle_command(char *line, struct conn_state *state)
 #ifdef PROXY_SUPPORT
       stream_writeln(state->sock, "PROXY");
 #endif
-      stream_writeln(state->sock, "RELOAD\r\nTIME\r\nUPTIME\r\nQUIT\r\n");
+      stream_writeln(state->sock, "SERVER\r\nRELOAD\r\nTIME\r\nUPTIME\r\nQUIT\r\n");
 
    } else if (strcmp(cmd, "ifaces") == 0) {
 #ifdef PROXY_SUPPORT
@@ -231,6 +231,14 @@ int handle_command(char *line, struct conn_state *state)
       }
    }
 #endif
+   else if (strcmp(cmd, "server") == 0) {
+      if (strcmp(arg1, "stats") == 0) {
+         stream_writeln(state->sock, "200 Showing statistics:");
+         server_send_stats(state->sock);
+      } else {
+         stream_writeln(state->sock, "400 Bad Request Arguments");
+      }
+   }
    else {
       stream_writeln(state->sock, "400 Bad Request");
    }
@@ -254,7 +262,7 @@ void handle_connection (int sock)
    bzero(buf, BUF_SZ);
 
    // Write welcome message
-   stream_writeln(sock, "220 %s Server Ready", var_context_name);
+   stream_writeln(sock, "220 %s Server Ready EXT %s", var_context_name, PROTO_EXTENSIONS);
    state.sock = sock;
    state.is_authenticated = 0;
 

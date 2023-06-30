@@ -3,9 +3,15 @@
 #include <string.h>
 
 #define APP_NAME "CloudRMI"
-#define APP_VERSION "0.9.1"
+#define APP_VERSION "0.9.3"
 #define PROTOCOL_VERSION "1.0"
 #define BUF_SZ 10240
+
+#ifdef PROXY_SUPPORT
+   #define PROTO_EXTENSIONS "PROXY-STATS SERVER-STATS"
+#else
+   #define PROTO_EXTENSIONS "SERVER-STATS"
+#endif
 
 #ifdef ENABLE_LINUX_FEATURES
 	#define CHILD_STACK_SZ  	BUF_SZ * 24   // seems safe above BUF_SZ * 10 up to version 0.91
@@ -90,6 +96,7 @@ void server_add_iface_entry(char *iface_name, char *file_name);
 struct server_iface_entry *server_get_iface_entry(char *iface_name);
 int read_iface_config(char *config_file);
 struct helper_proc_state *new_helper_state(void *stack, int stack_size);
+void server_send_stats(int sock);
 // protocol.c
 void handle_connection(int sock);
 // handle_call.c

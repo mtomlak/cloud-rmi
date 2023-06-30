@@ -769,3 +769,28 @@ int read_iface_config(char *config_file)
 
    return 1;
 }
+
+void server_send_stats(int sock)
+{
+    #ifdef REUSE_WORKER_PROC
+        struct spare_child_worker *current_child;
+        
+        stream_writeln(sock, "Server Worker Info:\nPID:\tNext Socket:\tStop Signal:");
+
+        current_child = server_spare_children.first;
+
+        while (current_child != NULL) {
+            stream_writeln(sock, "%i\t%i\t\t%i", current_child->pid, current_child->next_sock, current_child->stop_signal);
+            current_child = current_child->next;
+        }
+
+        stream_writeln(sock, "\nTotal Spare Worker: %i", server_spare_children.count);
+        stream_writeln(sock, "\nMin Spare Worker: %i", MIN_SPARE_WORKERS);
+        stream_writeln(sock, "\nMax Spare Worker: %i", MAX_SPARE_WORKERS);
+
+    #else
+        stream_writeln(sock, "REUSE_WORKER_PROC flag not enabled. No spare children information available.");
+    #endif
+
+    stream_write(sock, "\n\n");   // end data with an empty line
+}
