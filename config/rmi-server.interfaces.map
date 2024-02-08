@@ -1,8 +1,12 @@
+##
 # This file maps abstract interfaces with real executable file paths
 # for the execution of RMI commands.
 # Interface names are relative to the $script_base_namespace, file paths
-# are relative to the $script_exec_dir.
+# are relative to the $script_exec_dir, default location is: 
+# /usr/local/libexec/cloud-rmi
+#
 # Format: [interface name]	[executable path]
+##
 
 Application\Bundle\PosixAccount\Provisioning\PosixAccessServiceInterface	posix-acl/posix_access_service
 Application\Bundle\Jabber\Provisioning\JabberVhostServiceInterface		jabber/jabber_vhost_service

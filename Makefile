@@ -1,12 +1,12 @@
 all: src/*
-	@echo -n " * Updating source code ..."
-	@make update > /dev/null && echo 'ok' || echo 'failed'
-	@echo -n " * Building RMI server ..."
-	@make server > /dev/null && echo 'ok' || echo 'failed'
-	@echo -n " * Building RMI client ..."
-	@make client > /dev/null && echo 'ok' || echo 'failed'
-	@echo -n " * Building RMI proxy ..."
-	@make proxy > /dev/null && echo 'ok' || echo 'failed'
+#	@echo -n "Updating source code ..."
+#	@make update
+	@echo -n "Building RMI server ..."
+	make server
+	@echo -n "Building RMI client ..."
+	make client
+	@echo -n "Building RMI proxy ..."
+	make proxy
 
 update:
 	git pull
@@ -25,19 +25,44 @@ proxy: src/client_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_ca
 
 server_install:
 	@echo "Installing rmi-server ..."
-	@cp rmi-server /usr/local/sbin/
+	cp rmi-server /usr/local/sbin/
+	strip /usr/local/sbin/rmi-server
+	chmod +x /usr/local/sbin/rmi-server
+	make config_install
 
 client_install:
 	@echo "Installing rmi-client ..."
-	@cp rmi-client /usr/local/sbin/
+	cp rmi-client /usr/local/sbin/
+	strip /usr/local/sbin/rmi-client
+	chmod +x /usr/local/sbin/rmi-client
+	make config_install
 
 proxy_install:
 	@echo "Installing rmi-proxy ..."
-	@cp rmi-proxy /usr/local/sbin/
+	cp rmi-proxy /usr/local/sbin/
+	strip /usr/local/sbin/rmi-proxy
+	chmod +x /usr/local/sbin/rmi-proxy
+	make config_install
+
+config_install:
+	@echo "Installing configuration files ..."
+	if [ ! -f /etc/init.d/cloud-rmi ]; then \
+		cp etc/init.d/cloud-rmi /etc/init.d/; \
+		chmod +x /etc/init.d/cloud-rmi; \
+	fi
+
+	if [ ! -f /etc/monit.d/cloud-rmi.conf ]; then \
+		cp etc/monit.d/cloud-rmi.conf /etc/monit.d/; \
+	fi
+
+	if [ ! -d /etc/cloud ]; then \
+		mkdir -p /etc/cloud; \
+		cp -r config/* /etc/cloud/; \
+	fi
 
 install:
-	@make server_install
-	@make client_install
-	@make proxy_install
+	make server_install
+	make client_install
+	#make proxy_install
 
 
