@@ -1,0 +1,33 @@
+#!/sbin/openrc-run
+# Gentoo init script for local ProfiWeb Cloud RMI server
+#
+# Changelog: Feb 2024 - daemonization handled by start-stop-daemon
+# in order to be able to properly track PID file.
+#
+# Copyright 1999-2014 Gentoo Foundation
+# Gentoo init script for local ProfiWeb Cloud RMI server
+# Distributed under the terms of the GNU General Public License v2
+# $Id$
+
+extra_started_commands="reload"
+SERVICENAME=${SVCNAME#*.}
+PIDFILE="/var/run/${SERVICENAME}.pid"
+RMI_SERVER_CMD="/usr/local/sbin/rmi-server"
+
+depend() {
+    need net
+    before logger
+}
+
+start() {
+    ebegin "Starting ${SVCNAME}"
+    start-stop-daemon --start --pidfile "${PIDFILE}" --make-pidfile --background --exec "${RMI_SERVER_CMD}" -- "${RMI_SERVER_CMD}"
+    eend $? "Failed to start ${SVCNAME}"
+}
+
+stop() {
+    ebegin "Stopping ${SVCNAME}"
+    start-stop-daemon --stop --pidfile "${PIDFILE}" --exec "${RMI_SERVER_CMD}"
+    eend $? "Failed to stop ${SVCNAME}"
+}
+
