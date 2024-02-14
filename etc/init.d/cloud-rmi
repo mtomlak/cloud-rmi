@@ -15,7 +15,7 @@ PIDFILE="/var/run/${SERVICENAME}.pid"
 RMI_SERVER_CMD="/usr/local/sbin/rmi-server"
 
 depend() {
-    need net
+#    need net
     before logger
 }
 
