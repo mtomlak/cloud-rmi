@@ -30,10 +30,9 @@ rmi_status_t rmi_protocol_next_event(
 
 /*
  * Ownership and lifetime:
- * rmi_event_t fields returned by rmi_protocol_next_event() remain valid until
- * the next call to rmi_protocol_feed(), rmi_protocol_reset(), or destruction
- * of the corresponding rmi_protocol_ctx_t. Callers must copy event data if it
- * needs to outlive those operations.
+ * rmi_event_t carries fixed-size buffers for parsed values. Data written by
+ * rmi_protocol_next_event() lives in the caller-provided structure and remains
+ * valid until the caller overwrites it.
  */
 
 #endif /* CLOUDRMI_PROTOCOL_H */
