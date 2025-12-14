@@ -88,62 +88,57 @@ void handle_print_ifaces(struct conn_state *state)
    stream_write(state->sock, "\n");
 }
 
-/**
- * Handles SimpleRMI protocol command. Returns 1 for server to continue loop,
- * or 0 to exit and drop the connection.
- * 
- */
-int handle_command(char *line, struct conn_state *state)
+static int handle_command_event(rmi_event_t *event, struct conn_state *state)
 {
-   int argc = 0, time_diff;
-   char cmd[(BUF_SZ + 1)], arg1[(BUF_SZ + 1)], arg2[(BUF_SZ + 1)], arg3[(BUF_SZ + 1)], *p;
+   int time_diff;
    char *output = malloc(sizeof(char) * (BUF_SZ + 1));
    time_t t;
    struct tm *tmp;
 
    bzero(output, BUF_SZ);
 
-   argc = sscanf(line, "%s %s %s %s", cmd, arg1, arg2, arg3);
-
-   // make command part lowercase
-   for (p = cmd; *p; ++p) *p = tolower(*p);
-
-   if (strcmp(cmd, "auth") == 0) {
-      if (!handle_auth_cmd(arg1, arg2, state)) {
+   switch (event->type) {
+   case RMI_EVENT_AUTH:
+      if (!handle_auth_cmd(event->arg1, event->arg2, state)) {
          stream_writeln(state->sock, "401 Unauthorized");
+         free(output);
          return 0;
       }
+      break;
 
-   } else if (strcmp(cmd, "call") == 0) {
-      if (argc < 3)  // we now accept also call without arguments
+   case RMI_EVENT_CALL:
+      if (event->argc < 3)  // we now accept also call without arguments
          stream_writeln(state->sock, "400 Bad Request Arguments");
 
       else if (state->is_authenticated) {
 #ifdef PROXY_SUPPORT
          if (var_proxy)
-            proxy_pass_call_cmd(arg1, arg2, arg3, state);
+            proxy_pass_call_cmd(event->arg1, event->arg2, event->arg3, state);
          else
 #endif
-         handle_call_cmd(arg1, arg2, arg3, state);
+         handle_call_cmd(event->arg1, event->arg2, event->arg3, state);
       } else
          stream_writeln(state->sock, "401 Unauthorized");
+      break;
 
-   } else if (strcmp(cmd, "help") == 0) {
+   case RMI_EVENT_HELP:
       stream_writeln(state->sock, "200 Supported commands:\r\nAUTH\r\nCALL\r\nHELP\r\nIFACES\r\nNOOP");
 #ifdef PROXY_SUPPORT
       stream_writeln(state->sock, "PROXY");
 #endif
       stream_writeln(state->sock, "SERVER\r\nRELOAD\r\nTIME\r\nUPTIME\r\nQUIT\r\n");
+      break;
 
-   } else if (strcmp(cmd, "ifaces") == 0) {
+   case RMI_EVENT_IFACES:
 #ifdef PROXY_SUPPORT
       if (var_proxy)
          proxy_print_ifaces(state);
       else
 #endif
       handle_print_ifaces(state);
+      break;
 
-   } else if (strcmp(cmd, "reload") == 0) {
+   case RMI_EVENT_RELOAD:
       if (state->is_authenticated) {
          stream_writeln(state->sock, "200 Reloading configuration");
          read_config(CONFIGURATION_FILE);
@@ -151,11 +146,13 @@ int handle_command(char *line, struct conn_state *state)
 
       } else
          stream_writeln(state->sock, "401 Unauthorized");
+      break;
 
-   } else if (strcmp(cmd, "shutdown") == 0) {
+   case RMI_EVENT_SHUTDOWN:
       stream_writeln(state->sock, "404 Unsupported");
+      break;
 
-   } else if (strcmp(cmd, "time") == 0) { // RFC822 time string
+   case RMI_EVENT_TIME: // RFC822 time string
       t = time(NULL);
       tmp = localtime(&t);
 
@@ -166,14 +163,15 @@ int handle_command(char *line, struct conn_state *state)
          die_err("Error: strftime() failed");
 
       stream_writeln(state->sock, "200 %s", output);
+      break;
 
-   } else if (strcmp(cmd, "uptime") == 0) {
+   case RMI_EVENT_UPTIME:
       if (state->is_authenticated) {
          time_diff = (int)time(NULL) - var_server_start_time;
 
          stream_writeln(
-            state->sock, 
-            "200 Server up for %i days, %i hrs, %i min, %i sec", 
+            state->sock,
+            "200 Server up for %i days, %i hrs, %i min, %i sec",
             (int)floor(time_diff / 86400),
             (int)floor(fmod(time_diff, 86400) / 3600),
             (int)floor(fmod(time_diff, 3600) / 60),
@@ -181,16 +179,18 @@ int handle_command(char *line, struct conn_state *state)
             );
       } else
          stream_writeln(state->sock, "401 Unauthorized");
+      break;
 
-   } else if (strcmp(cmd, "noop") == 0) {
+   case RMI_EVENT_NOOP:
       stream_writeln(state->sock, "200 OK");
+      break;
 
-   } else if (strcmp(cmd, "debug") == 0) {
+   case RMI_EVENT_DEBUG:
       if (state->is_authenticated) {
-         if (strcmp(arg1, "on") == 0) {
+         if (strcmp(event->arg1, "on") == 0) {
             var_debug = 1;
 
-         } else if (strcmp(arg1, "off") == 0) {
+         } else if (strcmp(event->arg1, "off") == 0) {
             var_debug = 0;
          } else {
             stream_writeln(state->sock, "200 Debug information:");
@@ -215,34 +215,39 @@ int handle_command(char *line, struct conn_state *state)
          }
       } else
          stream_writeln(state->sock, "401 Unauthorized");
+      break;
 
-   } else if ((strcmp(cmd, "quit") == 0) || (strcmp(cmd, "exit") == 0)) {
+   case RMI_EVENT_QUIT:
       stream_writeln(state->sock, "221 Bye");
+      free(output);
       return 0;
-      
-   }
+
 #ifdef PROXY_SUPPORT
-   else if (strcmp(cmd, "proxy") == 0) {
-      if (strcmp(arg1, "stats") == 0) {
+   case RMI_EVENT_PROXY:
+      if (strcmp(event->arg1, "stats") == 0) {
          stream_writeln(state->sock, "200 Proxy is %s, showing statistics:", var_proxy ? "ON" : "OFF");
          proxy_send_stats(state->sock);
       } else {
          stream_writeln(state->sock, "400 Bad Request Arguments");
       }
-   }
+      break;
 #endif
-   else if (strcmp(cmd, "server") == 0) {
-      if (strcmp(arg1, "stats") == 0) {
+
+   case RMI_EVENT_SERVER:
+      if (strcmp(event->arg1, "stats") == 0) {
          stream_writeln(state->sock, "200 Showing statistics:");
          server_send_stats(state->sock);
       } else {
          stream_writeln(state->sock, "400 Bad Request Arguments");
       }
-   }
-   else {
+      break;
+
+   case RMI_EVENT_UNKNOWN:
+   case RMI_EVENT_NONE:
+   default:
       stream_writeln(state->sock, "400 Bad Request");
    }
-  
+
    free(output);
 
    return 1;
@@ -252,12 +257,13 @@ int handle_command(char *line, struct conn_state *state)
  * Handles a single socket connection to the client.
  * 
  */
-void handle_connection (int sock) 
+void handle_connection (int sock)
 {
-   int loop, bytes;
+   int loop = 1, bytes = 0;
    char buf[(BUF_SZ + 1)];
    struct conn_state state;
    struct child_debug debug;
+   rmi_protocol_ctx_t protocol_ctx = {0};
 
    bzero(buf, BUF_SZ);
 
@@ -271,7 +277,19 @@ void handle_connection (int sock)
 
    do {
       if (bytes = stream_readln(state.sock, buf, BUF_SZ)) {
-         loop = handle_command(buf, &state);
+         rmi_event_t event;
+         rmi_error_t err;
+         int parsed = rmi_protocol_handle_line(&protocol_ctx, buf, &event, &err);
+
+         if (!parsed || err.code == RMI_ERROR_BAD_REQUEST) {
+            stream_writeln(state.sock, "400 Bad Request");
+            loop = 1;
+         } else if (err.code == RMI_ERROR_BAD_ARGS) {
+            stream_writeln(state.sock, "400 Bad Request Arguments");
+            loop = 1;
+         } else {
+            loop = handle_command_event(&event, &state);
+         }
       }
 
       bzero(buf, BUF_SZ);
