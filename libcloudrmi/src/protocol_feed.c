@@ -66,6 +66,15 @@ void rmi_protocol_reset(rmi_protocol_ctx_t *ctx)
     ctx->len = 0;
 }
 
+/*
+ * Overflow policy:
+ *
+ * - RMI_MAX_BUFFER: hard ceiling for accumulated buffered bytes. If exceeded
+ *   at any point, the context is reset and RMI_E_OVERFLOW is returned.
+ * - RMI_MAX_LINE: maximum allowed size for a single protocol line before a
+ *   newline is seen. If no newline is present and buffered data grows past
+ *   this limit, the context is reset and RMI_E_OVERFLOW is returned.
+ */
 rmi_status_t rmi_protocol_feed(
     rmi_protocol_ctx_t *ctx,
     const uint8_t *data,
@@ -88,16 +97,9 @@ rmi_status_t rmi_protocol_feed(
     if (len == 0)
         return RMI_OK;
 
-    if (ctx->len + len > RMI_MAX_BUFFER) {
-        if (err != NULL) {
-            err->code = RMI_ERROR_BAD_REQUEST;
-            err->message = "Buffer overflow";
-        }
-        rmi_protocol_reset(ctx);
-        return RMI_E_OVERFLOW;
-    }
+    size_t needed = ctx->len + len;
 
-    if (!ensure_capacity(ctx, ctx->len + len)) {
+    if (!ensure_capacity(ctx, needed)) {
         if (err != NULL) {
             err->code = RMI_ERROR_BAD_REQUEST;
             err->message = "Buffer allocation failed";
@@ -106,7 +108,7 @@ rmi_status_t rmi_protocol_feed(
     }
 
     memcpy(ctx->buffer + ctx->len, data, len);
-    ctx->len += len;
+    ctx->len = needed;
 
     if (ctx->len > RMI_MAX_BUFFER) {
         if (err != NULL) {
@@ -117,9 +119,24 @@ rmi_status_t rmi_protocol_feed(
         return RMI_E_OVERFLOW;
     }
 
+    if (memchr(ctx->buffer, '\n', ctx->len) == NULL && ctx->len > RMI_MAX_LINE) {
+        if (err != NULL) {
+            err->code = RMI_ERROR_BAD_REQUEST;
+            err->message = "Line too long";
+        }
+        rmi_protocol_reset(ctx);
+        return RMI_E_OVERFLOW;
+    }
+
     return RMI_OK;
 }
 
+// Retrieve next parsed event, if available.
+//
+// Status codes communicate transport/framing state (e.g. RMI_E_OVERFLOW or
+// RMI_E_ERR). Protocol semantic issues are surfaced through err->code even when
+// the returned status is RMI_OK, as long as a syntactically valid event was
+// parsed.
 rmi_status_t rmi_protocol_next_event(
     rmi_protocol_ctx_t *ctx,
     rmi_event_t *out,
