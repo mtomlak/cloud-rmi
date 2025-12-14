@@ -8,6 +8,7 @@
 #include <ctype.h>
 #include <time.h>
 #include <math.h>
+#include <stdint.h>
 #include "cloud-rmi.h"
 #include "config.h"
 #ifdef PROXY_SUPPORT
@@ -263,9 +264,9 @@ void handle_connection (int sock)
    char buf[(BUF_SZ + 1)];
    struct conn_state state;
    struct child_debug debug;
-   rmi_protocol_ctx_t protocol_ctx = {0};
-
-   bzero(buf, BUF_SZ);
+   rmi_protocol_ctx_t *protocol_ctx = rmi_protocol_create();
+   if (protocol_ctx == NULL)
+      return;
 
    // Write welcome message
    stream_writeln(sock, "220 %s Server Ready EXT %s", var_context_name, PROTO_EXTENSIONS);
@@ -276,24 +277,42 @@ void handle_connection (int sock)
    debug.pid = (int) getpid();
 
    do {
-      if (bytes = stream_readln(state.sock, buf, BUF_SZ)) {
-         rmi_event_t event;
+      if ((bytes = stream_read(state.sock, buf, BUF_SZ)) > 0) {
          rmi_error_t err;
-         int parsed = rmi_protocol_handle_line(&protocol_ctx, buf, &event, &err);
+         rmi_status_t status = rmi_protocol_feed(protocol_ctx, (const uint8_t *)buf, (size_t)bytes, &err);
 
-         if (!parsed || err.code == RMI_ERROR_BAD_REQUEST) {
+         if (status == RMI_E_OVERFLOW || status == RMI_E_ERR) {
             stream_writeln(state.sock, "400 Bad Request");
-            loop = 1;
-         } else if (err.code == RMI_ERROR_BAD_ARGS) {
-            stream_writeln(state.sock, "400 Bad Request Arguments");
-            loop = 1;
-         } else {
-            loop = handle_command_event(&event, &state);
+            continue;
          }
-      }
 
-      bzero(buf, BUF_SZ);
+         do {
+            rmi_event_t event;
+            rmi_error_t parse_err;
+
+            status = rmi_protocol_next_event(protocol_ctx, &event, &parse_err);
+
+            if (status == RMI_OK) {
+               if (parse_err.code == RMI_ERROR_BAD_REQUEST) {
+                  stream_writeln(state.sock, "400 Bad Request");
+                  loop = 1;
+               } else if (parse_err.code == RMI_ERROR_BAD_ARGS) {
+                  stream_writeln(state.sock, "400 Bad Request Arguments");
+                  loop = 1;
+               } else {
+                  loop = handle_command_event(&event, &state);
+               }
+            } else if (status == RMI_E_ERR) {
+               if (parse_err.code == RMI_ERROR_BAD_ARGS)
+                  stream_writeln(state.sock, "400 Bad Request Arguments");
+               else
+                  stream_writeln(state.sock, "400 Bad Request");
+            }
+         } while (status == RMI_OK && loop);
+      }
    } while (loop && bytes > 0);
+
+   rmi_protocol_destroy(protocol_ctx);
 
    if (var_debug && !loop) printf("handle_connection: Received exit command from client\n");
    if (var_debug && !bytes) printf("handle_connection: Client connection closed\n");
