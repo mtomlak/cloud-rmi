@@ -2,7 +2,8 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
-#include <cloudrmi/protocol.h>
+
+#include "protocol_line.h"
 
 static void rmi_reset_event(rmi_event_t *event)
 {
