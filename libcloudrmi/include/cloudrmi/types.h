@@ -2,6 +2,7 @@
 #define CLOUDRMI_TYPES_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include "version.h"
 
 typedef enum {
@@ -27,9 +28,12 @@ typedef enum {
     RMI_ENCODING_BASE64
 } rmi_encoding_t;
 
-typedef struct {
-    int placeholder;
-} rmi_protocol_ctx_t;
+typedef enum {
+    RMI_OK = 0,
+    RMI_E_AGAIN,
+    RMI_E_OVERFLOW,
+    RMI_E_ERR
+} rmi_status_t;
 
 typedef struct {
     rmi_event_type_t type;
