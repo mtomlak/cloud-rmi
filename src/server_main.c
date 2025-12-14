@@ -117,9 +117,10 @@ int find_and_load_configs(char *command)
  * @param  char* argv
  * @return int
  */
-int main(int argc, char *argv[]) 
+int main(int argc, char *argv[])
 {
    int opt, pid, daemon = 0;
+   rmi_server_t server;
 
    // Try few common paths for configs and save the path
    find_and_load_configs(basename(argv[0]));
@@ -192,6 +193,9 @@ int main(int argc, char *argv[])
       }
    }
 
+   rmi_server_init(&server, var_context_name);
+   rmi_shell_call_handler_register(&server);
+
    // Let's sleep a bit if we want to
    if (var_start_delay) {
       if (var_debug)
@@ -212,23 +216,23 @@ int main(int argc, char *argv[])
 
 		if (pid == 0) {   // We are in child daemonized process
 #ifdef PROXY_SUPPORT
-			if (var_proxy) {
-				proxy_start(var_proxy);
-			}
+                        if (var_proxy) {
+                                proxy_start(var_proxy);
+                        }
 #endif
-			server_start(var_port);
-			exit(0);
-		}
+                        server_start(&server, var_port);
+                        exit(0);
+                }
 
 	} else {
 		printf("Starting %s on port %d\n", APP_NAME, var_port);
 #ifdef PROXY_SUPPORT
-		if (var_proxy) {
-				proxy_start(var_proxy);
-		}
+                if (var_proxy) {
+                                proxy_start(var_proxy);
+                }
 #endif
-		server_start(var_port);
-	}
+                server_start(&server, var_port);
+        }
 
 	//waitpid(-1, chldsig, WNOHANG); done in server loop
 	exit(0);

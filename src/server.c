@@ -17,6 +17,8 @@
 #include <time.h>
 //#include <syscall.h>
 
+static rmi_server_t *server_ctx = NULL;
+
 /**
  * Provides TCP server functionality, handles multiple connections by forking.
  *
@@ -229,8 +231,8 @@ int handle_cloned_proc(void *arg)
    free(rcvd_state);
 
    if (state.sock >= 0) {
-      handle_connection(state.sock); 
-      close(state.sock); 
+      rmi_handle_connection(server_ctx, state.sock);
+      close(state.sock);
    }
 
    #ifdef REUSE_WORKER_PROC
@@ -258,7 +260,7 @@ int handle_cloned_proc(void *arg)
          }
          state.sock = worker_state->next_sock;
          server_remove_spare_child(worker_state->pid);
-         handle_connection(state.sock);
+         rmi_handle_connection(server_ctx, state.sock);
          close(state.sock);
       }
 
@@ -534,7 +536,7 @@ int create_client_handler_proc(int sock, int server_sock)
          printf("+ Started new child with PID %i\n", (int) getpid());
 
       close(server_sock); // Parent has it's own copy now, close it
-      handle_connection(sock);
+      rmi_handle_connection(server_ctx, sock);
 
       if (var_debug)
          printf("- Shutting down child with PID %i\n", (int) getpid());
@@ -554,11 +556,13 @@ int create_client_handler_proc(int sock, int server_sock)
  * 
  * @return [description]
  */
-int server_start(int port_num) 
+int server_start(rmi_server_t *server, int port_num)
 {
    int sockfd, newsockfd, clilen;
    char buffer[BUF_SZ];
    struct sockaddr_in serv_addr, cli_addr;
+
+   server_ctx = server;
 
 #ifdef REUSE_WORKER_PROC
    /* Get ready some spare children */

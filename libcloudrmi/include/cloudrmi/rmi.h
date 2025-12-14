@@ -1,0 +1,15 @@
+#ifndef CLOUDRMI_RMI_H
+#define CLOUDRMI_RMI_H
+
+#define APP_NAME "CloudRMI"
+#define APP_VERSION "0.9.3"
+#define PROTOCOL_VERSION "1.0"
+#define BUF_SZ 10240
+
+#ifdef PROXY_SUPPORT
+   #define PROTO_EXTENSIONS "PROXY-STATS SERVER-STATS"
+#else
+   #define PROTO_EXTENSIONS "SERVER-STATS"
+#endif
+
+#endif

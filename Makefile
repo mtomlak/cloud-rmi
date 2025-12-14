@@ -1,6 +1,8 @@
-all: src/*
-#	@echo -n "Updating source code ..."
-#	@make update
+LIBCLOUDRMI_SRC=libcloudrmi/src/cloud-rmi.c libcloudrmi/src/base64.c libcloudrmi/src/rmi_connection.c libcloudrmi/src/rmi_payload.c libcloudrmi/src/rmi_protocol.c libcloudrmi/src/rmi_server.c libcloudrmi/src/rmi_error.c libcloudrmi/src/rmi_connection_handlers.c
+LIBCLOUDRMI_OBJ=$(LIBCLOUDRMI_SRC:.c=.o)
+CFLAGS=-g -I./src -I./libcloudrmi/include
+
+all: libcloudrmi/libcloudrmi.a
 	@echo -n "Building RMI server ..."
 	make server
 	@echo -n "Building RMI client ..."
@@ -11,17 +13,24 @@ all: src/*
 update:
 	git pull
 
-server: src/server_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/cloud-rmi.h src/config.h
+libcloudrmi/libcloudrmi.a: $(LIBCLOUDRMI_OBJ)
+	@echo " * Building libcloudrmi static library ..."
+	ar rcs $@ $(LIBCLOUDRMI_OBJ)
+
+libcloudrmi/src/%.o: libcloudrmi/src/%.c
+	gcc $(CFLAGS) -c $< -o $@ -D ENABLE_LINUX_FEATURES
+
+server: src/server_main.c src/config.c src/server.c src/client.c src/cloud-rmi.h src/config.h libcloudrmi/libcloudrmi.a
 	@echo " * Building rmi-server binary ..."
-	gcc -g -lm src/server_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c -o rmi-server -D ENABLE_LINUX_FEATURES
+	gcc -g -I./src -I./libcloudrmi/include src/server_main.c src/config.c src/server.c src/client.c libcloudrmi/libcloudrmi.a -lm -o rmi-server -D ENABLE_LINUX_FEATURES
 
-client: src/client_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/cloud-rmi.h src/config.h src/client.h
+client: src/client_main.c src/config.c src/server.c src/client.c src/cloud-rmi.h src/config.h src/client.h libcloudrmi/libcloudrmi.a
 	@echo " * Building rmi-client binary ..."
-	gcc -g -lm src/client_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c -o rmi-client -D ENABLE_LINUX_FEATURES
+	gcc -g -I./src -I./libcloudrmi/include src/client_main.c src/config.c src/server.c src/client.c libcloudrmi/libcloudrmi.a -lm -o rmi-client -D ENABLE_LINUX_FEATURES
 
-proxy: src/client_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/server.c src/client.c src/cloud-rmi.h src/config.h src/client.h
+proxy: src/client_main.c src/config.c src/server.c src/client.c src/cloud-rmi.h src/config.h src/client.h libcloudrmi/libcloudrmi.a
 	@echo " * Building rmi-client binary ..."
-	gcc -g -lm src/server_main.c src/base64.c src/cloud-rmi.c src/config.c src/handle_call.c src/client.c src/protocol.c src/server.c src/proxy.c -o rmi-proxy -D PROXY_SUPPORT -D ENABLE_LINUX_FEATURES
+	gcc -g -I./src -I./libcloudrmi/include src/server_main.c src/config.c src/client.c src/server.c src/proxy.c libcloudrmi/libcloudrmi.a -lm -o rmi-proxy -D PROXY_SUPPORT -D ENABLE_LINUX_FEATURES
 
 server_install:
 	@echo "Installing rmi-server ..."
@@ -62,6 +71,4 @@ config_install:
 install:
 	make server_install
 	make client_install
-	#make proxy_install
-
-
+#make proxy_install
