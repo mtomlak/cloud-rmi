@@ -9,6 +9,7 @@
 #include <netinet/in.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #include "cloud-rmi.h"
 #include "config.h"
 #include "proxy.h"
@@ -41,8 +42,20 @@ static int proxy_write_all(int fd, const uint8_t *buf, size_t len)
    size_t total = 0;
 
    while (total < len) {
-      ssize_t written = write(fd, buf + total, len - total);
-      if (written <= 0)
+      ssize_t written;
+
+      do {
+         written = write(fd, buf + total, len - total);
+      } while (written < 0 && errno == EINTR);
+
+      if (written < 0) {
+         // Proxy sockets are expected to be blocking; treat EAGAIN/EWOULDBLOCK as fatal to avoid spin
+         if (errno == EAGAIN || errno == EWOULDBLOCK)
+            errno = EIO;
+         return 0;
+      }
+
+      if (written == 0)
          return 0;
 
       total += (size_t)written;

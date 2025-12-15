@@ -1,1 +1,3 @@
 EchoInterface test_echo.sh
+ExecInterface test_exec.sh
+PayloadInterface test_payload.sh

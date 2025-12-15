@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <stdint.h>
 #include <poll.h>
+#include <limits.h>
 #include "cloud-rmi.h"
 #include "config.h"
 
@@ -25,14 +26,22 @@
 
 static int append_output(char **buf, size_t *cap, size_t *len, const char *chunk, size_t chunk_len)
 {
+   size_t needed;
+
    if (*buf == NULL || cap == NULL || len == NULL)
       return 0;
 
-   if (*len + chunk_len + 1 > *cap) {
+   if (__builtin_add_overflow(*len, chunk_len, &needed) || __builtin_add_overflow(needed, 1, &needed))
+      return 0;
+
+   if (needed > *cap) {
       size_t new_cap = *cap;
 
-      while (new_cap < *len + chunk_len + 1)
+      while (new_cap < needed) {
+         if (new_cap > SIZE_MAX / 2)
+            return 0;
          new_cap *= 2;
+      }
 
       char *tmp = realloc(*buf, new_cap);
       if (tmp == NULL)
@@ -47,6 +56,43 @@ static int append_output(char **buf, size_t *cap, size_t *len, const char *chunk
    (*buf)[*len] = '\0';
 
    return 1;
+}
+
+static int base64_encoded_length(size_t input_len, size_t *out_len)
+{
+   size_t rounded = 0;
+
+   if (out_len == NULL)
+      return 0;
+
+   if (input_len == 0) {
+      *out_len = BUF_SZ + 1;
+      return 1;
+   }
+
+   if (__builtin_add_overflow(input_len, (size_t)2, &rounded))
+      return 0;
+
+   rounded /= 3;
+
+   if (__builtin_mul_overflow(rounded, (size_t)4, &rounded))
+      return 0;
+
+   if (__builtin_add_overflow(rounded, (size_t)1, out_len))
+      return 0;
+
+   return 1;
+}
+
+static void trim_trailing_newlines(char *buf, size_t *len)
+{
+   if (buf == NULL || len == NULL)
+      return;
+
+   while (*len > 0 && (buf[*len - 1] == '\n' || buf[*len - 1] == '\r')) {
+      buf[*len - 1] = '\0';
+      (*len)--;
+   }
 }
 
 static int stream_child_io(
@@ -91,24 +137,31 @@ static int stream_child_io(
          nfds++;
       }
 
-      int pr = poll(fds, nfds, -1);
+      int pr;
+
+      do {
+         pr = poll(fds, nfds, -1);
+      } while (pr < 0 && errno == EINTR);
+
       if (pr < 0) {
-         if (errno == EINTR)
-            continue;
          free(*output);
          *output = NULL;
          return 0;
       }
 
-      size_t idx = 0;
+      nfds_t idx = 0;
 
       if (stdout_open) {
          short revents = fds[idx].revents;
          idx++;
 
-         if (revents & (POLLIN)) {
+         if (revents & POLLIN) {
             char buf[BUF_SZ];
-            ssize_t n = read(stdout_fd, buf, sizeof(buf));
+            ssize_t n;
+
+            do {
+               n = read(stdout_fd, buf, sizeof(buf));
+            } while (n < 0 && errno == EINTR);
 
             if (n > 0) {
                if (!append_output(output, &out_cap, &out_len, buf, (size_t)n)) {
@@ -118,7 +171,7 @@ static int stream_child_io(
                }
             } else if (n == 0) {
                stdout_open = 0;
-            } else if (errno != EINTR) {
+            } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
                free(*output);
                *output = NULL;
                return 0;
@@ -132,25 +185,32 @@ static int stream_child_io(
          short revents = fds[idx].revents;
 
          if (revents & POLLOUT) {
-            ssize_t n = write(stdin_fd, payload + payload_written, payload_len - payload_written);
-            if (n < 0) {
-               if (errno == EINTR)
-                  continue;
+            ssize_t n;
+
+            do {
+               n = write(stdin_fd, payload + payload_written, payload_len - payload_written);
+            } while (n < 0 && errno == EINTR);
+
+            if (n > 0) {
+               payload_written += (size_t)n;
+
+               if (payload_written == payload_len) {
+                  close(stdin_fd);
+                  stdin_open = 0;
+               }
+            } else if (n == 0) {
+               continue;
+            } else if (errno == EPIPE || errno == ECONNRESET) {
+               close(stdin_fd);
+               stdin_open = 0;
+            } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
                free(*output);
                *output = NULL;
                return 0;
             }
-
-            payload_written += (size_t)n;
-
-            if (payload_written == payload_len) {
-               close(stdin_fd);
-               stdin_open = 0;
-            }
          } else if (revents & (POLLERR | POLLHUP | POLLNVAL)) {
-            free(*output);
-            *output = NULL;
-            return 0;
+            close(stdin_fd);
+            stdin_open = 0;
          }
       }
    }
@@ -178,6 +238,11 @@ int handle_shell_call(
    size_t output_len = 0;
    char *response_output = NULL;
    int success = 0;
+
+   if (payload == NULL && payload_len > 0) {
+      stream_writeln(state->sock, "500 Error preparing payload buffer");
+      return 0;
+   }
 
    if (payload == NULL) {
       decoded_arg = malloc(sizeof(char) * (BUF_SZ + 1));
@@ -275,6 +340,8 @@ int handle_shell_call(
    if (output == NULL)
       goto cleanup;
 
+   trim_trailing_newlines(output, &output_len);
+
    if (strncmp(output, "Error", 5) == 0) {
       stream_writeln(state->sock, "500 Exited with error message: %s", output);
 
@@ -282,7 +349,13 @@ int handle_shell_call(
       stream_writeln(state->sock, "500 Error: %s (%d)", output, exit_code);
 
    } else {
-      size_t encoded_len = output_len ? (((output_len + 2) / 3) * 4) + 1 : (BUF_SZ + 1);
+      size_t encoded_len;
+
+      if (!base64_encoded_length(output_len, &encoded_len)) {
+         stream_writeln(state->sock, "500 Error preparing response buffer");
+         goto cleanup;
+      }
+
       response_output = malloc(encoded_len);
       if (response_output == NULL) {
          stream_writeln(state->sock, "500 Error preparing response buffer");
