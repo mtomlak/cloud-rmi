@@ -23,28 +23,87 @@
  * Executes RMI command as a shell script.
  * 
  */
-int handle_shell_call(char *file, char *method, char *arg, struct conn_state *state)
+int handle_shell_call(
+   char *file,
+   char *method,
+   char *arg,
+   const uint8_t *payload,
+   size_t payload_len,
+   const char *encoding,
+   struct conn_state *state)
 {
    int exit_code;
    FILE *pipe;
    //int *pipe;
-   char *payload = malloc(sizeof(char) * (BUF_SZ + 1));
+   char *decoded_arg = malloc(sizeof(char) * (BUF_SZ + 1));
    char *output = malloc(sizeof(char) * (BUF_SZ + 1));
+   char *payload_path = NULL;
    char shell_cmd[(BUF_SZ + 1)];
 
-   bzero(payload, BUF_SZ);
+   if (decoded_arg == NULL || output == NULL) {
+      stream_writeln(state->sock, "500 Error preparing call buffer");
+      free(decoded_arg);
+      free(output);
+      return 0;
+   }
+
+   bzero(decoded_arg, BUF_SZ);
    bzero(output, BUF_SZ);
    bzero(shell_cmd, BUF_SZ);
 
-   // base64 decode argument list
-   if (!from64tobits(payload, arg)) {
-      stream_writeln(state->sock, "500 Error decoding call arguments");
-      return 0;
+   if (encoding != NULL)
+      setenv("PAYLOAD_ENCODING", encoding, 1);
+
+   if (payload != NULL) {
+      int fd;
+      ssize_t written;
+      char tmp_filename[] = "/tmp/cloudrmi_payloadXXXXXX";
+
+      fd = mkstemp(tmp_filename);
+      if (fd == -1) {
+         stream_writeln(state->sock, "500 Error preparing payload buffer");
+         free(decoded_arg);
+         free(output);
+         return 0;
+      }
+
+      written = write(fd, payload, payload_len);
+      if (written < 0 || (size_t)written != payload_len) {
+         stream_writeln(state->sock, "500 Error writing payload buffer");
+         close(fd);
+         unlink(tmp_filename);
+         free(decoded_arg);
+         free(output);
+         return 0;
+      }
+
+      close(fd);
+      payload_path = strdup(tmp_filename);
+
+      if (payload_path == NULL) {
+         stream_writeln(state->sock, "500 Error preparing payload path");
+         unlink(tmp_filename);
+         free(decoded_arg);
+         free(output);
+         return 0;
+      }
+
+      snprintf(shell_cmd, BUF_SZ, "%s %s %s 2>&1", file, method, payload_path);
+
+   } else {
+      // base64 decode argument list (legacy mode)
+      if (!from64tobits(decoded_arg, arg)) {
+         stream_writeln(state->sock, "500 Error decoding call arguments");
+         free(decoded_arg);
+         free(output);
+         return 0;
+      }
+
+      snprintf(shell_cmd, BUF_SZ, "%s %s %s 2>&1", file, method, decoded_arg);
    }
 
    // call the shell command, using 2>&1 hack to catch errout with popen,
    // we can also use 2>&1 >/dev/null to get only the err output
-   snprintf(shell_cmd, BUF_SZ, "%s %s %s 2>&1", file, method, payload);   
    pipe = popen(shell_cmd, "r");
    stream_read(fileno(pipe), output, BUF_SZ);   // we could read in loop and increase buffer
    exit_code = pclose(pipe);
@@ -58,16 +117,20 @@ int handle_shell_call(char *file, char *method, char *arg, struct conn_state *st
 
    } else {
       // base64 encode the output
-      bzero(payload, BUF_SZ);
+      bzero(decoded_arg, BUF_SZ);
 
       if (strlen(output))
-         to64frombits(payload, output, strlen(output));
-      
-      stream_writeln(state->sock, "200 %s", payload);
+         to64frombits((unsigned char *)decoded_arg, (const unsigned char *)output, strlen(output));
+
+      stream_writeln(state->sock, "200 %s", decoded_arg);
    }
 
-   free(payload);
+   free(decoded_arg);
    free(output);
+   if (payload_path != NULL) {
+      unlink(payload_path);
+      free(payload_path);
+   }
 
    return 1;
 }
@@ -85,10 +148,7 @@ int handle_call_cmd(
    const char *encoding,
    struct conn_state *state)
 {
-   (void)encoding;
    struct server_iface_entry *iface_entry;
-   char *encoded_arg = NULL;
-   const char *effective_arg = arg;
 
    // Authentication check
    if (!state->is_authenticated) {
@@ -96,29 +156,22 @@ int handle_call_cmd(
       return 0;
    }
 
-   if (payload != NULL) {
-      size_t encoded_len = ((payload_len + 2) / 3) * 4 + 1;
-      encoded_arg = malloc(encoded_len + 1);
-      if (encoded_arg == NULL) {
-         stream_writeln(state->sock, "500 Error encoding call arguments");
-         return 0;
-      }
-      bzero(encoded_arg, encoded_len + 1);
-      to64frombits((unsigned char *)encoded_arg, payload, (int)payload_len);
-      effective_arg = encoded_arg;
-   }
    iface_entry = server_get_iface_entry(iface);
 
    // Check whether it's local script
    if (iface_entry != NULL) {
-      int result = handle_shell_call(iface_entry->file, method, (char *)effective_arg, state);
-      free(encoded_arg);
-      return result;
+      return handle_shell_call(
+         iface_entry->file,
+         method,
+         arg,
+         payload,
+         payload_len,
+         encoding,
+         state);
 
    } else {
       stream_writeln(state->sock, "400 Unsupported interface: %s", iface);
    }
 
-   free(encoded_arg);
    return 0;
 }
