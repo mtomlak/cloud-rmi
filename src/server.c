@@ -734,6 +734,7 @@ void server_wipe_iface_entries()
 int read_iface_config(char *config_file)
 {
    int r = 1;
+   int count = 0;
    FILE *fp;
    char *line = malloc(sizeof(char) * (BUF_SZ + 1));
    char *iface = malloc(sizeof(char) * (BUF_SZ + 1));
@@ -759,7 +760,7 @@ int read_iface_config(char *config_file)
    // Wipe existing interface entries (in case config gets reloaded or like)
    server_wipe_iface_entries();
 
-   r = fscanf(fp,"%[^\t\n#] %[^\t\n]\n", iface_short, file_short);
+   r = fscanf(fp,"%[^\t\n# ] %[^\t\n ]\n", iface_short, file_short);
 
    while(r != EOF) {
       if (r == 2) {
@@ -775,10 +776,11 @@ int read_iface_config(char *config_file)
                sprintf(file, "%s/%s", var_script_exec_dir, file_short);
 
                server_add_iface_entry(iface, file);
+               count++;
       } else
          fscanf(fp,"%*[^\n]\n"); // skip unparsable lines
 
-      r = fscanf(fp,"%[^\t\n#] %[^\t\n]\n", iface_short, file_short);
+      r = fscanf(fp,"%[^\t\n# ] %[^\t\n ]\n", iface_short, file_short);
    }
 
    fclose(fp);
@@ -787,6 +789,9 @@ int read_iface_config(char *config_file)
    free(file);
    free(iface_short);
    free(file_short);
+
+   if (var_debug)
+      printf("Loaded %d interface map entries from %s\n", count, config_file);
 
    return 1;
 }

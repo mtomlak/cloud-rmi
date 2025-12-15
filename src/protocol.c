@@ -108,16 +108,33 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state)
       break;
 
    case RMI_EVENT_CALL:
-      if (event->argc < 3)  // we now accept also call without arguments
-         stream_writeln(state->sock, "400 Bad Request Arguments");
+      if (state->is_authenticated) {
+         int has_payload = event->payload != NULL;
+         if (!has_payload && event->argc < 3)
+            stream_writeln(state->sock, "400 Bad Request Arguments");
 
-      else if (state->is_authenticated) {
+         else {
 #ifdef PROXY_SUPPORT
          if (var_proxy)
-            proxy_pass_call_cmd(event->arg1, event->arg2, event->arg3, state);
+            proxy_pass_call_cmd_ex(
+               event->arg1,
+               event->arg2,
+               event->arg3,
+               event->payload,
+               event->payload_len,
+               event->encoding,
+               state);
          else
 #endif
-         handle_call_cmd(event->arg1, event->arg2, event->arg3, state);
+         handle_call_cmd(
+            event->arg1,
+            event->arg2,
+            event->arg3,
+            event->payload,
+            event->payload_len,
+            event->encoding,
+            state);
+         }
       } else
          stream_writeln(state->sock, "401 Unauthorized");
       break;

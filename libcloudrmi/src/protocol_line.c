@@ -14,8 +14,11 @@ static void rmi_reset_event(rmi_event_t *event)
     memset(event->arg1, 0, sizeof(event->arg1));
     memset(event->arg2, 0, sizeof(event->arg2));
     memset(event->arg3, 0, sizeof(event->arg3));
+    memset(event->encoding, 0, sizeof(event->encoding));
     event->argc = 0;
     event->type = RMI_EVENT_NONE;
+    event->payload = NULL;
+    event->payload_len = 0;
 }
 
 static void rmi_lowercase(char *value)
@@ -83,6 +86,12 @@ int rmi_protocol_handle_line(
         if (out_event->argc < 3 && err != NULL) {
             err->code = RMI_ERROR_BAD_ARGS;
             err->message = "CALL requires iface and method";
+        }
+    } else if (strcmp(out_event->cmd, "payload") == 0) {
+        out_event->type = RMI_EVENT_PAYLOAD;
+        if (out_event->argc < 3 && err != NULL) {
+            err->code = RMI_ERROR_BAD_ARGS;
+            err->message = "PAYLOAD requires encoding and length";
         }
     } else if (strcmp(out_event->cmd, "help") == 0) {
         out_event->type = RMI_EVENT_HELP;
