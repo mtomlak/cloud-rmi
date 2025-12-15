@@ -132,7 +132,7 @@ int main(int argc, char *argv[])
 
    if (argc > 1) { 
    // Overwrite some config variables
-      while((opt = getopt(argc, argv, "b:c:dD:hn:p:t:vx:")) != -1) {
+      while((opt = getopt(argc, argv, "b:c:dD:he:m:n:p:t:vx:")) != -1) {
          switch(opt) {
          	case 'b':
                var_script_base_namespace = strdup(optarg);
@@ -191,6 +191,9 @@ int main(int argc, char *argv[])
          }
       }
    }
+
+   if (!read_iface_config(var_interface_map_file))
+      die_err("Error: Failed to load interface map file");
 
    // Let's sleep a bit if we want to
    if (var_start_delay) {
