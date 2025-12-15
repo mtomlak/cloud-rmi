@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "client.h"
 
 #define PROXY_PROTOCOL_VERSION	"1.0"
 #define PROXY_CHILD_LIST_SZ	128
@@ -11,10 +12,10 @@
 #define PROXY_HOSTNAME_SZ	256
 
 struct proxy_conn{
-	int conn_id;
-	int proxy_id;
-	int sock;
-	int is_busy;
+        int conn_id;
+        int proxy_id;
+        struct rmi_client_conn client;
+        int is_busy;
 };
 
 struct proxy_server{

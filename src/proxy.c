@@ -109,14 +109,14 @@ int proxy_list_add_new(char *hostname, int port)
 // Proxy connection list
 //
 
-int proxy_add_conn(int proxy_id, int sock)
+int proxy_add_conn(int proxy_id, struct rmi_client_conn client)
 {
    if (proxy_id > proxy_count)
       die_err("Error: proxy_add_conn(): Cannot load proxy from memory");
 
    int ci = proxy_list[proxy_id].conn_count;
 
-   proxy_list[proxy_id].conns[ci].sock = sock;
+   proxy_list[proxy_id].conns[ci].client = client;
    proxy_list[proxy_id].conns[ci].is_busy = 0;
    proxy_list[proxy_id].conns[ci].proxy_id = proxy_id;
    proxy_list[proxy_id].conn_count++;
@@ -138,24 +138,23 @@ struct proxy_conn *proxy_get_conn(int proxy_id, int conn_id)
  */
 int proxy_start_new_conn(int proxy_id)
 {
-   int sock;
+   struct rmi_client_conn client;
 
    // Connect
-   sock = client_connect(
-      proxy_list_get(proxy_id)->hostname, 
-      proxy_list_get(proxy_id)->port
-      );
-
-   if (sock < 0)
+   if (client_connect(
+      proxy_list_get(proxy_id)->hostname,
+      proxy_list_get(proxy_id)->port,
+      &client
+      ) < 0)
       die_err("Error: Failed to connect to the server as a proxy");
 
    // Authenticate
    if (var_recovery_token != NULL)
-      if (!client_auth_by_token(sock, var_recovery_token))
+      if (!client_auth_by_token(&client, var_recovery_token))
          die_err("Error: Token authentication failed");
 
    // Add socket to the list
-   return proxy_add_conn(proxy_id, sock);
+   return proxy_add_conn(proxy_id, client);
 }
 
 int proxy_restart_conn(struct proxy_conn *conn)
@@ -166,17 +165,16 @@ int proxy_restart_conn(struct proxy_conn *conn)
       printf("Proxy: Restarting connection to proxy #%i", conn->proxy_id);
 
    proxy_id = conn->proxy_id;
-   client_disconnect(conn->sock);
-   conn->sock = client_connect(
-      proxy_list_get(proxy_id)->hostname, 
-      proxy_list_get(proxy_id)->port
-      );
-
-   if (conn->sock < 0)
+   client_disconnect(&conn->client);
+   if (client_connect(
+      proxy_list_get(proxy_id)->hostname,
+      proxy_list_get(proxy_id)->port,
+      &conn->client
+      ) < 0)
       die_err("Error: Failed to connect to the server as a proxy");
 
    if (var_recovery_token != NULL)
-      if (!client_auth_by_token(conn->sock, var_recovery_token))
+      if (!client_auth_by_token(&conn->client, var_recovery_token))
          die_err("Error: Token authentication failed");
 
    return 1;
@@ -299,7 +297,7 @@ int proxy_fetch_interfaces(int proxy_num)
    // Get interfaces
    conn = proxy_get_free_conn(proxy_num);
    proxy_set_conn_busy(conn);
-   status_code = client_raw_cmd(conn->sock, "IFACES", response);
+   status_code = client_raw_cmd(&conn->client, "IFACES", response);
    proxy_set_conn_free(conn);
 
    if (status_code != 200)
@@ -363,7 +361,7 @@ void proxy_send_stats(int sock)
       if (proxy->conn_count > 0) {
           for (j = 0; j < proxy->conn_count; j++) {
               struct proxy_conn *conn = &proxy->conns[j];
-              stream_writeln(sock, "%i\t\t%i\t\t%i\t%i", conn->conn_id, conn->proxy_id, conn->sock, conn->is_busy);
+              stream_writeln(sock, "%i\t\t%i\t\t%i\t%i", conn->conn_id, conn->proxy_id, conn->client.sock, conn->is_busy);
           }
       }
    }
@@ -385,14 +383,14 @@ int proxy_pass_raw_cmd(int proxy_num, struct conn_state *client_conn, char *cmd)
    // Get interfaces
    conn = proxy_get_free_conn(proxy_num);
    proxy_set_conn_busy(conn);
-   status_code = client_raw_cmd(conn->sock, cmd, response);
+   status_code = client_raw_cmd(&conn->client, cmd, response);
 
    if (!status_code || status_code == 408) {  // 408 - request timeout
       if (var_debug)
          printf("Proxy: Could not get status code, trying to reconnect\n");
 
       proxy_restart_conn(conn);
-      status_code = client_raw_cmd(conn->sock, cmd, response);
+      status_code = client_raw_cmd(&conn->client, cmd, response);
    }
 
    if (!status_code) {
@@ -455,28 +453,28 @@ int proxy_pass_call_cmd_ex(
    if (payload != NULL) {
       const char *enc_value = (encoding != NULL && encoding[0] != '\0') ? encoding : "NONE";
 
-      if (stream_writeln(conn->sock, "CALL %s %s", iface, cmd) < 0) {
+      if (stream_writeln(conn->client.sock, "CALL %s %s", iface, cmd) < 0) {
          ret = 0;
          goto cleanup;
       }
 
-      if (stream_writeln(conn->sock, "PAYLOAD %s %zu", enc_value, payload_len) < 0) {
+      if (stream_writeln(conn->client.sock, "PAYLOAD %s %zu", enc_value, payload_len) < 0) {
          ret = 0;
          goto cleanup;
       }
 
-      if (payload_len > 0 && !proxy_write_all(conn->sock, payload, payload_len)) {
+      if (payload_len > 0 && !proxy_write_all(conn->client.sock, payload, payload_len)) {
          ret = 0;
          goto cleanup;
       }
    } else {
-      if (stream_writeln(conn->sock, "CALL %s %s %s", iface, cmd, arg) < 0) {
+      if (stream_writeln(conn->client.sock, "CALL %s %s %s", iface, cmd, arg) < 0) {
          ret = 0;
          goto cleanup;
       }
    }
 
-   if (stream_readln(conn->sock, response, BUF_SZ) < 0) {
+   if (stream_readln(conn->client.sock, response, BUF_SZ) < 0) {
       ret = 0;
       goto cleanup;
    }
@@ -488,7 +486,7 @@ int proxy_pass_call_cmd_ex(
    }
 
    if (response[strlen(response) - 1] == ':') {
-      if (stream_readlns(conn->sock, response, BUF_SZ) < 0) {
+      if (stream_readlns(conn->client.sock, response, BUF_SZ) < 0) {
          ret = 0;
          goto cleanup;
       }
@@ -632,12 +630,12 @@ int proxy_conn_keepalive(struct proxy_conn *conn)
    bzero(response, BUF_SZ);
 
    proxy_set_conn_busy(conn);
-   status_code = client_raw_cmd(conn->sock, "NOOP", response);
+   status_code = client_raw_cmd(&conn->client, "NOOP", response);
 
    // Try to reconnect stale connection
    if (!status_code || status_code == 408) {  // 408 - request timeout
       proxy_restart_conn(conn);
-      status_code = client_raw_cmd(conn->sock, "NOOP", response);
+      status_code = client_raw_cmd(&conn->client, "NOOP", response);
    }
 
    if (!status_code) {

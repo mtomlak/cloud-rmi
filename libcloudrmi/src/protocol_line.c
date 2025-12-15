@@ -113,6 +113,8 @@ int rmi_protocol_handle_line(
         out_event->type = RMI_EVENT_QUIT;
     } else if (strcmp(out_event->cmd, "proxy") == 0) {
         out_event->type = RMI_EVENT_PROXY;
+    } else if (strcmp(out_event->cmd, "caps") == 0) {
+        out_event->type = RMI_EVENT_CAPS;
     } else if (strcmp(out_event->cmd, "server") == 0) {
         out_event->type = RMI_EVENT_SERVER;
     } else {

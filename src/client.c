@@ -8,6 +8,8 @@
 #include <arpa/inet.h>
 #include <stdint.h>
 #include "cloud-rmi.h"
+#include "capabilities.h"
+#include "client.h"
 
 /**
  * Simple RMI client in C
@@ -39,26 +41,31 @@ int client_parse_status_code(char *response, int *status_code, char *data)
  * 
  * @return int socket handle or -1 on failure
  */
-int client_connect(char *hostname, int port_num) 
+int client_connect(char *hostname, int port_num, struct rmi_client_conn *conn)
 {
    int sock, status_code;  // newsock
    struct sockaddr_in serv_addr;
-   int pid, chldsig;
-   int success = 1;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
    char *message = malloc(sizeof(char) * (BUF_SZ + 1));
    char *ip_addr;
+
+   if (conn == NULL)
+      return -1;
+
+   conn->sock = -1;
+   conn->capabilities = 0;
+   conn->capabilities_known = 0;
 
    bzero(response, BUF_SZ);
    bzero(message, BUF_SZ);
 
    ip_addr = get_ip_addr(hostname);
-   
+
    if (ip_addr == NULL)
       die_err("Failed to resolve server hostname");
 
    /* First call to socket() function */
-   sock = socket(AF_INET, SOCK_STREAM, 0);   
+   sock = socket(AF_INET, SOCK_STREAM, 0);
 
    if (sock < 0) {
       printf("Error: Failed to open socket");
@@ -67,9 +74,9 @@ int client_connect(char *hostname, int port_num)
 
       return -1;
    }
-   
+
    bzero((char *) &serv_addr, sizeof(serv_addr));
-   
+
    serv_addr.sin_family = AF_INET;
    serv_addr.sin_port = htons(port_num);
 
@@ -78,26 +85,34 @@ int client_connect(char *hostname, int port_num)
       printf("Error: inet_pton() failed\n");
       free(response);
       free(message);
+      close(sock);
 
       return -1;
     }
-   
+
    /* Now connect to the remote host */
    if (connect(sock, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
       printf("Error: connect() failed\n");
       free(response);
       free(message);
+      close(sock);
 
       return -1;
    }
 
    /* And read the banner */
-   stream_readln(sock, response, BUF_SZ);
+   if (stream_readln(sock, response, BUF_SZ) < 0) {
+      free(response);
+      free(message);
+      close(sock);
+      return -1;
+   }
 
    if (!client_parse_status_code(response, &status_code, message)) {
       printf("Error: Cannot parse authentication response: %s\n", response);
       free(response);
       free(message);
+      close(sock);
 
       return -1;
    }
@@ -106,8 +121,38 @@ int client_connect(char *hostname, int port_num)
       printf("Error: Failed to connect - invalid banner received: %s\n", response);
       free(response);
       free(message);
+      close(sock);
 
       return -1;
+   }
+
+   conn->sock = sock;
+
+   char *ext = strstr(response, " EXT ");
+   if (ext != NULL) {
+      ext += 5;
+      conn->capabilities = rmi_parse_capabilities(ext);
+      conn->capabilities_known = 1;
+   }
+
+   if (!conn->capabilities_known) {
+      char *caps_response = malloc(sizeof(char) * (BUF_SZ + 1));
+      char *caps_message = malloc(sizeof(char) * (BUF_SZ + 1));
+
+      if (caps_response != NULL && caps_message != NULL) {
+         bzero(caps_response, BUF_SZ);
+         bzero(caps_message, BUF_SZ);
+
+         if (stream_writeln(sock, "CAPS") >= 0 && stream_readln(sock, caps_response, BUF_SZ) >= 0) {
+            if (client_parse_status_code(caps_response, &status_code, caps_message) && status_code == 200) {
+               conn->capabilities = rmi_parse_capabilities(caps_message);
+               conn->capabilities_known = 1;
+            }
+         }
+      }
+
+      free(caps_response);
+      free(caps_message);
    }
 
    free(response);
@@ -121,10 +166,13 @@ int client_connect(char *hostname, int port_num)
  * 
  * @return void
  */
-void client_disconnect(int sock) 
+void client_disconnect(struct rmi_client_conn *conn)
 {
-   //stream_writeln(sock, "QUIT");
-   close(sock);
+   if (conn == NULL || conn->sock < 0)
+      return;
+
+   close(conn->sock);
+   conn->sock = -1;
 }
 
 
@@ -133,7 +181,7 @@ void client_disconnect(int sock)
  * 
  * @return  1 on success, 0 on failure
  */
-int client_auth_by_token(int sock, char *token) 
+int client_auth_by_token(struct rmi_client_conn *conn, char *token)
 {
    int status_code, ret;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
@@ -142,8 +190,8 @@ int client_auth_by_token(int sock, char *token)
    bzero(response, BUF_SZ);
    bzero(message, BUF_SZ);
 
-   stream_writeln(sock, "AUTH TOKEN %s", token);
-   stream_readln(sock, response, BUF_SZ);
+   stream_writeln(conn->sock, "AUTH TOKEN %s", token);
+   stream_readln(conn->sock, response, BUF_SZ);
 
    if (!client_parse_status_code(response, &status_code, message)) {
       printf("Error: Cannot parse authentication response: %s\n", response);
@@ -166,19 +214,19 @@ int client_auth_by_token(int sock, char *token)
  * 
  * @return  Server status code or 0
  */
-int client_raw_cmd(int sock, char *command, char *response_payload) 
+int client_raw_cmd(struct rmi_client_conn *conn, char *command, char *response_payload)
 {
    int status_code = 0;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
 
    bzero(response, BUF_SZ);
 
-   if (stream_writeln(sock, "%s", command) < 0) {
+   if (stream_writeln(conn->sock, "%s", command) < 0) {
       free(response);
       return 0;
    }
-   
-   if (stream_readln(sock, response, BUF_SZ) < 0) {
+
+   if (stream_readln(conn->sock, response, BUF_SZ) < 0) {
       return 0;
    }
 
@@ -189,7 +237,7 @@ int client_raw_cmd(int sock, char *command, char *response_payload)
 
    // Read the rest if command has multiline output
    if (response[strlen(response) - 1] == ':') {
-      stream_readlns(sock, response, BUF_SZ);
+      stream_readlns(conn->sock, response, BUF_SZ);
       sprintf(response_payload, "%s\n%s", response_payload, response);
    }
 
@@ -202,14 +250,14 @@ int client_raw_cmd(int sock, char *command, char *response_payload)
  * 
  * @return  Server status code
  */
-int client_call_remote_method_raw(int sock, char *iface, char *method, char *enc_args, char *response_payload)
+int client_call_remote_method_raw(struct rmi_client_conn *conn, char *iface, char *method, char *enc_args, char *response_payload)
 {
    int status_code;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
 
    bzero(response, BUF_SZ);
-   stream_writeln(sock, "CALL %s %s %s", iface, method, enc_args);
-   stream_readln(sock, response, BUF_SZ);
+   stream_writeln(conn->sock, "CALL %s %s %s", iface, method, enc_args);
+   stream_readln(conn->sock, response, BUF_SZ);
 
    if (!client_parse_status_code(response, &status_code, response_payload)) {
       printf("Error: Cannot parse command response: %s\n", response);
@@ -221,7 +269,7 @@ int client_call_remote_method_raw(int sock, char *iface, char *method, char *enc
 }
 
 int client_call_remote_method_payload(
-   int sock,
+   struct rmi_client_conn *conn,
    char *iface,
    char *method,
    const char *encoding,
@@ -235,16 +283,22 @@ int client_call_remote_method_payload(
 
    bzero(response, BUF_SZ);
 
-   if (stream_writeln(sock, "CALL %s %s", iface, method) < 0)
+   if (!conn->capabilities_known || !(conn->capabilities & RMI_CAP_PAYLOAD)) {
+      snprintf(response_payload, BUF_SZ, "PAYLOAD not supported by server");
+      status_code = 505;
+      goto done;
+   }
+
+   if (stream_writeln(conn->sock, "CALL %s %s", iface, method) < 0)
       goto done;
 
-   if (stream_writeln(sock, "PAYLOAD %s %zu", encoding_value, payload_len) < 0)
+   if (stream_writeln(conn->sock, "PAYLOAD %s %zu", encoding_value, payload_len) < 0)
       goto done;
 
-   if (payload_len > 0 && stream_write(sock, (char *)payload, (int)payload_len) < 0)
+   if (payload_len > 0 && stream_write(conn->sock, (char *)payload, (int)payload_len) < 0)
       goto done;
 
-   if (stream_readln(sock, response, BUF_SZ) < 0)
+   if (stream_readln(conn->sock, response, BUF_SZ) < 0)
       goto done;
 
    if (!client_parse_status_code(response, &status_code, response_payload)) {
@@ -277,7 +331,7 @@ int decode_payload(char *encoded, char *decoded)
  * 
  * @return 1 on success 0 on failure
  */
-int client_call_remote_method(int sock, char *iface, char *method, char *args, char *result) 
+int client_call_remote_method(struct rmi_client_conn *conn, char *iface, char *method, char *args, char *result)
 {
    int ret = 1;
    char *payload = malloc(sizeof(char) * (BUF_SZ + 1));
@@ -289,7 +343,7 @@ int client_call_remote_method(int sock, char *iface, char *method, char *args, c
    // Encode arguments
    to64frombits(enc_args, args, strlen(args));
 
-   if (client_call_remote_method_raw(sock, iface, method, enc_args, payload) == 200) {
+   if (client_call_remote_method_raw(conn, iface, method, enc_args, payload) == 200) {
       if (strlen(payload))
          ret = decode_payload(payload, result);
 
