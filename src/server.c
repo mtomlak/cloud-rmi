@@ -25,6 +25,26 @@
  * @license BSD
  */
 
+static void reap_children_handler(int signo)
+{
+   (void)signo;
+
+   /* Reap all exited children to avoid zombies. */
+   while (waitpid(-1, NULL, WNOHANG) > 0)
+      ;
+}
+
+static void install_reaper()
+{
+   struct sigaction sa;
+
+   sa.sa_handler = reap_children_handler;
+   sigemptyset(&sa.sa_mask);
+   sa.sa_flags = SA_RESTART;
+
+   sigaction(SIGCHLD, &sa, NULL);
+}
+
 #ifdef ENABLE_LINUX_FEATURES
 
 void child_exit_self(void *stack, int stack_size)
@@ -227,6 +247,18 @@ int handle_cloned_proc(void *arg)
    rcvd_state = (struct child_proc_state *) arg;
    state = *rcvd_state;
    free(rcvd_state);
+
+   /* Child handlers spawn their own grandchildren (shell calls). They must
+    * manage those children explicitly, so disable the parent's SIGCHLD reaper
+    * in this process. */
+   {
+      struct sigaction sa_default;
+
+      sa_default.sa_handler = SIG_DFL;
+      sigemptyset(&sa_default.sa_mask);
+      sa_default.sa_flags = 0;
+      sigaction(SIGCHLD, &sa_default, NULL);
+   }
 
    if (state.sock >= 0) {
       handle_connection(state.sock); 
@@ -530,6 +562,16 @@ int create_client_handler_proc(int sock, int server_sock)
       die_err("Error: fork() failed");
 
    if (pid == 0) {   // We are in child proccess
+      struct sigaction sa_default;
+
+      /* The child may spawn grandchildren (e.g. handle_shell_call) and relies on
+       * explicit waitpid calls. Reset SIGCHLD to default so the parent's reaper
+       * does not interfere with child-owned lifecycles. */
+      sa_default.sa_handler = SIG_DFL;
+      sigemptyset(&sa_default.sa_mask);
+      sa_default.sa_flags = 0;
+      sigaction(SIGCHLD, &sa_default, NULL);
+
       if (var_debug)
          printf("+ Started new child with PID %i\n", (int) getpid());
 
@@ -554,7 +596,7 @@ int create_client_handler_proc(int sock, int server_sock)
  * 
  * @return [description]
  */
-int server_start(int port_num) 
+int server_start(int port_num)
 {
    int sockfd, newsockfd, clilen;
    char buffer[BUF_SZ];
@@ -565,6 +607,8 @@ int server_start(int port_num)
    init_spare_children_list();
    create_worker_manager_proc();
 #endif
+
+   install_reaper();
 
    /* Save the boot timestamp */
    var_server_start_time = (int)time(NULL);

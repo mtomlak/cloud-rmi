@@ -14,6 +14,7 @@ TOKEN="testtoken"
 NAMESPACE="Test\\Integration"
 SERVER_PID=""
 PROXY_PID=""
+BASE_ZOMBIES=$(ps -eo pid,state,comm | awk '$2=="Z" && ($3=="rmi-server" || $3=="rmi-proxy") {print $1}')
 
 cleanup() {
   for pid in "$PROXY_PID" "$SERVER_PID"; do
@@ -24,6 +25,32 @@ cleanup() {
   done
 }
 trap cleanup EXIT
+
+check_no_zombies() {
+  # Ensure no defunct rmi-server or rmi-proxy children are left behind.
+  local new_zombies=()
+
+  while read -r pid state comm; do
+    skip=false
+    for base in $BASE_ZOMBIES; do
+      if [ "$pid" = "$base" ]; then
+        skip=true
+        break
+      fi
+    done
+    if [ "$skip" = false ]; then
+      new_zombies+=("$pid $state $comm")
+    fi
+  done < <(ps -eo pid,state,comm | awk '$2=="Z" && ($3=="rmi-server" || $3=="rmi-proxy")')
+
+  if [ ${#new_zombies[@]} -ne 0 ]; then
+    echo "Detected zombie child processes" >&2
+    for entry in "${new_zombies[@]}"; do
+      echo "$entry"
+    done
+    exit 1
+  fi
+}
 
 wait_for_port() {
   local host="$1" port="$2" ready=0
@@ -115,6 +142,8 @@ if [ "$status" != "200" ] || [ "$decoded" != "JSON:MIXEDCASE" ]; then
   exit 1
 fi
 
+check_no_zombies
+
 # Proxy tests
 start_proxy
 
@@ -149,6 +178,8 @@ if [ "$status" != "500" ] || [[ "$message" != *"REJECT:RAW"* ]]; then
   echo "Invalid payload handling through proxy failed" >&2
   exit 1
 fi
+
+check_no_zombies
 
 python3 - "$PROXY_PORT" "$TOKEN" "$NAMESPACE" <<'PY'
 import base64
@@ -201,5 +232,7 @@ with socket.create_connection((host, port)) as sock:
 
 print("proxy-multi-ok")
 PY
+
+check_no_zombies
 
 echo "integration tests passed"
