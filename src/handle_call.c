@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <stdint.h>
 #include <poll.h>
+#include <limits.h>
 #include "cloud-rmi.h"
 #include "config.h"
 
@@ -25,14 +26,22 @@
 
 static int append_output(char **buf, size_t *cap, size_t *len, const char *chunk, size_t chunk_len)
 {
+   size_t needed;
+
    if (*buf == NULL || cap == NULL || len == NULL)
       return 0;
 
-   if (*len + chunk_len + 1 > *cap) {
+   if (__builtin_add_overflow(*len, chunk_len, &needed) || __builtin_add_overflow(needed, 1, &needed))
+      return 0;
+
+   if (needed > *cap) {
       size_t new_cap = *cap;
 
-      while (new_cap < *len + chunk_len + 1)
+      while (new_cap < needed) {
+         if (new_cap > SIZE_MAX / 2)
+            return 0;
          new_cap *= 2;
+      }
 
       char *tmp = realloc(*buf, new_cap);
       if (tmp == NULL)
@@ -91,24 +100,31 @@ static int stream_child_io(
          nfds++;
       }
 
-      int pr = poll(fds, nfds, -1);
+      int pr;
+
+      do {
+         pr = poll(fds, nfds, -1);
+      } while (pr < 0 && errno == EINTR);
+
       if (pr < 0) {
-         if (errno == EINTR)
-            continue;
          free(*output);
          *output = NULL;
          return 0;
       }
 
-      size_t idx = 0;
+      nfds_t idx = 0;
 
       if (stdout_open) {
          short revents = fds[idx].revents;
          idx++;
 
-         if (revents & (POLLIN)) {
+         if (revents & POLLIN) {
             char buf[BUF_SZ];
-            ssize_t n = read(stdout_fd, buf, sizeof(buf));
+            ssize_t n;
+
+            do {
+               n = read(stdout_fd, buf, sizeof(buf));
+            } while (n < 0 && errno == EINTR);
 
             if (n > 0) {
                if (!append_output(output, &out_cap, &out_len, buf, (size_t)n)) {
@@ -118,7 +134,7 @@ static int stream_child_io(
                }
             } else if (n == 0) {
                stdout_open = 0;
-            } else if (errno != EINTR) {
+            } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
                free(*output);
                *output = NULL;
                return 0;
@@ -132,25 +148,32 @@ static int stream_child_io(
          short revents = fds[idx].revents;
 
          if (revents & POLLOUT) {
-            ssize_t n = write(stdin_fd, payload + payload_written, payload_len - payload_written);
-            if (n < 0) {
-               if (errno == EINTR)
-                  continue;
+            ssize_t n;
+
+            do {
+               n = write(stdin_fd, payload + payload_written, payload_len - payload_written);
+            } while (n < 0 && errno == EINTR);
+
+            if (n > 0) {
+               payload_written += (size_t)n;
+
+               if (payload_written == payload_len) {
+                  close(stdin_fd);
+                  stdin_open = 0;
+               }
+            } else if (n == 0) {
+               continue;
+            } else if (errno == EPIPE || errno == ECONNRESET) {
+               close(stdin_fd);
+               stdin_open = 0;
+            } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
                free(*output);
                *output = NULL;
                return 0;
             }
-
-            payload_written += (size_t)n;
-
-            if (payload_written == payload_len) {
-               close(stdin_fd);
-               stdin_open = 0;
-            }
          } else if (revents & (POLLERR | POLLHUP | POLLNVAL)) {
-            free(*output);
-            *output = NULL;
-            return 0;
+            close(stdin_fd);
+            stdin_open = 0;
          }
       }
    }
