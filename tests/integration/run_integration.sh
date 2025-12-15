@@ -8,6 +8,7 @@ PROXY_BIN="$ROOT_DIR/rmi-proxy"
 CONFIG="$ROOT_DIR/tests/integration/fixtures/rmi-server.conf"
 INTERFACE_MAP="$ROOT_DIR/tests/integration/fixtures/interfaces.map"
 PROTOCOL_CLIENT="$ROOT_DIR/tests/integration/protocol_client.py"
+PROXY_SOCKET_TEST="$ROOT_DIR/tests/integration/proxy_socket_test.py"
 TEST_PORT=19950
 PROXY_PORT=19951
 TOKEN="testtoken"
@@ -181,57 +182,7 @@ fi
 
 check_no_zombies
 
-python3 - "$PROXY_PORT" "$TOKEN" "$NAMESPACE" <<'PY'
-import base64
-import socket
-import sys
-
-def read_line(sock):
-    data = bytearray()
-    while True:
-        chunk = sock.recv(1)
-        if not chunk:
-            break
-        data.extend(chunk)
-        if chunk == b"\n":
-            break
-    return data.decode("utf-8", errors="replace").strip("\r\n")
-
-def parse_status(line):
-    parts = line.split(" ", 1)
-    try:
-        code = int(parts[0])
-    except Exception:
-        return 0, ""
-    return code, parts[1] if len(parts) > 1 else ""
-
-host = "127.0.0.1"
-port = int(sys.argv[1])
-token = sys.argv[2]
-namespace = sys.argv[3]
-
-with socket.create_connection((host, port)) as sock:
-    parse_status(read_line(sock))
-    sock.sendall(f"AUTH TOKEN {token}\n".encode())
-    code, _ = parse_status(read_line(sock))
-    if code != 200:
-        raise SystemExit("auth failed")
-
-    arg = base64.b64encode(b"conn-test").decode()
-    sock.sendall(f"CALL {namespace}\\EchoInterface echo {arg}\n".encode())
-    code1, msg1 = parse_status(read_line(sock))
-
-    sock.sendall(f"CALL {namespace}\\PayloadInterface repeat\n".encode())
-    sock.sendall(b"PAYLOAD RAW 3\nabc")
-    code2, msg2 = parse_status(read_line(sock))
-
-    if code1 != 200 or code2 != 200:
-        raise SystemExit("unexpected status")
-    if base64.b64decode(msg2).decode() != "RAW:abc:abc":
-        raise SystemExit("payload mismatch")
-
-print("proxy-multi-ok")
-PY
+python3 "$PROXY_SOCKET_TEST" 127.0.0.1 "$PROXY_PORT" "$TOKEN" "$NAMESPACE"
 
 check_no_zombies
 
