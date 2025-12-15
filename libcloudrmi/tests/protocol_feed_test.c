@@ -156,6 +156,16 @@ int main(void)
     if (!expect_event(ctx, RMI_EVENT_CALL, "call", "zero", RMI_ERROR_NONE, "PLAIN", (const uint8_t *)"", 0))
         return 1;
 
+    /* CALL with legacy arg must not accept PAYLOAD */
+    const char *legacy_then_payload = "CALL demo method Zm9v\nPAYLOAD RAW 1\nx";
+    if (rmi_protocol_feed(ctx, (const uint8_t *)legacy_then_payload, strlen(legacy_then_payload), &err) != RMI_OK)
+        return 1;
+    if (!expect_event(ctx, RMI_EVENT_CALL, "call", "demo", RMI_ERROR_NONE, NULL, NULL, 0))
+        return 1;
+    status = rmi_protocol_next_event(ctx, &event, &err);
+    if (status != RMI_E_ERR || err.code != RMI_ERROR_BAD_REQUEST)
+        return 1;
+
     rmi_protocol_destroy(ctx);
     printf("protocol_feed_test passed\n");
     return 0;
