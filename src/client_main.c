@@ -126,11 +126,15 @@ int main(int argc, char *argv[])
    if (argc - optind > 1) {
       // Complete relative interface name
       if (argv[optind][0] != '\\') {
-         iface = strdup(var_script_base_namespace);
-         strcat(iface, "\\");
-         strcat(iface, argv[optind]);
+         size_t iface_len = strlen(var_script_base_namespace) + strlen(argv[optind]) + 2;
+         iface = malloc(sizeof(char) * iface_len);
 
-      } else 
+         if (iface == NULL)
+            die_err("Error: Failed to allocate interface name buffer");
+
+         snprintf(iface, iface_len, "%s\\%s", var_script_base_namespace, argv[optind]);
+
+      } else
          iface = strdup(argv[optind]);
 
       method = strdup(argv[optind + 1]);

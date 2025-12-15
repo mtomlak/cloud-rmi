@@ -77,8 +77,13 @@ install:
 	$(MAKE) client_install
 	#make proxy_install
 
+test: all
+	$(MAKE) -C libcloudrmi/tests/unit all
+	cd libcloudrmi/tests/unit && ./protocol_feed_test
+	$(MAKE) -C tests/integration test
+
 clean:
 	$(MAKE) -C libcloudrmi clean
 	rm -f $(BIN_SERVER) $(BIN_CLIENT) $(BIN_PROXY)
 
-.PHONY: all update server client proxy server_install client_install proxy_install config_install install clean
+.PHONY: all update server client proxy server_install client_install proxy_install config_install install clean test
