@@ -1,51 +1,50 @@
-# CloudRMI Protocol v2 — PAYLOAD-aware Design Specification
+# CloudRMI Protocol v2 — Framing & PAYLOAD Metadata Specification
 
-**Status:** Draft (intended as long-term stable reference)  
-**Scope:** Protocol framing, parsing, state machine, backward compatibility  
-**Out of scope:** Business logic, language bindings, transport implementation
+**Status:** Draft (stable framing layer)  
+**Scope:** Command framing, PAYLOAD state machine, backward compatibility  
+**Out of scope:** Encoding semantics and data interpretation
 
 ---
 
-## 1. Goals & Design Constraints
+## 0. Clarification on Encoding
 
-This protocol revision is designed to:
+This protocol **does support declaring an encoding type** at the framing level,
+but it **does not define what that encoding means**.
 
-- Preserve **full backward compatibility** with existing CloudRMI clients/servers
-- Support **large and binary payloads** efficiently
-- Avoid heuristic or ambiguous parsing
-- Be suitable for:
-  - C servers (high-performance, prefork, IPC)
-  - PHP servers (CLI, extension-backed)
-  - Mixed-language clients
-- Remain stable for **10+ years**
+Key distinction:
 
-Key principles:
+- **Protocol layer**: transports bytes + declares metadata
+- **Application layer**: interprets bytes based on encoding
 
-1. **Text-based control plane**
-2. **Explicit binary payload plane**
-3. **No speculative reads**
-4. **Deterministic state machine**
-5. **Client controls argument encoding**
-6. **Server controls response encoding**
+This allows:
+- clean framing in C
+- PHP (or other languages) to keep their own encoding rules
+- future encodings without protocol redesign
+
+---
+
+## 1. Goals & Constraints
+
+- Preserve backward compatibility
+- Support large / binary payloads
+- Avoid line-length limits
+- Deterministic parsing (no heuristics)
+- Long-term stability (10+ years)
 
 ---
 
 ## 2. Transport Model
 
-The protocol is **transport-agnostic**:
+Transport-agnostic byte stream:
+- TCP
+- Unix sockets
+- IPC
 
-- TCP sockets
-- Unix domain sockets
-- IPC / pipes
-
-The protocol itself assumes:
-
-- Ordered byte stream
-- Reliable delivery
+Assumes ordered, reliable delivery.
 
 ---
 
-## 3. High-level Protocol Flow
+## 3. High-level Flow
 
 ```
 CONNECT
@@ -55,31 +54,23 @@ SERVER BANNER
 COMMAND LOOP
 ```
 
-All semantics below apply inside the **COMMAND LOOP**.
-
 ---
 
 ## 4. Protocol States
 
-The server processes input using a strict state machine.
-
-### States
-
-| State | Description |
-|-----|------------|
-| `IDLE` | Waiting for a new command line |
-| `CALL_PENDING_PAYLOAD` | CALL accepted, waiting for PAYLOAD header |
-| `READING_PAYLOAD` | Reading binary payload of known length |
-| `EXECUTE_CALL` | Decoding arguments and invoking method |
-| `SEND_RESPONSE` | Sending response (inline or PAYLOAD) |
+| State | Meaning |
+|------|--------|
+| `IDLE` | Waiting for a command line |
+| `CALL_PENDING_PAYLOAD` | CALL accepted, waiting for PAYLOAD |
+| `READING_PAYLOAD` | Reading fixed-size payload |
+| `EXECUTE_CALL` | Call execution |
+| `SEND_RESPONSE` | Sending response |
 
 ---
 
-## 5. Commands Overview
+## 5. Commands Without Payload
 
-### Commands that **never** accept payload
-
-Handled immediately in `IDLE` state:
+Handled immediately in `IDLE`:
 
 ```
 AUTH
@@ -94,21 +85,21 @@ SERVER
 PROXY
 ```
 
-If these commands are followed by a PAYLOAD, it is a protocol error.
+These commands **never accept PAYLOAD**.
 
 ---
 
-## 6. CALL Command — Two Forms
+## 6. CALL Command
 
-### 6.1 Legacy CALL (backward compatible)
+### 6.1 Legacy CALL (inline args)
 
 ```
-CALL <iface> <method> <inline_payload>
+CALL <iface> <method> <args>
 ```
 
-- `<inline_payload>` is a **single token**
-- Typically base64, `PHP:base64(...)`, etc.
-- Parsed and executed immediately
+- `<args>` is a single token
+- Treated as opaque bytes
+- Executed immediately
 
 State transition:
 
@@ -116,25 +107,20 @@ State transition:
 IDLE → EXECUTE_CALL
 ```
 
-This form **must remain supported indefinitely**.
+Must remain supported indefinitely.
 
 ---
 
-### 6.2 Extended CALL (PAYLOAD-capable)
+### 6.2 Extended CALL (payload-based)
 
 ```
 CALL <iface> <method>
 ```
 
-Characteristics:
-
-- Exactly **2 arguments**
-- No payload inline
-- Execution is deferred
-- Server validates:
-  - authentication
-  - interface existence
-  - method existence
+Rules:
+- Exactly 2 arguments
+- No execution yet
+- Server validates auth / iface / method
 
 State transition:
 
@@ -156,14 +142,14 @@ PAYLOAD <encoding> <length>
 
 Where:
 
-- `<encoding>`: symbolic encoding name (`PLAIN`, `PHP`, `JSON`, `BLOB`, etc.)
-- `<length>`: exact byte count of payload to follow
+- `<encoding>` = symbolic identifier (e.g. `PLAIN`, `PHP`, `JSON`, `BLOB`)
+- `<length>` = exact number of bytes to read next
 
-Validation rules:
+Protocol rules:
 
-- PAYLOAD is **illegal** without a preceding CALL
-- `<length>` must be ≤ configured maximum
-- `<encoding>` must be supported
+- Encoding value is **opaque to the protocol**
+- Protocol does not validate or interpret encoding
+- Encoding string is forwarded to application layer
 
 State transition:
 
@@ -173,22 +159,21 @@ CALL_PENDING_PAYLOAD → READING_PAYLOAD
 
 ---
 
-### 7.2 PAYLOAD Data
+### 7.2 PAYLOAD Body
 
-Immediately following the PAYLOAD header:
+Immediately follows header:
 
 ```
-<raw binary bytes, exactly <length>>
+<exactly <length> raw bytes>
 ```
 
-Rules:
+Properties:
 
-- No line parsing
-- No terminators required
 - Binary-safe
-- Server reads exactly `<length>` bytes
+- No terminator
+- No inspection by protocol engine
 
-On completion:
+After read:
 
 ```
 READING_PAYLOAD → EXECUTE_CALL
@@ -196,68 +181,52 @@ READING_PAYLOAD → EXECUTE_CALL
 
 ---
 
-## 8. Invalid PAYLOAD Scenarios
+## 8. Invalid Sequences
 
-| Situation | Server Response |
-|--------|----------------|
-| PAYLOAD without CALL | `400 Unexpected PAYLOAD` |
-| CALL already pending | `400 CALL already pending` |
-| Any other command in `CALL_PENDING_PAYLOAD` | `400 Expected PAYLOAD` |
-| Payload too large | `413 Payload Too Large` (or `400`) |
-| Payload decode error | `400 Bad Payload` |
+| Situation | Server Action |
+|---------|---------------|
+| PAYLOAD without CALL | 400 error |
+| Second CALL before payload | 400 error |
+| Any command instead of PAYLOAD | 400 error |
+| Payload too large | Abort payload, reset |
+| Short read | Abort payload, reset |
 
-After error:
+After any framing error:
 - Payload buffer is discarded
 - State resets to `IDLE`
 
 ---
 
-## 9. CALL Execution Semantics
+## 9. Call Execution
 
-During `EXECUTE_CALL`:
-
-1. Payload (inline or PAYLOAD) is decoded
-2. Arguments are hydrated
-3. Method is invoked
-4. Result or exception is produced
-
-Encoding rules:
-
-- **Client chooses encoding for arguments**
-- **Server chooses encoding for result**
+- Server receives:
+  - raw payload bytes
+  - declared encoding string
+- Decoding and validation are application-defined
+- Protocol layer remains encoding-agnostic
 
 ---
 
 ## 10. Responses
 
-### 10.1 Inline Response (legacy-compatible)
+### 10.1 Inline Response (legacy)
 
 ```
-200 <encoded-payload>
+200 <data>
 ```
 
-Used when:
-- Payload is small
-- Client compatibility is required
-
----
-
-### 10.2 PAYLOAD Response (extended)
+### 10.2 PAYLOAD Response
 
 ```
 200 PAYLOAD <encoding> <length>
 <raw bytes>
 ```
 
-Notes:
+Rules:
+- Same framing semantics as request payload
+- Encoding is metadata only
 
-- Same PAYLOAD semantics as request side
-- Binary-safe
-- Length is exact
-
-Server may downgrade to inline form if needed.
-
-State transition:
+After response:
 
 ```
 SEND_RESPONSE → IDLE
@@ -265,89 +234,44 @@ SEND_RESPONSE → IDLE
 
 ---
 
-## 11. Error Reporting Model
+## 11. Error Model
 
-Two independent channels:
+### Framing Errors (protocol engine)
+- AGAIN
+- OVERFLOW
+- ERROR
 
-### 11.1 Transport / Framing Errors
-Reported via protocol status:
-
-- `RMI_E_AGAIN`
-- `RMI_E_OVERFLOW`
-- `RMI_E_ERR`
-
-These indicate stream-level issues.
-
-### 11.2 Semantic / Protocol Errors
-Reported via `err->code`:
-
-- `RMI_ERROR_BAD_REQUEST`
-- `RMI_ERROR_BAD_ARGS`
-- `RMI_ERROR_UNAUTHORIZED`
-- etc.
-
-A syntactically valid event may still carry a semantic error.
+### Semantic Errors (application)
+- Returned as normal protocol responses (`400`, `500`, etc.)
 
 ---
 
-## 12. Backward Compatibility Guarantees
+## 12. Backward Compatibility
 
-- Old clients using legacy CALL continue to work unchanged
-- PAYLOAD is opt-in and explicitly advertised
-- No existing command syntax is broken
-- Inline payload semantics remain valid
-
----
-
-## 13. Encoding Notes
-
-Encodings are **payload semantics**, not protocol framing.
-
-Examples:
-
-- `PLAIN` — base64 or raw plaintext fallback
-- `PHP` — PHP `serialize()` + base64 (legacy)
-- `JSON` — JSON + base64
-- `BLOB` — raw binary
-
-Future encodings may be added without protocol changes.
+- Legacy CALL remains unchanged
+- PAYLOAD is opt-in
+- Encoding metadata does not affect legacy clients
+- Old PHP encoding conventions continue to work
 
 ---
 
-## 14. Rationale (Why This Design)
+## 13. Rationale
 
-- Eliminates line-length limitations for arguments
-- Avoids scanning payload content for magic bytes
-- Allows fixed-size buffers for command parsing
-- Cleanly separates:
-  - framing
-  - decoding
-  - execution
-- Maps directly to feed/emit engines
-- Matches patterns used in mature RPC protocols
+- Keeps protocol minimal and robust
+- Avoids PHP-specific leakage into core
+- Enables efficient binary transport
+- Supports multiple language bindings cleanly
 
 ---
 
-## 15. Implementation Notes (Non-normative)
+## 14. Summary
 
-- PAYLOAD should only be allowed immediately after CALL
-- Protocol engine should be reusable from:
-  - C server
-  - PHP extension
-  - Test harness
-- Default max payload size must be configurable
-- Banner should advertise PAYLOAD support explicitly (e.g. `EXT PAYLOAD`)
+This specification defines:
 
----
+- **When PAYLOAD is allowed**
+- **How payload bytes are framed**
+- **How encoding is declared (but not interpreted)**
 
-## 16. Summary
+Encoding meaning is intentionally delegated to higher layers.
 
-This protocol design:
-
-- Preserves legacy behavior
-- Introduces explicit payload framing
-- Scales to large and binary data
-- Is simple enough to reason about formally
-- Avoids accidental complexity
-
-**This document is intended to remain valid for the next decade.**
+**This framing + metadata layer is intended to remain stable for the next decade.**
