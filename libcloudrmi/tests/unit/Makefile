@@ -5,8 +5,8 @@ LDFLAGS ?= ../../libcloudrmi.a
 protocol_feed_test: protocol_feed_test.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
-proxy_payload_test: proxy_payload_test.c ../../../src/proxy.c ../../../src/cloud-rmi.c ../../../src/client.c ../../../src/config.c
-	$(CC) $(CFLAGS) -o $@ $< ../../../src/proxy.c ../../../src/cloud-rmi.c ../../../src/client.c ../../../src/config.c $(LDFLAGS)
+proxy_payload_test: proxy_payload_test.c ../../../src/proxy.c ../../../src/cloud-rmi.c ../../../src/client.c ../../../src/config.c ../../../src/capabilities.c
+	$(CC) $(CFLAGS) -o $@ $< ../../../src/proxy.c ../../../src/cloud-rmi.c ../../../src/client.c ../../../src/config.c ../../../src/capabilities.c $(LDFLAGS)
 
 all: protocol_feed_test proxy_payload_test
 

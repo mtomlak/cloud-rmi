@@ -31,7 +31,7 @@ static void prepare_proxy(int upstream_sock, const char *iface)
    proxy_list[0].conn_count = 1;
    proxy_list[0].conns[0].conn_id = 0;
    proxy_list[0].conns[0].proxy_id = 0;
-   proxy_list[0].conns[0].sock = upstream_sock;
+   proxy_list[0].conns[0].client.sock = upstream_sock;
    proxy_list[0].conns[0].is_busy = 0;
 
    struct proxy_iface_entry *entry = malloc(sizeof(struct proxy_iface_entry));

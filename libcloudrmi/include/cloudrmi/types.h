@@ -20,6 +20,7 @@ typedef enum {
     RMI_EVENT_DEBUG,
     RMI_EVENT_QUIT,
     RMI_EVENT_PROXY,
+    RMI_EVENT_CAPS,
     RMI_EVENT_SERVER,
     RMI_EVENT_UNKNOWN
 } rmi_event_type_t;

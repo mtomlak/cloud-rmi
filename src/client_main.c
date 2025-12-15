@@ -68,11 +68,12 @@ void print_php_error(char *response)
  * @param  char* argv
  * @return int
  */
-int main(int argc, char *argv[]) 
+int main(int argc, char *argv[])
 {
-   int sock, status_code, i, opt = 0;
+   int status_code, i, opt = 0;
    char *iface, *method, *args, *raw_cmd = NULL;
    char *result = malloc(sizeof(char) * (BUF_SZ + 1));
+   struct rmi_client_conn conn;
 
    bzero(result, BUF_SZ);
 
@@ -153,30 +154,28 @@ int main(int argc, char *argv[])
    }
    
    // Connect to the server
-   sock = client_connect(var_server_name, var_port);
-
-   if (sock < 0)
+   if (client_connect(var_server_name, var_port, &conn) < 0)
       die_err("Error: Failed to connect to the server");
 
    // Authenticate
    if (var_recovery_token != NULL)
-      if (!client_auth_by_token(sock, var_recovery_token))
+      if (!client_auth_by_token(&conn, var_recovery_token))
          die_err("Error: Token authentication failed");
 
    // Executing raw RMI protocol command
    if (raw_cmd != NULL) {
-      status_code = client_raw_cmd(sock, raw_cmd, result);
+      status_code = client_raw_cmd(&conn, raw_cmd, result);
 
       printf("%i %s\n", status_code, result);
-      client_disconnect(sock);
+      client_disconnect(&conn);
       free(result);
       exit(0);
    }
 
    // Executing standard RMI call
-   if (client_call_remote_method(sock, iface, method, args, result)) {
+   if (client_call_remote_method(&conn, iface, method, args, result)) {
       printf("%s", result);
-      client_disconnect(sock);
+      client_disconnect(&conn);
       free(result);
       exit(0);
 
@@ -193,7 +192,7 @@ int main(int argc, char *argv[])
       else
          printf("Error: Failed to perform remote call: %s\n", result);
 
-      client_disconnect(sock);
+      client_disconnect(&conn);
       free(result);
       exit(1);
    }

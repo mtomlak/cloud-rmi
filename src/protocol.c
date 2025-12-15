@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include "cloud-rmi.h"
 #include "config.h"
+#include "capabilities.h"
 #ifdef PROXY_SUPPORT
    #include "proxy.h"
 #endif
@@ -203,6 +204,13 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state)
       stream_writeln(state->sock, "200 OK");
       break;
 
+   case RMI_EVENT_CAPS: {
+      char caps_buf[BUF_SZ + 1];
+      rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
+      stream_writeln(state->sock, "200 %s", caps_buf);
+      break;
+   }
+
    case RMI_EVENT_DEBUG:
       if (state->is_authenticated) {
          if (strcmp(event->arg1, "on") == 0) {
@@ -286,7 +294,9 @@ void handle_connection (int sock)
       return;
 
    // Write welcome message
-   stream_writeln(sock, "220 %s Server Ready EXT %s", var_context_name, PROTO_EXTENSIONS);
+   char caps_buf[BUF_SZ + 1];
+   rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
+   stream_writeln(sock, "220 %s Server Ready EXT %s", var_context_name, caps_buf);
    state.sock = sock;
    state.is_authenticated = 0;
 

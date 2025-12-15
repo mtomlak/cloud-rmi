@@ -10,6 +10,7 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <poll.h>
 #include "cloud-rmi.h"
 #include "config.h"
 
@@ -22,46 +23,139 @@
  * @license BSD
  */
 
-/**
- * Executes RMI command as a shell script.
- * 
- */
-static int write_all(int fd, const uint8_t *buf, size_t len)
+static int append_output(char **buf, size_t *cap, size_t *len, const char *chunk, size_t chunk_len)
 {
-   size_t written = 0;
+   if (*buf == NULL || cap == NULL || len == NULL)
+      return 0;
 
-   while (written < len) {
-      ssize_t n = write(fd, buf + written, len - written);
-      if (n < 0) {
-         if (errno == EINTR)
-            continue;
+   if (*len + chunk_len + 1 > *cap) {
+      size_t new_cap = *cap;
+
+      while (new_cap < *len + chunk_len + 1)
+         new_cap *= 2;
+
+      char *tmp = realloc(*buf, new_cap);
+      if (tmp == NULL)
          return 0;
-      }
-      written += (size_t)n;
+
+      *buf = tmp;
+      *cap = new_cap;
    }
+
+   memcpy((*buf) + *len, chunk, chunk_len);
+   *len += chunk_len;
+   (*buf)[*len] = '\0';
 
    return 1;
 }
 
-static int read_all_available(int fd, char *buf, size_t buf_len)
+static int stream_child_io(
+   int stdout_fd,
+   int stdin_fd,
+   const uint8_t *payload,
+   size_t payload_len,
+   char **output,
+   size_t *output_len)
 {
-   size_t total = 0;
+   size_t out_cap = BUF_SZ + 1;
+   size_t out_len = 0;
+   size_t payload_written = 0;
+   int stdout_open = 1;
+   int stdin_open = (stdin_fd >= 0 && payload != NULL && payload_len > 0);
 
-   while (total < buf_len) {
-      ssize_t n = read(fd, buf + total, buf_len - total);
-      if (n < 0) {
+   *output = malloc(out_cap);
+   if (*output == NULL)
+      return 0;
+
+   (*output)[0] = '\0';
+
+   if (payload != NULL && payload_len == 0 && stdin_fd >= 0) {
+      close(stdin_fd);
+      stdin_fd = -1;
+      stdin_open = 0;
+   }
+
+   while (stdout_open || (stdin_open && payload_written < payload_len)) {
+      struct pollfd fds[2];
+      nfds_t nfds = 0;
+
+      if (stdout_open) {
+         fds[nfds].fd = stdout_fd;
+         fds[nfds].events = POLLIN;
+         nfds++;
+      }
+
+      if (stdin_open && payload_written < payload_len) {
+         fds[nfds].fd = stdin_fd;
+         fds[nfds].events = POLLOUT;
+         nfds++;
+      }
+
+      int pr = poll(fds, nfds, -1);
+      if (pr < 0) {
          if (errno == EINTR)
             continue;
+         free(*output);
+         *output = NULL;
          return 0;
       }
 
-      if (n == 0)
-         break;
+      size_t idx = 0;
 
-      total += (size_t)n;
+      if (stdout_open) {
+         short revents = fds[idx].revents;
+         idx++;
+
+         if (revents & (POLLIN)) {
+            char buf[BUF_SZ];
+            ssize_t n = read(stdout_fd, buf, sizeof(buf));
+
+            if (n > 0) {
+               if (!append_output(output, &out_cap, &out_len, buf, (size_t)n)) {
+                  free(*output);
+                  *output = NULL;
+                  return 0;
+               }
+            } else if (n == 0) {
+               stdout_open = 0;
+            } else if (errno != EINTR) {
+               free(*output);
+               *output = NULL;
+               return 0;
+            }
+         } else if (revents & (POLLHUP | POLLERR | POLLNVAL)) {
+            stdout_open = 0;
+         }
+      }
+
+      if (stdin_open && payload_written < payload_len) {
+         short revents = fds[idx].revents;
+
+         if (revents & POLLOUT) {
+            ssize_t n = write(stdin_fd, payload + payload_written, payload_len - payload_written);
+            if (n < 0) {
+               if (errno == EINTR)
+                  continue;
+               free(*output);
+               *output = NULL;
+               return 0;
+            }
+
+            payload_written += (size_t)n;
+
+            if (payload_written == payload_len) {
+               close(stdin_fd);
+               stdin_open = 0;
+            }
+         } else if (revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            free(*output);
+            *output = NULL;
+            return 0;
+         }
+      }
    }
 
-   buf[total] = '\0';
+   *output_len = out_len;
    return 1;
 }
 
@@ -74,70 +168,42 @@ int handle_shell_call(
    const char *encoding,
    struct conn_state *state)
 {
-   (void)encoding;
-
    int exit_code;
    int status;
    pid_t pid;
    int stdout_pipe[2];
    int stdin_pipe[2] = { -1, -1 };
    char *decoded_arg = NULL;
-   char *encoded_output = NULL;
-   char *output = malloc(sizeof(char) * (BUF_SZ + 1));
-
-   if (output == NULL) {
-      stream_writeln(state->sock, "500 Error preparing call buffer");
-      return 0;
-   }
-
-   bzero(output, BUF_SZ);
+   char *output = NULL;
+   size_t output_len = 0;
+   char *response_output = NULL;
+   int success = 0;
 
    if (payload == NULL) {
       decoded_arg = malloc(sizeof(char) * (BUF_SZ + 1));
       if (decoded_arg == NULL) {
          stream_writeln(state->sock, "500 Error preparing call buffer");
-         free(output);
          return 0;
       }
 
       bzero(decoded_arg, BUF_SZ);
 
-      // base64 decode argument list (legacy mode)
       if (!from64tobits(decoded_arg, arg)) {
          stream_writeln(state->sock, "500 Error decoding call arguments");
-         free(decoded_arg);
-         free(output);
-         return 0;
+         goto cleanup;
       }
-
-      encoded_output = decoded_arg;
-   } else {
-      encoded_output = malloc(sizeof(char) * (BUF_SZ + 1));
-      if (encoded_output == NULL) {
-         stream_writeln(state->sock, "500 Error preparing response buffer");
-         free(output);
-         return 0;
-      }
-      bzero(encoded_output, BUF_SZ);
    }
 
    if (pipe(stdout_pipe) == -1) {
       stream_writeln(state->sock, "500 Error preparing call pipeline");
-      if (encoded_output != decoded_arg)
-         free(encoded_output);
-      free(decoded_arg);
-      free(output);
-      return 0;
+      goto cleanup;
    }
 
    if (payload != NULL && pipe(stdin_pipe) == -1) {
       stream_writeln(state->sock, "500 Error preparing payload pipeline");
       close(stdout_pipe[0]);
       close(stdout_pipe[1]);
-      if (encoded_output != decoded_arg)
-         free(encoded_output);
-      free(output);
-      return 0;
+      goto cleanup;
    }
 
    pid = fork();
@@ -149,15 +215,10 @@ int handle_shell_call(
          close(stdin_pipe[0]);
          close(stdin_pipe[1]);
       }
-      if (encoded_output != decoded_arg)
-         free(encoded_output);
-      free(decoded_arg);
-      free(output);
-      return 0;
+      goto cleanup;
    }
 
    if (pid == 0) {
-      // Child
       close(stdout_pipe[0]);
       if (dup2(stdout_pipe[1], STDOUT_FILENO) == -1)
          _exit(127);
@@ -170,12 +231,11 @@ int handle_shell_call(
          if (dup2(stdin_pipe[0], STDIN_FILENO) == -1)
             _exit(127);
          close(stdin_pipe[0]);
-      } else {
-         // keep parent's stdin untouched for legacy calls
       }
 
       if (payload != NULL) {
-         execl(file, file, method, (char *)NULL);
+         const char *encoding_arg = encoding != NULL ? encoding : "";
+         execl(file, file, method, encoding_arg, (char *)NULL);
       } else {
          execl(file, file, method, decoded_arg, (char *)NULL);
       }
@@ -183,50 +243,38 @@ int handle_shell_call(
       _exit(127);
    }
 
-   // Parent
    close(stdout_pipe[1]);
-
-   if (payload != NULL) {
+   if (payload != NULL)
       close(stdin_pipe[0]);
-      if (!write_all(stdin_pipe[1], payload, payload_len)) {
-         stream_writeln(state->sock, "500 Error streaming payload");
-         close(stdin_pipe[1]);
-         close(stdout_pipe[0]);
-         waitpid(pid, NULL, 0);
-         if (encoded_output != decoded_arg)
-            free(encoded_output);
-         free(decoded_arg);
-         free(output);
-         return 0;
-      }
-      close(stdin_pipe[1]);
-   }
 
-   if (!read_all_available(stdout_pipe[0], output, BUF_SZ)) {
-      stream_writeln(state->sock, "500 Error reading call output");
+   int stdin_fd = (payload != NULL) ? stdin_pipe[1] : -1;
+
+   if (!stream_child_io(stdout_pipe[0], stdin_fd, payload, payload_len, &output, &output_len)) {
+      stream_writeln(state->sock, "500 Error streaming payload");
+      if (stdin_fd >= 0)
+         close(stdin_fd);
       close(stdout_pipe[0]);
       waitpid(pid, NULL, 0);
-      if (encoded_output != decoded_arg)
-         free(encoded_output);
-      free(decoded_arg);
-      free(output);
-      return 0;
+      goto cleanup;
    }
+
+   if (stdin_fd >= 0)
+      close(stdin_fd);
 
    close(stdout_pipe[0]);
 
-   if (waitpid(pid, &status, 0) == -1) {
+   while (waitpid(pid, &status, 0) == -1) {
+      if (errno == EINTR)
+         continue;
       stream_writeln(state->sock, "500 Error waiting for call");
-      if (encoded_output != decoded_arg)
-         free(encoded_output);
-      free(decoded_arg);
-      free(output);
-      return 0;
+      goto cleanup;
    }
 
    exit_code = (WIFEXITED(status) ? WEXITSTATUS(status) : -1);
 
-   // send the output or status code on error
+   if (output == NULL)
+      goto cleanup;
+
    if (strncmp(output, "Error", 5) == 0) {
       stream_writeln(state->sock, "500 Exited with error message: %s", output);
 
@@ -234,23 +282,30 @@ int handle_shell_call(
       stream_writeln(state->sock, "500 Error: %s (%d)", output, exit_code);
 
    } else {
-      if (encoded_output == decoded_arg)
-         bzero(encoded_output, BUF_SZ);
+      size_t encoded_len = output_len ? (((output_len + 2) / 3) * 4) + 1 : (BUF_SZ + 1);
+      response_output = malloc(encoded_len);
+      if (response_output == NULL) {
+         stream_writeln(state->sock, "500 Error preparing response buffer");
+         goto cleanup;
+      }
 
-      if (strlen(output))
-         to64frombits((unsigned char *)encoded_output, (const unsigned char *)output, strlen(output));
+      response_output[0] = '\0';
 
-      stream_writeln(state->sock, "200 %s", encoded_output);
+      if (output_len)
+         to64frombits((unsigned char *)response_output, (const unsigned char *)output, output_len);
+
+      stream_writeln(state->sock, "200 %s", response_output);
    }
 
-   if (encoded_output != decoded_arg)
-      free(encoded_output);
+   success = 1;
+
+cleanup:
    free(decoded_arg);
    free(output);
+   free(response_output);
 
-   return 1;
+   return success;
 }
-
 /**
  * Handles RMI 'call' command.
  * 
