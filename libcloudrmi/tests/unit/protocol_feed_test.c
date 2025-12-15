@@ -38,24 +38,32 @@ static int expect_event(
         return 0;
     }
 
-    if (expected_cmd != NULL && strcmp(event.cmd, expected_cmd) != 0) {
-        printf("Unexpected cmd '%s'\n", event.cmd);
-        return 0;
+    if (expected_cmd != NULL) {
+        if (strcmp(event.cmd, expected_cmd) != 0) {
+            printf("Unexpected cmd '%s'\n", event.cmd);
+            return 0;
+        }
     }
 
-    if (expected_arg1 != NULL && strcmp(event.arg1, expected_arg1) != 0) {
-        printf("Unexpected arg1 '%s'\n", event.arg1);
-        return 0;
+    if (expected_arg1 != NULL) {
+        if (strcmp(event.arg1, expected_arg1) != 0) {
+            printf("Unexpected arg1 '%s'\n", event.arg1);
+            return 0;
+        }
     }
 
-    if (expected_arg2 != NULL && strcmp(event.arg2, expected_arg2) != 0) {
-        printf("Unexpected arg2 '%s'\n", event.arg2);
-        return 0;
+    if (expected_arg2 != NULL) {
+        if (strcmp(event.arg2, expected_arg2) != 0) {
+            printf("Unexpected arg2 '%s'\n", event.arg2);
+            return 0;
+        }
     }
 
-    if (expected_encoding != NULL && strcmp(event.encoding, expected_encoding) != 0) {
-        printf("Unexpected encoding '%s' for event #%d\n", event.encoding, event_counter);
-        return 0;
+    if (expected_encoding != NULL) {
+        if (strcmp(event.encoding, expected_encoding) != 0) {
+            printf("Unexpected encoding '%s' for event #%d\n", event.encoding, event_counter);
+            return 0;
+        }
     }
 
     if (expected_payload != NULL) {

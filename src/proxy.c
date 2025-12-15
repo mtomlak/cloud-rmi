@@ -49,8 +49,9 @@ static int proxy_write_all(int fd, const uint8_t *buf, size_t len)
       } while (written < 0 && errno == EINTR);
 
       if (written < 0) {
+         // Proxy sockets are expected to be blocking; treat EAGAIN/EWOULDBLOCK as fatal to avoid spin
          if (errno == EAGAIN || errno == EWOULDBLOCK)
-            continue;
+            errno = EIO;
          return 0;
       }
 

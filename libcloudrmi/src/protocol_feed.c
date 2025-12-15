@@ -351,6 +351,7 @@ rmi_status_t rmi_protocol_next_event(
             }
 
             if (payload_len > SIZE_MAX) {
+                // Defensive guard: RMI_MAX_BUFFER currently fits in size_t, but keep check for future changes
                 if (err != NULL) {
                     err->code = RMI_ERROR_BAD_REQUEST;
                     err->message = "Invalid payload length";
