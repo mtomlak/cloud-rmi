@@ -16,12 +16,6 @@
 #define PROTOCOL_VERSION CLOUDRMI_PROTOCOL_VERSION
 #define BUF_SZ RMI_BUF_SZ
 
-#ifdef PROXY_SUPPORT
-   #define PROTO_EXTENSIONS "PROXY-STATS SERVER-STATS"
-#else
-   #define PROTO_EXTENSIONS "SERVER-STATS"
-#endif
-
 #ifdef ENABLE_LINUX_FEATURES
         #define CHILD_STACK_SZ          BUF_SZ * 24   // seems safe above BUF_SZ * 10 up to version 0.91
 

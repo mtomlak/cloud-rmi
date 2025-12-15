@@ -9,6 +9,7 @@
 #include <libgen.h>  // for basename()
 #include "cloud-rmi.h"
 #include "config.h"
+#include "capabilities.h"
 #ifdef PROXY_SUPPORT
    #include "proxy.h"
 #endif
@@ -42,9 +43,9 @@ void show_help(char *this_cmd)
 #ifdef LEGACY_STREAM
    printf(" - compiled with legacy stream implementation\n");
 #endif
-#ifdef PROTO_EXTENSIONS
-   printf(" - compiled with protocol extensions: %s\n", PROTO_EXTENSIONS);
-#endif
+   char caps_buf[BUF_SZ + 1];
+   rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
+   printf(" - compiled with protocol extensions: %s\n", caps_buf);
 
 	printf("\nUsage: \n");
 	printf("\t%s < flags | options >\n", basename(this_cmd));

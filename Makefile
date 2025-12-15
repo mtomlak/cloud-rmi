@@ -24,17 +24,17 @@ $(LIBCLOUDRMI):
 update:
 	git pull
 
-server: $(LIBCLOUDRMI) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/cloud-rmi.h src/config.h
+server: $(LIBCLOUDRMI) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/capabilities.c src/cloud-rmi.h src/config.h
 	@echo " * Building rmi-server binary ..."
-	$(CC) -g $(LIBCLOUDRMI_INC) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_SERVER) -D ENABLE_LINUX_FEATURES
+	$(CC) -g $(LIBCLOUDRMI_INC) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/capabilities.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_SERVER) -D ENABLE_LINUX_FEATURES
 
-client: $(LIBCLOUDRMI) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/cloud-rmi.h src/config.h src/client.h
+client: $(LIBCLOUDRMI) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/capabilities.c src/cloud-rmi.h src/config.h src/client.h
 	@echo " * Building rmi-client binary ..."
-	$(CC) -g $(LIBCLOUDRMI_INC) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_CLIENT) -D ENABLE_LINUX_FEATURES
+	$(CC) -g $(LIBCLOUDRMI_INC) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/capabilities.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_CLIENT) -D ENABLE_LINUX_FEATURES
 
-proxy: $(LIBCLOUDRMI) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/server.c src/client.c src/cloud-rmi.h src/config.h src/client.h
+proxy: $(LIBCLOUDRMI) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/server.c src/client.c src/capabilities.c src/cloud-rmi.h src/config.h src/client.h
 	@echo " * Building rmi-client binary ..."
-	$(CC) -g $(LIBCLOUDRMI_INC) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/client.c src/protocol.c src/server.c src/proxy.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_PROXY) -D PROXY_SUPPORT -D ENABLE_LINUX_FEATURES
+	$(CC) -g $(LIBCLOUDRMI_INC) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/client.c src/protocol.c src/server.c src/proxy.c src/capabilities.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_PROXY) -D PROXY_SUPPORT -D ENABLE_LINUX_FEATURES
 
 server_install:
 	@echo "Installing rmi-server ..."
