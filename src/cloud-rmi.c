@@ -8,6 +8,7 @@
 #include <ctype.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #include "cloud-rmi.h"
 #include "config.h"
 
@@ -238,68 +239,170 @@ void handle_error(const char *message) {
 
 int stream_write(int sock, char *format, ...)
 {
-    char buf[BUF_SZ + 1];
-    int bytes;
+    char stack_buf[BUF_SZ + 1];
+    char *buf = stack_buf;
+    size_t buf_cap = BUF_SZ;
+    size_t to_write;
+    size_t written = 0;
     va_list argptr;
 
     va_start(argptr, format);
-    int ret = vsnprintf(buf, BUF_SZ, format, argptr);
+    int ret = vsnprintf(buf, buf_cap, format, argptr);
     va_end(argptr);
 
-    if (ret < 0 || ret >= BUF_SZ) {
+    if (ret < 0) {
         handle_error("stream_write() -- vsnprintf() failed or output truncated");
         return -1;
     }
 
-    bytes = write(sock, buf, strlen(buf));
+    if ((size_t)ret >= buf_cap) {
+        size_t needed;
 
-    if (bytes < 0) {
-        handle_error("stream_write() -- ERROR writing to socket");
-        return -1;
+        if (__builtin_add_overflow((size_t)ret, 1, &needed)) {
+            handle_error("stream_write() -- vsnprintf() failed or output truncated");
+            return -1;
+        }
+
+        buf = malloc(needed);
+        if (buf == NULL) {
+            handle_error("stream_write() -- vsnprintf() failed or output truncated");
+            return -1;
+        }
+
+        buf_cap = needed;
+
+        va_start(argptr, format);
+        ret = vsnprintf(buf, buf_cap, format, argptr);
+        va_end(argptr);
+
+        if (ret < 0 || (size_t)ret >= buf_cap) {
+            free(buf);
+            handle_error("stream_write() -- vsnprintf() failed or output truncated");
+            return -1;
+        }
     }
-    
+
+    to_write = (size_t)ret;
+
+    while (written < to_write) {
+        ssize_t bytes;
+
+        do {
+            bytes = write(sock, buf + written, to_write - written);
+        } while (bytes < 0 && errno == EINTR);
+
+        if (bytes < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                continue;
+            handle_error("stream_write() -- ERROR writing to socket");
+            return -1;
+        }
+
+        if (bytes == 0) {
+            handle_error("stream_write() -- ERROR writing to socket");
+            return -1;
+        }
+
+        written += (size_t)bytes;
+    }
+
     if (var_debug)
         printf("OUT: |%s|\n", buf);
 
-    return bytes;
+    if (buf != stack_buf)
+        free(buf);
+
+    return (int)written;
 }
 
 int stream_writeln(int sock, char *format, ...)
 {
-    char buf[(BUF_SZ + 1)];
-    int bytes_written;
+    char stack_buf[(BUF_SZ + 1)];
+    char *buf = stack_buf;
+    size_t buf_cap = BUF_SZ;
+    size_t to_write;
+    size_t written = 0;
 
     va_list argptr;
     va_start(argptr, format);
 
-    int bytes = vsnprintf(buf, BUF_SZ - 1, format, argptr);
-    if (bytes < 0 || bytes >= BUF_SZ - 1) {
+    int bytes = vsnprintf(buf, buf_cap, format, argptr);
+    va_end(argptr);
+
+    if (bytes < 0) {
         handle_error("stream_writeln() -- vsnprintf() failed");
-        va_end(argptr);
         return -1;
     }
-    va_end(argptr);
+
+    if ((size_t)bytes >= buf_cap - 1) {
+        size_t needed;
+
+        if (__builtin_add_overflow((size_t)bytes, 2, &needed)) {
+            handle_error("stream_writeln() -- vsnprintf() failed");
+            return -1;
+        }
+
+        buf = malloc(needed);
+        if (buf == NULL) {
+            handle_error("stream_writeln() -- vsnprintf() failed");
+            return -1;
+        }
+
+        buf_cap = needed;
+
+        va_start(argptr, format);
+        bytes = vsnprintf(buf, buf_cap, format, argptr);
+        va_end(argptr);
+
+        if (bytes < 0 || (size_t)bytes >= buf_cap - 1) {
+            free(buf);
+            handle_error("stream_writeln() -- vsnprintf() failed");
+            return -1;
+        }
+    }
 
     buf[bytes] = '\n';   // append newline
     buf[bytes + 1] = '\0'; // null-terminate
 
-    bytes_written = write(sock, buf, strlen(buf));
+    to_write = (size_t)(bytes + 1);
 
-    if (bytes_written < 0) {
-        handle_error("stream_writeln() -- ERROR writing to socket");
-        return -1;
+    while (written < to_write) {
+        ssize_t just_written;
+
+        do {
+            just_written = write(sock, buf + written, to_write - written);
+        } while (just_written < 0 && errno == EINTR);
+
+        if (just_written < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                continue;
+            handle_error("stream_writeln() -- ERROR writing to socket");
+            return -1;
+        }
+
+        if (just_written == 0) {
+            handle_error("stream_writeln() -- ERROR writing to socket");
+            return -1;
+        }
+
+        written += (size_t)just_written;
     }
     if (var_debug)
         printf("OUT: |%s|\n", buf);
 
-    return bytes_written;
+    if (buf != stack_buf)
+        free(buf);
+
+    return (int)written;
 }
 
 int stream_read(int sock, char* buf, int buf_size)
 {
     int bytes;
 
-    bytes = read(sock, buf, buf_size - 1);
+    do {
+        bytes = read(sock, buf, buf_size - 1);
+    } while (bytes < 0 && errno == EINTR);
 
     if (bytes < 0) {
         handle_error("stream_read() -- ERROR reading from socket");
@@ -321,7 +424,14 @@ int stream_readln(int sock, char* line, int max_size)
 
     memset(line, 0, max_size);
 
-    while((bytes = read(sock, &chr_buf, 1)) > 0)  {
+    do {
+        do {
+            bytes = read(sock, &chr_buf, 1);
+        } while (bytes < 0 && errno == EINTR);
+
+        if (bytes <= 0)
+            break;
+
         if (chr_buf == '\n' || chr_buf == '\r') {
             if (size) break;
             continue;
@@ -330,13 +440,13 @@ int stream_readln(int sock, char* line, int max_size)
         if (size < max_size - 1) {
             line[size++] = chr_buf;
         }
-    }
+    } while (bytes > 0);
 
-    if (bytes < 0) {
+    if (bytes < 0 && errno != EINTR) {
         handle_error("stream_readln() -- ERROR reading from socket");
         return -1;
     }
-    
+
     if (var_debug)
         printf("IN: |%s|\n", line);
 
@@ -352,7 +462,9 @@ int stream_readlns(int sock, char* line, int max_size)
     memset(line, 0, max_size);
 
     do {
-        bytes = read(sock, &chr_buf, 1);
+        do {
+            bytes = read(sock, &chr_buf, 1);
+        } while (bytes < 0 && errno == EINTR);
 
         if (bytes < 0) {
             handle_error("stream_readlns() -- ERROR reading from socket");

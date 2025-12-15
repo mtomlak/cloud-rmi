@@ -58,6 +58,43 @@ static int append_output(char **buf, size_t *cap, size_t *len, const char *chunk
    return 1;
 }
 
+static int base64_encoded_length(size_t input_len, size_t *out_len)
+{
+   size_t rounded = 0;
+
+   if (out_len == NULL)
+      return 0;
+
+   if (input_len == 0) {
+      *out_len = BUF_SZ + 1;
+      return 1;
+   }
+
+   if (__builtin_add_overflow(input_len, (size_t)2, &rounded))
+      return 0;
+
+   rounded /= 3;
+
+   if (__builtin_mul_overflow(rounded, (size_t)4, &rounded))
+      return 0;
+
+   if (__builtin_add_overflow(rounded, (size_t)1, out_len))
+      return 0;
+
+   return 1;
+}
+
+static void trim_trailing_newlines(char *buf, size_t *len)
+{
+   if (buf == NULL || len == NULL)
+      return;
+
+   while (*len > 0 && (buf[*len - 1] == '\n' || buf[*len - 1] == '\r')) {
+      buf[*len - 1] = '\0';
+      (*len)--;
+   }
+}
+
 static int stream_child_io(
    int stdout_fd,
    int stdin_fd,
@@ -202,6 +239,11 @@ int handle_shell_call(
    char *response_output = NULL;
    int success = 0;
 
+   if (payload == NULL && payload_len > 0) {
+      stream_writeln(state->sock, "500 Error preparing payload buffer");
+      return 0;
+   }
+
    if (payload == NULL) {
       decoded_arg = malloc(sizeof(char) * (BUF_SZ + 1));
       if (decoded_arg == NULL) {
@@ -298,6 +340,8 @@ int handle_shell_call(
    if (output == NULL)
       goto cleanup;
 
+   trim_trailing_newlines(output, &output_len);
+
    if (strncmp(output, "Error", 5) == 0) {
       stream_writeln(state->sock, "500 Exited with error message: %s", output);
 
@@ -305,7 +349,13 @@ int handle_shell_call(
       stream_writeln(state->sock, "500 Error: %s (%d)", output, exit_code);
 
    } else {
-      size_t encoded_len = output_len ? (((output_len + 2) / 3) * 4) + 1 : (BUF_SZ + 1);
+      size_t encoded_len;
+
+      if (!base64_encoded_length(output_len, &encoded_len)) {
+         stream_writeln(state->sock, "500 Error preparing response buffer");
+         goto cleanup;
+      }
+
       response_output = malloc(encoded_len);
       if (response_output == NULL) {
          stream_writeln(state->sock, "500 Error preparing response buffer");
