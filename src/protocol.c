@@ -116,7 +116,14 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state)
          else {
 #ifdef PROXY_SUPPORT
          if (var_proxy)
-            proxy_pass_call_cmd(event->arg1, event->arg2, event->arg3, state);
+            proxy_pass_call_cmd_ex(
+               event->arg1,
+               event->arg2,
+               event->arg3,
+               event->payload,
+               event->payload_len,
+               event->encoding,
+               state);
          else
 #endif
          handle_call_cmd(

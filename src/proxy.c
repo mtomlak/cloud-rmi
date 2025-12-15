@@ -36,6 +36,21 @@ struct proxy_iface_entry *proxy_iface_map;
 // refered from inside
 int proxy_get_spare_conn_count(int proxy_id);
 
+static int proxy_write_all(int fd, const uint8_t *buf, size_t len)
+{
+   size_t total = 0;
+
+   while (total < len) {
+      ssize_t written = write(fd, buf + total, len - total);
+      if (written <= 0)
+         return 0;
+
+      total += (size_t)written;
+   }
+
+   return 1;
+}
+
 
 //
 // Proxy list management
@@ -398,28 +413,105 @@ int proxy_pass_raw_cmd(int proxy_num, struct conn_state *client_conn, char *cmd)
    return ret;
 }
 
-int proxy_pass_call_cmd(char *iface, char *cmd, char *arg, struct conn_state *client_conn)
+int proxy_pass_call_cmd_ex(
+   const char *iface,
+   const char *cmd,
+   const char *arg,
+   const uint8_t *payload,
+   size_t payload_len,
+   const char *encoding,
+   struct conn_state *client_conn)
 {
    int ret = 1;
    struct proxy_iface_entry *iface_entry;
-   char *raw_cmd = malloc(sizeof(char) * (BUF_SZ + 1));
+   struct proxy_conn *conn;
+   char *response = malloc(sizeof(char) * (BUF_SZ + 1));
+   char *message = malloc(sizeof(char) * (BUF_SZ + 1));
 
-   iface_entry = proxy_get_iface_entry(iface);
-
-   if (iface_entry != NULL) {
-      if (var_debug)
-         printf("Proxy: Passing CALL command to proxy #%i\n", iface_entry->proxy_id);
-
-      bzero(raw_cmd, BUF_SZ);
-      sprintf(raw_cmd, "CALL %s %s %s", iface, cmd, arg);
-      ret = proxy_pass_raw_cmd(iface_entry->proxy_id, client_conn, raw_cmd);
-      free(raw_cmd);
-
-   } else {
-      stream_writeln(client_conn->sock, "400 Unsupported interface: %s", iface);
+   if (response == NULL || message == NULL) {
+      free(response);
+      free(message);
+      return 0;
    }
 
+   iface_entry = proxy_get_iface_entry((char *)iface);
+
+   if (iface_entry == NULL) {
+      stream_writeln(client_conn->sock, "400 Unsupported interface: %s", iface);
+      free(response);
+      free(message);
+      return ret;
+   }
+
+   if (var_debug)
+      printf("Proxy: Passing CALL command to proxy #%i\n", iface_entry->proxy_id);
+
+   conn = proxy_get_free_conn(iface_entry->proxy_id);
+   proxy_set_conn_busy(conn);
+
+   bzero(response, BUF_SZ);
+   bzero(message, BUF_SZ);
+
+   if (payload != NULL) {
+      const char *enc_value = (encoding != NULL && encoding[0] != '\0') ? encoding : "NONE";
+
+      if (stream_writeln(conn->sock, "CALL %s %s", iface, cmd) < 0) {
+         ret = 0;
+         goto cleanup;
+      }
+
+      if (stream_writeln(conn->sock, "PAYLOAD %s %zu", enc_value, payload_len) < 0) {
+         ret = 0;
+         goto cleanup;
+      }
+
+      if (payload_len > 0 && !proxy_write_all(conn->sock, payload, payload_len)) {
+         ret = 0;
+         goto cleanup;
+      }
+   } else {
+      if (stream_writeln(conn->sock, "CALL %s %s %s", iface, cmd, arg) < 0) {
+         ret = 0;
+         goto cleanup;
+      }
+   }
+
+   if (stream_readln(conn->sock, response, BUF_SZ) < 0) {
+      ret = 0;
+      goto cleanup;
+   }
+
+   int status_code = 0;
+   if (!client_parse_status_code(response, &status_code, message)) {
+      ret = 0;
+      goto cleanup;
+   }
+
+   if (response[strlen(response) - 1] == ':') {
+      if (stream_readlns(conn->sock, response, BUF_SZ) < 0) {
+         ret = 0;
+         goto cleanup;
+      }
+
+      size_t remaining = BUF_SZ - strlen(message) - 1;
+      strncat(message, "\n", remaining);
+      remaining = BUF_SZ - strlen(message) - 1;
+      strncat(message, response, remaining);
+   }
+
+   stream_writeln(client_conn->sock, "%i %s", status_code, message);
+
+cleanup:
+   proxy_set_conn_free(conn);
+   free(response);
+   free(message);
+
    return ret;
+}
+
+int proxy_pass_call_cmd(char *iface, char *cmd, char *arg, struct conn_state *client_conn)
+{
+   return proxy_pass_call_cmd_ex(iface, cmd, arg, NULL, 0, NULL, client_conn);
 }
 
 void proxy_print_ifaces(struct conn_state *state)

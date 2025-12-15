@@ -46,4 +46,12 @@ extern struct proxy_iface_entry *proxy_iface_map;
 int proxy_start(char *host_addresses);
 void proxy_send_stats(int sock);
 int proxy_pass_call_cmd(char *iface, char *cmd, char *arg, struct conn_state *state);
+int proxy_pass_call_cmd_ex(
+   const char *iface,
+   const char *cmd,
+   const char *arg,
+   const uint8_t *payload,
+   size_t payload_len,
+   const char *encoding,
+   struct conn_state *state);
 void proxy_print_ifaces(struct conn_state *state);
