@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <stdint.h>
 #include "cloud-rmi.h"
 
 /**
@@ -201,7 +202,7 @@ int client_raw_cmd(int sock, char *command, char *response_payload)
  * 
  * @return  Server status code
  */
-int client_call_remote_method_raw(int sock, char *iface, char *method, char *enc_args, char *response_payload) 
+int client_call_remote_method_raw(int sock, char *iface, char *method, char *enc_args, char *response_payload)
 {
    int status_code;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
@@ -215,6 +216,43 @@ int client_call_remote_method_raw(int sock, char *iface, char *method, char *enc
       status_code = 505;
    }
 
+   free(response);
+   return status_code;
+}
+
+int client_call_remote_method_payload(
+   int sock,
+   char *iface,
+   char *method,
+   const char *encoding,
+   const uint8_t *payload,
+   size_t payload_len,
+   char *response_payload)
+{
+   int status_code = 0;
+   char *response = malloc(sizeof(char) * (BUF_SZ + 1));
+   const char *encoding_value = encoding ? encoding : "BLOB";
+
+   bzero(response, BUF_SZ);
+
+   if (stream_writeln(sock, "CALL %s %s", iface, method) < 0)
+      goto done;
+
+   if (stream_writeln(sock, "PAYLOAD %s %zu", encoding_value, payload_len) < 0)
+      goto done;
+
+   if (payload_len > 0 && stream_write(sock, (char *)payload, (int)payload_len) < 0)
+      goto done;
+
+   if (stream_readln(sock, response, BUF_SZ) < 0)
+      goto done;
+
+   if (!client_parse_status_code(response, &status_code, response_payload)) {
+      printf("Error: Cannot parse command response: %s\n", response);
+      status_code = 505;
+   }
+
+done:
    free(response);
    return status_code;
 }

@@ -9,6 +9,7 @@ typedef enum {
     RMI_EVENT_NONE = 0,
     RMI_EVENT_AUTH,
     RMI_EVENT_CALL,
+    RMI_EVENT_PAYLOAD,
     RMI_EVENT_HELP,
     RMI_EVENT_IFACES,
     RMI_EVENT_RELOAD,
@@ -22,6 +23,14 @@ typedef enum {
     RMI_EVENT_SERVER,
     RMI_EVENT_UNKNOWN
 } rmi_event_type_t;
+
+typedef enum {
+    RMI_PROTOCOL_IDLE = 0,
+    RMI_PROTOCOL_CALL_PENDING_PAYLOAD,
+    RMI_PROTOCOL_READING_PAYLOAD,
+    RMI_PROTOCOL_EXECUTE_CALL,
+    RMI_PROTOCOL_SEND_RESPONSE
+} rmi_protocol_state_t;
 
 typedef enum {
     RMI_ENCODING_NONE = 0,
@@ -42,6 +51,9 @@ typedef struct {
     char arg1[RMI_BUF_SZ + 1];
     char arg2[RMI_BUF_SZ + 1];
     char arg3[RMI_BUF_SZ + 1];
+    char encoding[RMI_BUF_SZ + 1];
+    const uint8_t *payload;
+    size_t payload_len;
 } rmi_event_t;
 
 #endif /* CLOUDRMI_TYPES_H */

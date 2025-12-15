@@ -107,7 +107,14 @@ void child_exit_self(void *stack, int stack_size);
 // protocol.c
 void handle_connection(int sock);
 // handle_call.c
-int handle_call_cmd(char *iface, char *cmd, char *arg, struct conn_state *state);
+int handle_call_cmd(
+   char *iface,
+   char *cmd,
+   char *arg,
+   const uint8_t *payload,
+   size_t payload_len,
+   const char *encoding,
+   struct conn_state *state);
 
 // proxy.c
 #ifdef PROXY_SUPPORT
