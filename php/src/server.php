@@ -1,4 +1,7 @@
 <?php
+// Protocol-consumer harness for CloudRMI events.
+// Not a production server; validates CloudRMI parsing and event handling.
+// Consumes CALL events and responds with status lines only.
 if (!extension_loaded('cloudrmi')) {
     fwrite(STDERR, "cloudrmi extension is required\n");
     exit(1);
@@ -26,16 +29,24 @@ while ($client = @stream_socket_accept($server, -1)) {
         continue;
     }
 
-    while (!feof($client)) {
+    $fatal = false;
+    $errorSent = false;
+    $okPayload = base64_encode('OK');
+
+    while (true) {
         $data = fread($client, 4096);
         if ($data === '' || $data === false) {
             break;
         }
 
         $feedResult = cloudrmi_protocol_feed($ctx, $data);
-        if ($feedResult['status'] !== RMI_OK) {
-            $message = $feedResult['err_message'] ?? 'feed error';
-            fwrite($client, "400 {$message}\n");
+        if ($feedResult['status'] !== RMI_OK || $feedResult['err_code'] !== RMI_ERROR_NONE) {
+            if (!$errorSent) {
+                $message = $feedResult['err_message'] ?? 'feed error';
+                fwrite($client, "400 {$message}\n");
+                $errorSent = true;
+            }
+            $fatal = true;
             break;
         }
 
@@ -45,36 +56,65 @@ while ($client = @stream_socket_accept($server, -1)) {
                 break;
             }
 
-            if ($eventResult['status'] !== RMI_OK || $eventResult['event'] === null) {
-                $message = $eventResult['err_message'] ?? 'parse error';
-                fwrite($client, "400 {$message}\n");
+            if ($eventResult['status'] !== RMI_OK || $eventResult['event'] === null || $eventResult['err_code'] !== RMI_ERROR_NONE) {
+                if (!$errorSent) {
+                    $message = $eventResult['err_message'] ?? 'parse error';
+                    fwrite($client, "400 {$message}\n");
+                    $errorSent = true;
+                }
+                $fatal = true;
                 break 2;
             }
 
             $event = $eventResult['event'];
             if ((int)$event['type'] !== RMI_EVENT_CALL) {
                 fwrite($client, "400 unexpected command\n");
+                $fatal = true;
+                $errorSent = true;
                 break 2;
             }
 
-            if ((int)$event['argc'] >= 4) {
-                $line = sprintf(
-                    "CALL %s %s %s\n",
-                    $event['arg1'],
-                    $event['arg2'],
-                    $event['arg3']
-                );
-                fwrite($client, $line);
+            $isLegacyCall = ((int)$event['argc'] >= 4);
+            if ($isLegacyCall) {
+                if ((int)$event['payload_len'] !== 0 || $event['payload'] !== '') {
+                    fwrite($client, "400 invalid CALL payload mix\n");
+                    $fatal = true;
+                    $errorSent = true;
+                    break 2;
+                }
+
+                $decodedArg = base64_decode($event['arg3'], true);
+                if ($decodedArg === false) {
+                    fwrite($client, "400 invalid base64 args\n");
+                    $fatal = true;
+                    $errorSent = true;
+                    break 2;
+                }
             } else {
-                $encoding = $event['encoding'] !== '' ? $event['encoding'] : 'NONE';
-                fwrite($client, sprintf("CALL %s %s\n", $event['arg1'], $event['arg2']));
-                fwrite($client, sprintf("PAYLOAD %s %d\n", $encoding, $event['payload_len']));
-                if ($event['payload_len'] > 0) {
-                    fwrite($client, $event['payload']);
+                $payload = (string)$event['payload'];
+                if ((int)$event['payload_len'] !== strlen($payload)) {
+                    fwrite($client, "400 payload length mismatch\n");
+                    $fatal = true;
+                    $errorSent = true;
+                    break 2;
+                }
+
+                if ((string)$event['arg3'] !== '') {
+                    fwrite($client, "400 invalid CALL arguments\n");
+                    $fatal = true;
+                    $errorSent = true;
+                    break 2;
                 }
             }
+
+            fwrite($client, "200 {$okPayload}\n");
+        }
+
+        if ($fatal) {
+            break;
         }
     }
 
+    cloudrmi_protocol_destroy($ctx);
     fclose($client);
 }
