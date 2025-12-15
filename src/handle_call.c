@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <stdint.h>
 #include "cloud-rmi.h"
 #include "config.h"
 
@@ -67,28 +68,57 @@ int handle_shell_call(char *file, char *method, char *arg, struct conn_state *st
 
    free(payload);
    free(output);
+
+   return 1;
 }
 
 /**
  * Handles RMI 'call' command.
  * 
  */
-int handle_call_cmd(char *iface, char *method, char *arg, struct conn_state *state)
+int handle_call_cmd(
+   char *iface,
+   char *method,
+   char *arg,
+   const uint8_t *payload,
+   size_t payload_len,
+   const char *encoding,
+   struct conn_state *state)
 {
+   (void)encoding;
    struct server_iface_entry *iface_entry;
+   char *encoded_arg = NULL;
+   const char *effective_arg = arg;
 
    // Authentication check
    if (!state->is_authenticated) {
       stream_writeln(state->sock, "401 Unauthorized");     // todo: "... as: xyz"
       return 0;
    }
+
+   if (payload != NULL) {
+      size_t encoded_len = ((payload_len + 2) / 3) * 4 + 1;
+      encoded_arg = malloc(encoded_len + 1);
+      if (encoded_arg == NULL) {
+         stream_writeln(state->sock, "500 Error encoding call arguments");
+         return 0;
+      }
+      bzero(encoded_arg, encoded_len + 1);
+      to64frombits((unsigned char *)encoded_arg, payload, (int)payload_len);
+      effective_arg = encoded_arg;
+   }
    iface_entry = server_get_iface_entry(iface);
 
    // Check whether it's local script
-   if (iface_entry != NULL) {   
-      return handle_shell_call(iface_entry->file, method, arg, state);   
+   if (iface_entry != NULL) {
+      int result = handle_shell_call(iface_entry->file, method, (char *)effective_arg, state);
+      free(encoded_arg);
+      return result;
 
    } else {
       stream_writeln(state->sock, "400 Unsupported interface: %s", iface);
    }
+
+   free(encoded_arg);
+   return 0;
 }

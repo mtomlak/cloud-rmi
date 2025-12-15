@@ -108,16 +108,43 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state)
       break;
 
    case RMI_EVENT_CALL:
-      if (event->argc < 3)  // we now accept also call without arguments
-         stream_writeln(state->sock, "400 Bad Request Arguments");
+      if (state->is_authenticated) {
+         int has_payload = event->payload != NULL;
+         if (!has_payload && event->argc < 3)
+            stream_writeln(state->sock, "400 Bad Request Arguments");
 
-      else if (state->is_authenticated) {
+         else {
+            char *forward_arg = NULL;
+
+            if (has_payload) {
+               size_t encoded_len = ((event->payload_len + 2) / 3) * 4 + 1;
+               forward_arg = malloc(encoded_len + 1);
+               if (forward_arg != NULL)
+                  bzero(forward_arg, encoded_len + 1);
+               if (forward_arg == NULL) {
+                  stream_writeln(state->sock, "500 Error encoding call arguments");
+                  free(forward_arg);
+                  break;
+               }
+
+               to64frombits((unsigned char *)forward_arg, event->payload, (int)event->payload_len);
+            }
 #ifdef PROXY_SUPPORT
          if (var_proxy)
-            proxy_pass_call_cmd(event->arg1, event->arg2, event->arg3, state);
+            proxy_pass_call_cmd(event->arg1, event->arg2, forward_arg ? forward_arg : event->arg3, state);
          else
 #endif
-         handle_call_cmd(event->arg1, event->arg2, event->arg3, state);
+         handle_call_cmd(
+            event->arg1,
+            event->arg2,
+            forward_arg ? forward_arg : event->arg3,
+            event->payload,
+            event->payload_len,
+            event->encoding,
+            state);
+
+         free(forward_arg);
+         }
       } else
          stream_writeln(state->sock, "401 Unauthorized");
       break;
