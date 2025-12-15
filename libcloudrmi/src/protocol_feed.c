@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -27,8 +28,11 @@ static int ensure_capacity(rmi_protocol_ctx_t *ctx, size_t needed)
         return 1;
 
     size_t new_cap = ctx->cap ? ctx->cap : (size_t)RMI_BUF_SZ;
-    while (new_cap < needed)
+    while (new_cap < needed) {
+        if (new_cap > (SIZE_MAX / 2))
+            return 0;
         new_cap *= 2;
+    }
 
     uint8_t *new_buf = realloc(ctx->buffer, new_cap);
     if (new_buf == NULL)
@@ -45,8 +49,11 @@ static int ensure_payload_capacity(rmi_protocol_ctx_t *ctx, size_t needed)
         return 1;
 
     size_t new_cap = ctx->payload_cap ? ctx->payload_cap : (size_t)RMI_BUF_SZ;
-    while (new_cap < needed)
+    while (new_cap < needed) {
+        if (new_cap > (SIZE_MAX / 2))
+            return 0;
         new_cap *= 2;
+    }
 
     uint8_t *new_buf = realloc(ctx->payload_buf, new_cap);
     if (new_buf == NULL)
@@ -141,7 +148,16 @@ rmi_status_t rmi_protocol_feed(
     if (len == 0)
         return RMI_OK;
 
-    size_t needed = ctx->len + len;
+    size_t needed;
+
+    if (__builtin_add_overflow(ctx->len, len, &needed)) {
+        if (err != NULL) {
+            err->code = RMI_ERROR_BAD_REQUEST;
+            err->message = "Buffer overflow";
+        }
+        rmi_protocol_reset(ctx);
+        return RMI_E_OVERFLOW;
+    }
 
     if (needed > RMI_MAX_BUFFER) {
         if (err != NULL) {
@@ -207,7 +223,17 @@ rmi_status_t rmi_protocol_next_event(
             if (ctx->len < ctx->expected_payload_len)
                 return RMI_E_AGAIN;
 
-            if (!ensure_payload_capacity(ctx, ctx->expected_payload_len + 1)) {
+            size_t required_payload;
+            if (__builtin_add_overflow(ctx->expected_payload_len, (size_t)1, &required_payload)) {
+                if (err != NULL) {
+                    err->code = RMI_ERROR_BAD_REQUEST;
+                    err->message = "Buffer allocation failed";
+                }
+                rmi_protocol_reset(ctx);
+                return RMI_E_ERR;
+            }
+
+            if (!ensure_payload_capacity(ctx, required_payload)) {
                 if (err != NULL) {
                     err->code = RMI_ERROR_BAD_REQUEST;
                     err->message = "Buffer allocation failed";
@@ -315,13 +341,22 @@ rmi_status_t rmi_protocol_next_event(
 
             char *endptr = NULL;
             unsigned long long payload_len = strtoull(parsed_event.arg2, &endptr, 10);
-            if (endptr == parsed_event.arg2 || payload_len > RMI_MAX_BUFFER) {
+            if (endptr == parsed_event.arg2 || *endptr != '\0' || payload_len > RMI_MAX_BUFFER) {
                 if (err != NULL) {
                     err->code = RMI_ERROR_BAD_REQUEST;
                     err->message = "Invalid payload length";
                 }
                 rmi_protocol_reset(ctx);
                 return payload_len > RMI_MAX_BUFFER ? RMI_E_OVERFLOW : RMI_E_ERR;
+            }
+
+            if (payload_len > SIZE_MAX) {
+                if (err != NULL) {
+                    err->code = RMI_ERROR_BAD_REQUEST;
+                    err->message = "Invalid payload length";
+                }
+                rmi_protocol_reset(ctx);
+                return RMI_E_ERR;
             }
 
             ctx->expected_payload_len = (size_t)payload_len;
