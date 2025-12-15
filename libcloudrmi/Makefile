@@ -1,6 +1,7 @@
 CC ?= gcc
 AR ?= ar
-CFLAGS ?= -g -Wall -Iinclude
+CFLAGS += -Iinclude
+CFLAGS ?= -g -Wall
 
 LIBNAME = libcloudrmi.a
 LIB_OBJS = src/payload.o src/protocol_line.o src/protocol_feed.o
