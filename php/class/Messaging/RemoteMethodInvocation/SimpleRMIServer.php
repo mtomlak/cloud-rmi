@@ -36,25 +36,38 @@ class SimpleRMIServer
 	protected $throttleTimeout = false;
 	protected $throttleDuration = 0.01;
 	protected $connStarted = null;
-	protected $bindings;
-	protected $startedAt;
-	protected $proc;
-	protected $serverPid;
-	// Protocol-related
+        protected $bindings;
+        protected $startedAt;
+        protected $proc;
+        protected $serverPid;
+        protected $requireAuth = true;
+        // Protocol-related
 	protected $maxPlainStringBytes = 1024;
-	protected $backCompatible = false;
-	//
+        protected $protocolVersion = 1;
+        protected $maxProtocolVersion = 2;
 
-	protected $protocolVersion = 1;
-	protected $supportsPayloadV2 = false;
+        public function __construct()
+        {
+                $this->bindings = array();
 
-	public function __construct()
-	{
-		$this->bindings = array();
+                if (!$this->hasForkSupport())
+                        $this->readTimeout = $this->noForkReadTimeout;
+        }
 
-		if (!$this->hasForkSupport())
-			$this->readTimeout = $this->noForkReadTimeout;
-	}
+        public function setMaxProtocolVersion($version)
+        {
+                $version = (int) $version;
+
+                if ($version < 1)
+                        $version = 1;
+
+                $this->maxProtocolVersion = $version;
+        }
+
+        public function setRequireAuth($requireAuth)
+        {
+                $this->requireAuth = (bool) $requireAuth;
+        }
 
 	public function start()
 	{
@@ -65,18 +78,20 @@ class SimpleRMIServer
 		$this->serverPid = posix_getpid();
 		$this->log($this->contextName . " service ready");
 
-		if ($this->hasForkSupport())
-			$this->proc = new ProcessFork();
+                if ($this->hasForkSupport())
+                        $this->proc = new ProcessFork();
 
-		// main program loop
-		while (!$this->doShutdown) {
-			$this->acceptNewConnections();
+                // main program loop
+                while (!$this->doShutdown) {
+                        $this->acceptNewConnections();
 
-			if (version_compare(PHP_VERSION, '7.1.0', '<') && $this->hasForkSupport())
-				$this->proc->dispatchSignals();
+                        if ($this->hasForkSupport() && $this->proc instanceof ProcessFork) {
+                                if (version_compare(PHP_VERSION, '7.1.0', '<'))
+                                        $this->proc->dispatchSignals();
 
-			$this->proc->collectChildren();
-		}
+                                $this->proc->collectChildren();
+                        }
+                }
 
 		$this->closeServerSocket();
 		$this->doShutdown = false; // in case it will be started again
@@ -99,19 +114,24 @@ class SimpleRMIServer
 
 	public function handleProccessShutdown()
 	{
-		if ($this->proc->isParent() || !$this->hasForkSupport()) {
-			$this->closeServerSocket();
-		}
+                if (($this->proc && $this->proc->isParent()) || !$this->hasForkSupport()) {
+                        $this->closeServerSocket();
+                }
 
 		if (!$this->doShutdown)
 			$this->handleCrash();
 	}
 
-	protected function acceptNewConnections()
-	{
-		if ($conn = @stream_socket_accept($this->serverSocket))
-			$this->handleConnection($conn);
-	}
+        protected function acceptNewConnections()
+        {
+                if ($conn = @stream_socket_accept($this->serverSocket))
+                        $this->handleConnection($conn);
+        }
+
+        protected function getMaxProtocolVersion()
+        {
+                return $this->maxProtocolVersion;
+        }
 
 	protected function handleConnection($socket)
 	{
@@ -133,12 +153,11 @@ class SimpleRMIServer
 
 		stream_set_timeout($socket, $this->readTimeout);
 		stream_set_blocking($socket, true);
-		$this->connWriteLn($socket, "220 " . $this->contextName . " Server Ready");
-		$this->isAuthenticated = false;
-		$this->username = null;
-		$this->protocolVersion = 1;
-		$this->supportsPayloadV2 = false;
-		$this->connStarted = time();
+                $this->connWriteLn($socket, "220 " . $this->contextName . " Server Ready EXT PROTO=" . $this->getMaxProtocolVersion());
+                $this->isAuthenticated = !$this->requireAuth;
+                $this->username = null;
+                $this->protocolVersion = 1;
+                $this->connStarted = time();
 
 		do {
 			$input = $this->connReadLn($socket);
@@ -206,10 +225,9 @@ class SimpleRMIServer
 				break;
 
 			case 'proto':
-				list($version, $caps) = $this->parseProtoCommand($arg);
-				$this->protocolVersion = $version;
-				$this->supportsPayloadV2 = ($version >= 2);
-				$this->connWriteLn($socket, "200 PROTO $version");
+                                list($version, $caps) = $this->parseProtoCommand($arg);
+                                $this->protocolVersion = $version;
+                                $this->connWriteLn($socket, "200 PROTO $version");
 				break;
 
 			case 'help':
@@ -299,10 +317,10 @@ class SimpleRMIServer
 
 	protected function handleCallCommand(&$socket, $arg)
 	{
-		if (!$this->isAuthenticated) {
-			$this->connWriteLn($socket, '401 Unauthorized');
-			return;
-		}
+                if ($this->requireAuth && !$this->isAuthenticated) {
+                        $this->connWriteLn($socket, '401 Unauthorized');
+                        return;
+                }
 
 		list($iface, $method, $params, $payloadMode) = $this->parseCallArguments($socket, $arg);
 
@@ -337,19 +355,19 @@ class SimpleRMIServer
 				$this->port
 				);
 
-			if ($this->supportsPayloadV2 && $payloadMode) {
-				$this->sendPayloadResponse($socket, 500, $ex);
-				return;
-			}
+                        if ($payloadMode && $this->protocolVersion >= 2) {
+                                $this->sendPayloadResponse($socket, 500, $ex);
+                                return;
+                        }
 
-			$this->connWriteLn($socket, "500 " . $this->encodePayload($ex, true));
+                        $this->connWriteLn($socket, "500 " . $this->encodePayload($ex));
 			return;
 		}
 
-		if ($this->supportsPayloadV2 && $payloadMode) {
-			$this->sendPayloadResponse($socket, 200, $result);
-			return;
-		}
+                if ($payloadMode && $this->protocolVersion >= 2) {
+                        $this->sendPayloadResponse($socket, 200, $result);
+                        return;
+                }
 
 		try {
 			$encodedResult = $this->encodePayload($result);
@@ -364,10 +382,10 @@ class SimpleRMIServer
 
 	protected function handleACallCommand(&$socket, $arg)
 	{
-		if (!$this->isAuthenticated) {
-			$this->connWriteLn($socket, '401 Unauthorized');
-			return;
-		}
+                if ($this->requireAuth && !$this->isAuthenticated) {
+                        $this->connWriteLn($socket, '401 Unauthorized');
+                        return;
+                }
 
 		list($iface, $method, $params, $payloadMode) = $this->parseCallArguments($socket, $arg);
 
@@ -469,23 +487,26 @@ class SimpleRMIServer
 	{
 		$version = 1;
 
-		if (!is_null($arg)) {
-			$parts = explode(' ', trim((string) $arg), 2);
-			if (isset($parts[0]) && is_numeric($parts[0]))
-				$version = (int) $parts[0];
-		}
+                if (!is_null($arg)) {
+                        $parts = explode(' ', trim((string) $arg), 2);
+                        if (isset($parts[0]) && is_numeric($parts[0]))
+                                $version = (int) $parts[0];
+                }
 
-		if ($version < 1)
-			$version = 1;
+                if ($version < 1)
+                        $version = 1;
 
-		return [$version, null];
-	}
+                if ($version > $this->getMaxProtocolVersion())
+                        $version = $this->getMaxProtocolVersion();
+
+                return [$version, null];
+        }
 
 	protected function parseCallArguments(&$socket, $arg)
 	{
 		$arg = trim((string) $arg);
 
-		if ($this->supportsPayloadV2 && $this->protocolVersion >= 2) {
+                if ($this->protocolVersion >= 2) {
 			$parts = preg_split('/\s+/', $arg, 4);
 
 			if (count($parts) == 4 && is_numeric($parts[3])) {
@@ -679,21 +700,14 @@ class SimpleRMIServer
 		return trim($buff);
 	}
 
-	protected function encodePayload($payload, $backCompatible = false)
-	{
-		// If payload is simple string, don't serialize
-		if (is_string($payload) && strlen($payload) < $this->maxPlainStringBytes)
-			return base64_encode($payload);
+        protected function encodePayload($payload)
+        {
+                // If payload is simple string, don't serialize
+                if (is_string($payload) && strlen($payload) < $this->maxPlainStringBytes)
+                        return base64_encode($payload);
 
-		elseif ($backCompatible || $this->backCompatible)
-			return 'PHP:' . base64_encode(serialize($payload));
-
-		// Send larger data in one single chunk (since protocol 0.1.1.0)
-		else
-			$data = serialize($payload);
-
-			return 'BLOB:' . strlen($data) . "\n" . $data;
-	}
+                return 'PHP:' . base64_encode(serialize($payload));
+        }
 
 	protected function decodePayload($rawPayload)
 	{

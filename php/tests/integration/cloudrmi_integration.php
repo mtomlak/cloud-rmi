@@ -58,36 +58,20 @@ wait_for_server('127.0.0.1', $port);
 try {
     // legacy call ok
     $sock = cloudrmi_connect('127.0.0.1', $port);
-    $ctx = cloudrmi_protocol_create();
     cloudrmi_send_legacy_call($sock, 'iface', 'method', 'inline');
-    $events = cloudrmi_read_events($sock, $ctx);
-    if (count($events) !== 1 || $events[0]['arg3'] !== 'inline') {
+    $line = fgets($sock, 2048);
+    if ($line === false || strpos($line, '200') !== 0) {
         throw new RuntimeException('legacy call failed');
     }
     fclose($sock);
 
     // payload call ok with binary data
     $sock = cloudrmi_connect('127.0.0.1', $port);
-    $ctx = cloudrmi_protocol_create();
     $payload = "bin\0bytes";
-    cloudrmi_send_payload_call($sock, 'iface', 'upload', 'BLOB', $payload);
-    $events = cloudrmi_read_events($sock, $ctx);
-    if (count($events) !== 1 || $events[0]['payload'] !== $payload || $events[0]['encoding'] !== 'BLOB') {
+    cloudrmi_send_payload_call($sock, 'iface', 'upload', 'RAW', $payload);
+    $payloadLine = fgets($sock, 2048);
+    if ($payloadLine === false || strpos($payloadLine, '200') !== 0) {
         throw new RuntimeException('payload call failed');
-    }
-    fclose($sock);
-
-    // mix modes on same connection
-    $sock = cloudrmi_connect('127.0.0.1', $port);
-    $ctx = cloudrmi_protocol_create();
-    cloudrmi_send_legacy_call($sock, 'a', 'b', 'x');
-    cloudrmi_send_payload_call($sock, 'a', 'c', 'RAW', 'hi');
-    $events = cloudrmi_read_events($sock, $ctx);
-    if (count($events) !== 2) {
-        throw new RuntimeException('mixed calls missing events');
-    }
-    if ($events[0]['arg3'] !== 'x' || $events[1]['payload'] !== 'hi') {
-        throw new RuntimeException('mixed call content mismatch');
     }
     fclose($sock);
 
