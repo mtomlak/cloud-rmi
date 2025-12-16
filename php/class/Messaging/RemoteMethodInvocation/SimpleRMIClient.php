@@ -10,6 +10,10 @@ namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
  */
 class SimpleRMIClient
 {
+	protected const DEFAULT_MAX_LINE = 8192;
+	protected const INLINE_PAYLOAD_OVERHEAD_PERCENT = 35;
+	protected const INLINE_PAYLOAD_HEADROOM = 500;
+
 	protected $port = 8000;
 	protected $host = 'localhost';
 	protected $connection = null;
@@ -19,10 +23,15 @@ class SimpleRMIClient
 	protected $throttleDuration = 0.01;
 	protected $connStarted = null;
 	protected $auth = [];
+	protected $capabilities = [];
+	protected $advertisedMaxProtocol = 1;
+	protected $supportsPayloadCapability = false;
+	protected $supportsAsyncCapability = false;
 
 	protected $payloadThreshold = null;
 	protected $defaultPayloadEncoding = 'RAW';
 	protected $protocolCtx = null;
+	protected $protocolVersion = 1;
 
 	public function __construct($host = 'localhost', $port = 8000, $connTimeout = false, $readTimeout = 600, $throttleTimeout = false)
 	{
@@ -46,12 +55,17 @@ class SimpleRMIClient
 
 		$banner = $this->connReadLn();
 
-		if (($statusCode = $this->parseStatusCode($banner)) !== false) {
-			if ($statusCode != 220) 
-				throw new RemoteMethodInvocationException("Error connecting to RMI server: $banner");	
-		} else
-			throw new RemoteMethodInvocationException("Cannot connect to RMI server: " 
+		if (!is_string($banner) || $banner === '')
+			throw new RemoteMethodInvocationException("Cannot connect to RMI server: "
 				. $this->host . ':' . $this->port);
+
+		if (($statusCode = $this->parseStatusCode($banner)) === false || $statusCode != 220)
+			throw new RemoteMethodInvocationException("Error connecting to RMI server: $banner");
+
+		$this->parseBanner($banner);
+		$this->negotiateProtocol();
+		$this->discoverCapabilities($banner);
+		$this->updateCapabilityFlags();
 
 		return $this->getConnection();
 	}
@@ -91,48 +105,63 @@ class SimpleRMIClient
 			$interface = "\\$interface";
 
 		$options = $this->normalizeCallOptions($async);
+		$command = ($options['async'] && $this->supportsAsyncCapability)
+			? 'ACALL'
+			: 'CALL';
 
-		if ($this->shouldUsePayloadChannel($parameters, $options)) {
-			$result = $this->sendPayloadCall($interface, $methodName, $parameters, $options);
+		$request = $this->prepareCallRequest($command, $interface, $methodName, $parameters, $options);
+
+		if ($request['use_payload']) {
+			if ($this->sendPayloadCall($request) === false)
+				return false;
 		} else {
-			$command = ($options['async'] ? 'ACALL' : 'CALL') . " $interface $methodName " . $this->encodePayload($parameters);
-			$result = $this->rawCmd($command);
+			if ($this->connWriteLn($request['line']) === false)
+				return false;
 		}
 
-		// try to reconnect
-		//if (!$result || $this->parseStatusCode($result) == 408) {
-		//	$this->reconnect();
-		//	$result = $this->rawCmd($command);
-		//}
+		$result = $this->readResponse();
 
-		// inspect the response and forward exceptions or errors
-		if (in_array($code = $this->parseStatusCode($result), [200, 500])) {
-			$msgParts = explode(' ', $result, 2);
-			$payload = end($msgParts);
+		if (!is_array($result) || !array_key_exists('line', $result))
+			throw new RemoteMethodInvocationException('Invalid response from server');
 
+		$code = $result['code'];
+
+		if (in_array($code, [200, 500])) {
 			try {
-				$data = $this->decodePayload($payload);
-
+				if (!empty($result['is_payload'])) {
+					$data = $this->decodePayloadResponse($result['encoding'], (string) $result['payload']);
+				} else {
+					$msgParts = explode(' ', $result['line'], 2);
+					$payload = end($msgParts);
+					$data = $this->decodePayload($payload);
+				}
 			} catch (RemoteErrorException $e) {
 				throw $e;
 
 			} catch (\Exception $e) {
-				throw new RemoteMethodInvocationException("Remote error: {$e->getMessage()}: $payload");		// most likely it's plaintext error
+				$payloadString = isset($payload) ? $payload : ($result['payload'] ?? '');
+				throw new RemoteMethodInvocationException("Remote error: {$e->getMessage()}: {$payloadString}");
 			}
 
-			if ($code == 500)
-				if ($data instanceof RemoteException || $data instanceof RemoteErrorException) {
+			if ($code == 500) {
+				if ($data instanceof RemoteException || $data instanceof RemoteErrorException)
 					throw $data;
 
-				} else
-					throw new RemoteMethodInvocationException("Unrecognized exception type thrown on server", $data);
+				throw new RemoteMethodInvocationException("Unrecognized exception type thrown on server", $data);
+			}
 
 			return $data;	// we know data consists of status code and a message
 		}
 
-		if (!$result) $result = '500 Internal RMI Server Error';
+		if (empty($result['line']))
+			$result['line'] = '500 Internal RMI Server Error';
 
-		throw new RemoteMethodInvocationException("Failed to call remote method: $result");
+		throw new RemoteMethodInvocationException("Failed to call remote method: " . $result['line']);
+	}
+
+	public function call($interface, $methodName, $parameters, $async = false)
+	{
+		return $this->callRemoteMethod($interface, $methodName, $parameters, $async);
 	}
 
 	public function setConnection(ConnectionInterface $connection)
@@ -177,7 +206,7 @@ class SimpleRMIClient
 	protected function normalizeCallOptions($async)
 	{
 		$options = [
-			'async' => (bool) $async,
+			'async' => false,
 			'payload' => false,
 			'encoding' => null,
 			'require_payload' => false,
@@ -195,41 +224,115 @@ class SimpleRMIClient
 
 			if (isset($async['require_payload']))
 				$options['require_payload'] = (bool) $async['require_payload'];
+		} else {
+			$options['async'] = (bool) $async;
 		}
 
 		return $options;
 	}
 
-	protected function shouldUsePayloadChannel($parameters, array $options)
+	protected function prepareCallRequest($command, $interface, $methodName, $parameters, array $options)
+	{
+		$encoding = ($options['encoding']) ? $options['encoding'] : $this->defaultPayloadEncoding;
+		$payloadBytes = $this->normalizePayloadBytes($parameters, $encoding);
+		$payloadLength = strlen($payloadBytes);
+		$preferPayload = $this->shouldUsePayloadChannel($parameters, $options, $payloadLength);
+
+		if (!empty($options['require_payload']))
+			$preferPayload = true;
+
+		$canUsePayload = $this->canUsePayloadChannel();
+		$inlinePayload = $this->encodePayload($parameters);
+		$inlineLength = strlen("$command $interface $methodName " . $inlinePayload);
+
+		if ($inlineLength >= $this->getMaxLineLength())
+			$preferPayload = true;
+
+		if ($preferPayload && !$canUsePayload) {
+			if (!empty($options['require_payload']))
+				throw new RemoteMethodInvocationException('Payload required but not supported by negotiated protocol version');
+
+			if ($inlineLength >= $this->getMaxLineLength())
+				throw new RemoteMethodInvocationException('Payload required but not supported by negotiated protocol version');
+
+			$preferPayload = false;
+		}
+
+		if ($preferPayload) {
+			$line = "$command $interface $methodName $encoding $payloadLength";
+			$this->validateOutboundPayload($line, null, $payloadBytes, $options);
+
+			return [
+				'use_payload' => true,
+				'line' => $line,
+				'payload' => $payloadBytes,
+				'encoding' => $encoding,
+			];
+		}
+
+		return [
+			'use_payload' => false,
+			'line' => "$command $interface $methodName " . $inlinePayload,
+			'payload' => null,
+			'encoding' => null,
+		];
+	}
+
+	protected function getMaxLineLength()
+	{
+		if (defined('RMI_MAX_LINE'))
+			return (int) RMI_MAX_LINE;
+
+		return self::DEFAULT_MAX_LINE;
+	}
+
+	protected function getInlinePayloadThreshold()
+	{
+		if (!is_null($this->payloadThreshold))
+			return (int) $this->payloadThreshold;
+
+		if (defined('RMI_INLINE_PAYLOAD_THRESHOLD'))
+			return (int) RMI_INLINE_PAYLOAD_THRESHOLD;
+
+		$maxLine = $this->getMaxLineLength();
+		return (int) max(0, $maxLine - floor(($maxLine * self::INLINE_PAYLOAD_OVERHEAD_PERCENT) / 100) - self::INLINE_PAYLOAD_HEADROOM);
+	}
+
+	protected function canUsePayloadChannel()
+	{
+		return ($this->protocolVersion >= 2 && $this->supportsPayloadCapability);
+	}
+
+	protected function shouldUsePayloadChannel($parameters, array $options, $payloadLength = null)
 	{
 		if (!empty($options['payload']))
 			return true;
 
-		if (!is_null($this->payloadThreshold) && is_string($parameters) && strlen($parameters) >= $this->payloadThreshold)
-			return true;
+		$threshold = $this->getInlinePayloadThreshold();
+
+		if (!is_null($threshold)) {
+			if (is_string($parameters) && strlen($parameters) > $threshold)
+				return true;
+
+			if (!is_null($payloadLength) && $payloadLength > $threshold)
+				return true;
+		}
 
 		return false;
 	}
 
-	protected function sendPayloadCall($interface, $methodName, $parameters, array $options)
+	protected function sendPayloadCall(array $request)
 	{
-		$encoding = ($options['encoding']) ? $options['encoding'] : $this->defaultPayloadEncoding;
-		$payload = $this->normalizePayloadBytes($parameters, $encoding);
-		$callLine = ($options['async'] ? 'ACALL' : 'CALL') . " $interface $methodName";
-		$payloadLine = "PAYLOAD $encoding " . strlen($payload);
+		if ($this->protocolVersion < 2 || !$this->supportsPayloadCapability)
+			throw new RemoteMethodInvocationException('Payload required but not supported by negotiated protocol version');
 
-		$this->validateOutboundPayload($callLine, $payloadLine, $payload, $options);
-
-		if ($this->connWriteLn($callLine) === false)
+		if ($this->connWriteLn($request['line']) === false)
 			return false;
 
-		if ($this->connWriteLn($payloadLine) === false)
+		if ($request['payload'] !== '' && $this->connWriteRaw($request['payload']) === false)
 			return false;
 
-		if ($payload !== '' && $this->connWriteRaw($payload) === false)
-			return false;
-
-		return $this->connReadLn();
+		return true;
 	}
 
 	protected function normalizePayloadBytes($parameters, &$encoding)
@@ -253,13 +356,26 @@ class SimpleRMIClient
 		if (!$ctx = $this->getProtocolContext())
 			return;
 
-		if (function_exists('cloudrmi_protocol_reset'))
-			cloudrmi_protocol_reset($ctx);
-
 		if (!function_exists('cloudrmi_protocol_feed') || !function_exists('cloudrmi_protocol_next_event'))
 			return;
 
-		$feed = cloudrmi_protocol_feed($ctx, $callLine . "\n" . $payloadLine . "\n" . $payload);
+		if (function_exists('cloudrmi_protocol_reset'))
+			cloudrmi_protocol_reset($ctx);
+
+		$wire = '';
+
+		if ($this->protocolVersion >= 2)
+			$wire .= "PROTO 2\n";
+
+		$wire .= $callLine . "\n";
+
+		if (!is_null($payloadLine))
+			$wire .= $payloadLine . "\n";
+
+		$wire .= $payload;
+
+		$feed = cloudrmi_protocol_feed($ctx, $wire);
+
 		if (isset($feed['status']) && defined('RMI_E_ERR') && $feed['status'] === RMI_E_ERR) {
 			$message = isset($feed['err_message']) ? $feed['err_message'] : 'Protocol error';
 			throw new RemoteMethodInvocationException($message);
@@ -267,9 +383,9 @@ class SimpleRMIClient
 
 		while (true) {
 			$event = cloudrmi_protocol_next_event($ctx);
-			if (!isset($event['status'])) {
+
+			if (!isset($event['status']))
 				return;
-			}
 
 			if (defined('RMI_E_AGAIN') && $event['status'] === RMI_E_AGAIN) {
 				throw new RemoteMethodInvocationException('Protocol parser expects more payload bytes');
@@ -280,12 +396,8 @@ class SimpleRMIClient
 				throw new RemoteMethodInvocationException($message);
 			}
 
-			if (defined('RMI_OK') && $event['status'] === RMI_OK && isset($event['event']) && $event['event'] !== null) {
-				if (defined('RMI_EVENT_CALL') && (int) $event['event']['type'] !== RMI_EVENT_CALL)
-					throw new RemoteMethodInvocationException('Unexpected protocol event received during validation');
-
+			if (defined('RMI_OK') && $event['status'] === RMI_OK && isset($event['event']) && $event['event'] !== null)
 				break;
-			}
 
 			if (!defined('RMI_E_AGAIN') || $event['status'] !== RMI_E_AGAIN)
 				break;
@@ -326,12 +438,8 @@ class SimpleRMIClient
 			case 'JSON':
 				return json_decode(base64_decode($payload));
 
-			// Space case ofencoding that launches one subsequent read from the socket
-			case 'BLOB':
-				if (!is_numeric($payload))
-					RemoteMethodInvocationException("Invalid BLOB size received");
-
-				return $this->connReadChunk($payload);
+			case 'RAW':
+				return base64_decode($payload);
 
 			case 'PLAIN':	// treated as default if no encoding is specified
 				if (($data = base64_decode($payload, true)) === false)
@@ -347,7 +455,28 @@ class SimpleRMIClient
 
 			default:
 				throw new RemoteMethodInvocationException("Unsupported RMI encoding received: $encoding");
-		}		
+		}
+	}
+
+	protected function decodePayloadResponse($encoding, $payload)
+	{
+		switch(strtoupper((string) $encoding)) {
+			case 'PHP':
+				return unserialize($payload);
+
+			case 'JSON':
+				return json_decode($payload);
+
+			case 'RAW':
+			case 'PLAIN':
+				return $payload;
+
+			case 'ERROR':
+				throw new RemoteErrorException($payload);
+
+			default:
+				return $payload;
+		}
 	}
 
 	protected function rawCmd($cmd)
@@ -393,6 +522,76 @@ class SimpleRMIClient
 		return false;
 	}
 
+	protected function parseBanner($banner)
+	{
+		$this->advertisedMaxProtocol = 1;
+		$this->capabilities = [];
+
+		if (preg_match('/PROTO=([0-9]+)/i', $banner, $match))
+			$this->advertisedMaxProtocol = max(1, min(2, (int) $match[1]));
+
+		if (preg_match('/PROTO=[^\s]*,([A-Z0-9_,\-]+)/i', $banner, $caps))
+			$this->capabilities = $this->normalizeCapabilityTokens(explode(',', $caps[1]));
+	}
+
+	protected function negotiateProtocol()
+	{
+		$target = min(2, (int) $this->advertisedMaxProtocol);
+
+		if ($target <= 1) {
+			$this->protocolVersion = 1;
+			return;
+		}
+
+		$response = $this->rawCmd('PROTO ' . $target);
+		$code = $this->parseStatusCode($response);
+
+		if ($code == 200) {
+			if (preg_match('/PROTO\s+([0-9]+)/i', (string) $response, $match))
+				$this->protocolVersion = (int) $match[1];
+			else
+				$this->protocolVersion = $target;
+		} else {
+			$this->protocolVersion = 1;
+		}
+	}
+
+	protected function discoverCapabilities($banner)
+	{
+		if (!empty($this->capabilities))
+			return;
+
+		$response = $this->rawCmd('CAPS');
+		$code = $this->parseStatusCode($response);
+
+		if ($code == 200) {
+			$parts = explode(' ', $response, 2);
+			$capsRaw = isset($parts[1]) ? trim($parts[1]) : '';
+			if ($capsRaw !== '')
+				$this->capabilities = $this->normalizeCapabilityTokens(preg_split('/[\s,]+/', $capsRaw));
+		}
+	}
+
+	protected function normalizeCapabilityTokens(array $tokens)
+	{
+		$result = [];
+
+		foreach ($tokens as $token) {
+			$token = strtoupper(trim((string) $token));
+
+			if ($token !== '')
+				$result[] = $token;
+		}
+
+		return $result;
+	}
+
+	protected function updateCapabilityFlags()
+	{
+		$this->supportsPayloadCapability = ($this->protocolVersion >= 2 && in_array('PAYLOAD', $this->capabilities));
+		$this->supportsAsyncCapability = in_array('ACALL', $this->capabilities);
+	}
+
 	protected function connWriteLn($line)
 	{
 		if (!is_resource($this->getConnection()->getSocket()) || feof($this->getConnection()->getSocket()))
@@ -433,7 +632,7 @@ class SimpleRMIClient
 
 	protected function connReadLn()
 	{
-		$buff = null;
+                $buff = '';
 		$result = 0;
 		$time = time();
 		$info = stream_get_meta_data($this->getConnection()->getSocket());
@@ -504,20 +703,47 @@ class SimpleRMIClient
 		return $buff;
 	}
 
-	protected function connReadChunk($bytes)
+	protected function readResponse()
 	{
-		$result = $this->connReadExact($bytes, true);
+		$line = $this->connReadLn();
 
-		if ($result === false)
-			return false;
+		if ($line === false)
+			return ['line' => '', 'code' => false];
 
-		if (!is_string($result))
-			return $result;
+		$response = [
+			'line' => $line,
+			'code' => $this->parseStatusCode($line),
+			'payload' => null,
+			'payload_len' => null,
+			'encoding' => null,
+			'is_payload' => false,
+		];
 
-		if (strlen($result) < $bytes)
-			return '323 Content Truncated';
+		if ($this->protocolVersion >= 2 && $response['code'] !== false) {
+			$parts = preg_split('/\s+/', trim($line));
 
-		return unserialize($result);
+			if (count($parts) >= 4 && strtoupper($parts[1]) === 'PAYLOAD') {
+				$length = (int) $parts[3];
+				$payload = '';
+
+				if ($length < 0)
+					return ['line' => $line, 'code' => false];
+
+				if ($length > 0) {
+					$payload = $this->connReadExact($length, false);
+
+					if (!is_string($payload) || strlen($payload) != $length)
+						return ['line' => $line, 'code' => false];
+				}
+
+				$response['encoding'] = $parts[2];
+				$response['payload_len'] = $length;
+				$response['payload'] = $payload;
+				$response['is_payload'] = true;
+			}
+		}
+
+		return $response;
 	}
 
 	protected function connCheckThrottle()

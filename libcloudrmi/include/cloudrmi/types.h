@@ -22,6 +22,7 @@ typedef enum {
     RMI_EVENT_PROXY,
     RMI_EVENT_CAPS,
     RMI_EVENT_SERVER,
+    RMI_EVENT_PROTO,
     RMI_EVENT_UNKNOWN
 } rmi_event_type_t;
 
@@ -52,6 +53,7 @@ typedef struct {
     char arg1[RMI_BUF_SZ + 1];
     char arg2[RMI_BUF_SZ + 1];
     char arg3[RMI_BUF_SZ + 1];
+    char arg4[RMI_BUF_SZ + 1];
     char encoding[RMI_BUF_SZ + 1];
     const uint8_t *payload;
     size_t payload_len;

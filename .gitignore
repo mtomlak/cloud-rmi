@@ -1,3 +1,8 @@
 /rmi-proxy
 /rmi-server
 /rmi-client
+/libcloudrmi/tests/unit/protocol_feed_test
+/libcloudrmi/tests/unit/proxy_payload_test
+/tests/integration/.venv/
+/tests/integration/__pycache__/
+/tests/integration/test_cases/__pycache__/

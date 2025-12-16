@@ -349,6 +349,21 @@ int handle_shell_call(
       stream_writeln(state->sock, "500 Error: %s (%d)", output, exit_code);
 
    } else {
+      if (payload != NULL && state->protocol_version >= 2) {
+         const char *response_enc = (encoding != NULL && encoding[0] != '\0') ? encoding : "PLAIN";
+
+         stream_writeln(state->sock, "200 PAYLOAD %s %zu", response_enc, output_len);
+
+         if (output_len > 0) {
+            ssize_t written = write(state->sock, output, output_len);
+            (void)written;
+         }
+
+         stream_write(state->sock, "\n");
+         success = 1;
+         goto cleanup;
+      }
+
       size_t encoded_len;
 
       if (!base64_encoded_length(output_len, &encoded_len)) {

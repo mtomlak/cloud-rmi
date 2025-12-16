@@ -66,13 +66,19 @@ while ($client = @stream_socket_accept($server, -1)) {
                 break 2;
             }
 
-            $event = $eventResult['event'];
-            if ((int)$event['type'] !== RMI_EVENT_CALL) {
-                fwrite($client, "400 unexpected command\n");
-                $fatal = true;
-                $errorSent = true;
-                break 2;
-            }
+			$event = $eventResult['event'];
+			if ((int)$event['type'] !== RMI_EVENT_CALL) {
+				if (isset($event['cmd']) && strtolower((string) $event['cmd']) === 'proto') {
+					$version = (int) ($event['arg1'] ?? 1);
+					fwrite($client, "200 PROTO {$version}\n");
+					continue;
+				}
+
+				fwrite($client, "400 unexpected command\n");
+				$fatal = true;
+				$errorSent = true;
+				break 2;
+			}
 
             $isLegacyCall = ((int)$event['argc'] >= 4);
             if ($isLegacyCall) {
