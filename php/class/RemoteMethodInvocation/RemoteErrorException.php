@@ -1,20 +1,33 @@
 <?php
+namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
 
-namespace RemoteMethodInvocation;
-
-class RemoteErrorException extends RemoteException
+/**
+ * Exception forwarded to remote system when error has occoured during
+ * remote method invocation.
+ *  
+ * @copyright Copyright (C) 2016 - 2024 ProfiWeb sro (http://profiweb.biz/).
+ * @author Marian Tomlak <marian@profiweb.biz>
+ * @license BSD License
+ */
+class RemoteErrorException extends \Exception
 {
-    /** @var int */
-    private $statusCode;
+	protected $errorCode;
 
-    public function __construct(int $statusCode, string $message)
-    {
-        parent::__construct($message, $statusCode);
-        $this->statusCode = $statusCode;
-    }
-
-    public function getStatusCode(): int
-    {
-        return $this->statusCode;
-    }
+	/**
+	 * Constructs a new exception from array containing parameters of error.
+	 * 
+	 */
+	public function __construct(
+		$errorMessage,
+		$errorCode = null
+		)
+	{
+		Parent::__construct($errorMessage);
+		$this->errorCode = $errorCode;
+	}
+	
+	public function getErrorCode()
+	{
+		return $this->errorCode;
+	}
 }

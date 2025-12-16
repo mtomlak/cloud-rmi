@@ -1,63 +1,38 @@
 <?php
+namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
 
-namespace RemoteMethodInvocation;
-
+/**
+ * Represents connection to Simle RMI server
+ *  
+ * @copyright Copyright (C) 2016 ProfiWeb sro (http://profiweb.biz/).
+ * @author Marian Tomlak
+ * @license BSD License
+ */
 class SimpleRMIConnection implements ConnectionInterface
 {
-    /** @var resource */
-    private $stream;
+	protected $host;
+	protected $port;
+	protected $socket;
+	
+	public function __construct($host, $port, $socket)
+	{
+		$this->host = $host;
+		$this->port = $port;
+		$this->socket = $socket;
+	}
+	
+	public function getSocket()
+	{
+		return $this->socket;
+	}
 
-    public function __construct(string $host, int $port, float $timeout = 3.0)
-    {
-        $this->stream = @stream_socket_client("tcp://{$host}:{$port}", $errno, $errstr, $timeout);
-        if ($this->stream === false) {
-            throw new RemoteMethodInvocationException("Failed to connect: {$errstr}");
-        }
+	public function getHost()
+	{
+		return $this->host;
+	}
 
-        stream_set_blocking($this->stream, true);
-        stream_set_timeout($this->stream, $timeout);
-    }
-
-    public function write(string $data): void
-    {
-        $written = 0;
-        $length = strlen($data);
-        while ($written < $length) {
-            $chunk = fwrite($this->stream, substr($data, $written));
-            if ($chunk === false) {
-                throw new RemoteMethodInvocationException('Failed to write to socket');
-            }
-            $written += $chunk;
-        }
-    }
-
-    public function readBytes(int $length): string
-    {
-        $buffer = '';
-        while (strlen($buffer) < $length) {
-            $chunk = fread($this->stream, $length - strlen($buffer));
-            if ($chunk === '' || $chunk === false) {
-                $meta = stream_get_meta_data($this->stream);
-                if (!empty($meta['timed_out'])) {
-                    throw new RemoteMethodInvocationException('Timed out waiting for payload');
-                }
-                throw new RemoteMethodInvocationException('Connection closed while reading payload');
-            }
-            $buffer .= $chunk;
-        }
-
-        return $buffer;
-    }
-
-    public function readLine()
-    {
-        return fgets($this->stream);
-    }
-
-    public function close(): void
-    {
-        if (is_resource($this->stream)) {
-            fclose($this->stream);
-        }
-    }
+	public function getPort()
+	{
+		return $this->port;
+	}
 }

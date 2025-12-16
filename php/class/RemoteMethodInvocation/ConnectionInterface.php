@@ -1,27 +1,14 @@
 <?php
+namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
 
-namespace RemoteMethodInvocation;
-
+/**
+ * Connection objects return operating system's handle to the connection
+ *  
+ * @copyright Copyright (C) 2016 ProfiWeb sro (http://profiweb.biz/).
+ * @author Marian Tomlak
+ * @license BSD License
+ */
 interface ConnectionInterface
 {
-    /**
-     * Write raw bytes to the connection.
-     */
-    public function write(string $data): void;
-
-    /**
-     * Read exactly $length bytes from the connection.
-     */
-    public function readBytes(int $length): string;
-
-    /**
-     * Read a single line terminated by a newline character.
-     * Returns false on EOF.
-     */
-    public function readLine();
-
-    /**
-     * Close the connection.
-     */
-    public function close(): void;
+	public function getSocket();
 }
