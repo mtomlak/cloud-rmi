@@ -20,6 +20,19 @@ class SimpleRMIClient
 	protected $connStarted = null;
 	protected $auth = [];
 
+	protected $payloadThreshold = null;
+	protected $defaultPayloadEncoding = 'RAW';
+	protected $protocolCtx = null;
+
+	public function __construct($host = 'localhost', $port = 8000, $connTimeout = false, $readTimeout = 600, $throttleTimeout = false)
+	{
+		$this->host = $host;
+		$this->port = $port;
+		$this->connTimeout = $connTimeout;
+		$this->readTimeout = $readTimeout;
+		$this->throttleTimeout = $throttleTimeout;
+	}
+
 	public function connect()
 	{
 		$this->connStarted = time();
@@ -76,9 +89,15 @@ class SimpleRMIClient
 	{
 		if ($interface[0] != '\\')	// make sure we have absolute classname
 			$interface = "\\$interface";
-		
-		$command = ($async ? 'ACALL' : 'CALL') . " $interface $methodName " . $this->encodePayload($parameters);
-		$result = $this->rawCmd($command);
+
+		$options = $this->normalizeCallOptions($async);
+
+		if ($this->shouldUsePayloadChannel($parameters, $options)) {
+			$result = $this->sendPayloadCall($interface, $methodName, $parameters, $options);
+		} else {
+			$command = ($options['async'] ? 'ACALL' : 'CALL') . " $interface $methodName " . $this->encodePayload($parameters);
+			$result = $this->rawCmd($command);
+		}
 
 		// try to reconnect
 		//if (!$result || $this->parseStatusCode($result) == 408) {
@@ -98,14 +117,14 @@ class SimpleRMIClient
 				throw $e;
 
 			} catch (\Exception $e) {
-				throw new RemoteMethodInvocationException("Remote error: {$e->getMessage()}: $payload");	// most likely it's plaintext error
+				throw new RemoteMethodInvocationException("Remote error: {$e->getMessage()}: $payload");		// most likely it's plaintext error
 			}
 
 			if ($code == 500)
 				if ($data instanceof RemoteException || $data instanceof RemoteErrorException) {
 					throw $data;
 
-				} else 
+				} else
 					throw new RemoteMethodInvocationException("Unrecognized exception type thrown on server", $data);
 
 			return $data;	// we know data consists of status code and a message
@@ -153,6 +172,135 @@ class SimpleRMIClient
 		$this->disconnect();
 		$this->connect();
 		$this->repeatLastAuth();
+	}
+
+	protected function normalizeCallOptions($async)
+	{
+		$options = [
+			'async' => (bool) $async,
+			'payload' => false,
+			'encoding' => null,
+			'require_payload' => false,
+		];
+
+		if (is_array($async)) {
+			if (array_key_exists('async', $async))
+				$options['async'] = (bool) $async['async'];
+
+			if (array_key_exists('payload', $async))
+				$options['payload'] = (bool) $async['payload'];
+
+			if (isset($async['encoding']))
+				$options['encoding'] = $async['encoding'];
+
+			if (isset($async['require_payload']))
+				$options['require_payload'] = (bool) $async['require_payload'];
+		}
+
+		return $options;
+	}
+
+	protected function shouldUsePayloadChannel($parameters, array $options)
+	{
+		if (!empty($options['payload']))
+			return true;
+
+		if (!is_null($this->payloadThreshold) && is_string($parameters) && strlen($parameters) >= $this->payloadThreshold)
+			return true;
+
+		return false;
+	}
+
+	protected function sendPayloadCall($interface, $methodName, $parameters, array $options)
+	{
+		$encoding = ($options['encoding']) ? $options['encoding'] : $this->defaultPayloadEncoding;
+		$payload = $this->normalizePayloadBytes($parameters, $encoding);
+		$callLine = ($options['async'] ? 'ACALL' : 'CALL') . " $interface $methodName";
+		$payloadLine = "PAYLOAD $encoding " . strlen($payload);
+
+		$this->validateOutboundPayload($callLine, $payloadLine, $payload, $options);
+
+		if ($this->connWriteLn($callLine) === false)
+			return false;
+
+		if ($this->connWriteLn($payloadLine) === false)
+			return false;
+
+		if ($payload !== '' && $this->connWriteRaw($payload) === false)
+			return false;
+
+		return $this->connReadLn();
+	}
+
+	protected function normalizePayloadBytes($parameters, &$encoding)
+	{
+		$encoding = strtoupper((string) $encoding);
+
+		if (empty($encoding))
+			$encoding = $this->defaultPayloadEncoding;
+
+		if (is_string($parameters))
+			return $parameters;
+
+		if ($encoding == $this->defaultPayloadEncoding || $encoding == 'RAW')
+			$encoding = 'PHP';
+
+		return serialize($parameters);
+	}
+
+	protected function validateOutboundPayload($callLine, $payloadLine, $payload, array $options)
+	{
+		if (!$ctx = $this->getProtocolContext())
+			return;
+
+		if (function_exists('cloudrmi_protocol_reset'))
+			cloudrmi_protocol_reset($ctx);
+
+		if (!function_exists('cloudrmi_protocol_feed') || !function_exists('cloudrmi_protocol_next_event'))
+			return;
+
+		$feed = cloudrmi_protocol_feed($ctx, $callLine . "\n" . $payloadLine . "\n" . $payload);
+		if (isset($feed['status']) && defined('RMI_E_ERR') && $feed['status'] === RMI_E_ERR) {
+			$message = isset($feed['err_message']) ? $feed['err_message'] : 'Protocol error';
+			throw new RemoteMethodInvocationException($message);
+		}
+
+		while (true) {
+			$event = cloudrmi_protocol_next_event($ctx);
+			if (!isset($event['status'])) {
+				return;
+			}
+
+			if (defined('RMI_E_AGAIN') && $event['status'] === RMI_E_AGAIN) {
+				throw new RemoteMethodInvocationException('Protocol parser expects more payload bytes');
+			}
+
+			if (defined('RMI_E_ERR') && $event['status'] === RMI_E_ERR) {
+				$message = isset($event['err_message']) ? $event['err_message'] : 'Protocol error';
+				throw new RemoteMethodInvocationException($message);
+			}
+
+			if (defined('RMI_OK') && $event['status'] === RMI_OK && isset($event['event']) && $event['event'] !== null) {
+				if (defined('RMI_EVENT_CALL') && (int) $event['event']['type'] !== RMI_EVENT_CALL)
+					throw new RemoteMethodInvocationException('Unexpected protocol event received during validation');
+
+				break;
+			}
+
+			if (!defined('RMI_E_AGAIN') || $event['status'] !== RMI_E_AGAIN)
+				break;
+		}
+	}
+
+	protected function getProtocolContext()
+	{
+		if (!function_exists('cloudrmi_protocol_create'))
+			return null;
+
+		if (is_null($this->protocolCtx))
+			$this->protocolCtx = cloudrmi_protocol_create();
+
+		return $this->protocolCtx;
 	}
 
 	protected function encodePayload($payload)
@@ -258,6 +406,31 @@ class SimpleRMIClient
 		return fwrite($this->getConnection()->getSocket(), "$line\r\n");
 	}
 
+	protected function connWriteRaw($bytes)
+	{
+		if (!is_resource($this->getConnection()->getSocket()) || feof($this->getConnection()->getSocket()))
+			return false;
+
+		$info = stream_get_meta_data($this->getConnection()->getSocket());
+
+		if (isset($info['timed_out']) && $info['timed_out'])
+			return false;
+
+		$written = 0;
+		$length = strlen($bytes);
+
+		while ($written < $length) {
+			$result = fwrite($this->getConnection()->getSocket(), substr($bytes, $written));
+
+			if ($result === false)
+				return false;
+
+			$written += $result;
+		}
+
+		return $written;
+	}
+
 	protected function connReadLn()
 	{
 		$buff = null;
@@ -288,19 +461,63 @@ class SimpleRMIClient
 		return trim($buff);
 	}
 	
+	protected function connReadExact($bytes, $consumeTrailingNewline = false)
+	{
+		$buff = '';
+		$time = time();
+
+		while (strlen($buff) < $bytes) {
+			if ($this->connTimeout && (time() - $this->connStarted > $this->connTimeout))
+				return '322 Connection Timed Out: ' . $this->connTimeout;
+
+			if (time() - $time > $this->readTimeout)
+				return '322 Read Timed Out: ' . $this->readTimeout;
+
+			if (!is_resource($this->getConnection()->getSocket()) || feof($this->getConnection()->getSocket()))
+				return false;
+
+			$info = stream_get_meta_data($this->getConnection()->getSocket());
+
+			if (isset($info['timed_out']) && $info['timed_out'])
+				return '322 Socket Timed Out: ' . $this->readTimeout;
+
+			$chunk = stream_get_contents($this->getConnection()->getSocket(), $bytes - strlen($buff));
+
+			if ($chunk === false)
+				return false;
+
+			if ($chunk === '') {
+				$this->connCheckThrottle();
+				continue;
+			}
+
+			$buff .= $chunk;
+		}
+
+		if ($consumeTrailingNewline) {
+			$next = stream_get_contents($this->getConnection()->getSocket(), 1);
+
+			if ($next !== false && $next !== '' && $next !== "\n")
+				$buff .= $next;
+		}
+
+		return $buff;
+	}
+
 	protected function connReadChunk($bytes)
 	{
-		if (!feof($this->getConnection()->getSocket())) {
-			$result = stream_get_contents($this->getConnection()->getSocket(), $bytes + 1);	// every chunk ends with "\n"
+		$result = $this->connReadExact($bytes, true);
 
-			if ($result === false)
-				return false;
-		}
+		if ($result === false)
+			return false;
+
+		if (!is_string($result))
+			return $result;
 
 		if (strlen($result) < $bytes)
 			return '323 Content Truncated';
 
-		return unserialize(trim($result)); // this caused issue with 8.3 on hackbook, likely linefeed at the end
+		return unserialize($result);
 	}
 
 	protected function connCheckThrottle()
@@ -321,4 +538,11 @@ class SimpleRMIClient
 			usleep($this->throttleDuration * 1000000);
 		}
 	}
+
+	public function __destruct()
+	{
+		if (!is_null($this->protocolCtx) && function_exists('cloudrmi_protocol_destroy'))
+			cloudrmi_protocol_destroy($this->protocolCtx);
+	}
+
 }
