@@ -289,6 +289,35 @@ int main(void)
     }
     free(too_large);
 
+    /* Protocol v2 inline payload requires negotiation */
+    rmi_protocol_reset(ctx);
+    const char *v2_without_proto = "CALL demo method RAW 3\nabc";
+    if (rmi_protocol_feed(ctx, (const uint8_t *)v2_without_proto, strlen(v2_without_proto), &err) != RMI_OK)
+        return 1;
+    status = rmi_protocol_next_event(ctx, &event, &err);
+    if (status != RMI_E_ERR || err.code != RMI_ERROR_BAD_REQUEST)
+        return 1;
+
+    /* Protocol negotiation enables inline payload framing */
+    const char *v2_with_proto = "PROTO 2\nCALL demo method RAW 3\nbar";
+    if (rmi_protocol_feed(ctx, (const uint8_t *)v2_with_proto, strlen(v2_with_proto), &err) != RMI_OK)
+        return 1;
+    if (!expect_event(ctx, RMI_EVENT_PROTO, "proto", "2", "", RMI_ERROR_NONE, NULL, NULL, 0))
+        return 1;
+    const uint8_t bar_payload[] = { 'b', 'a', 'r' };
+    if (!expect_event(ctx, RMI_EVENT_CALL, "call", "demo", "method", RMI_ERROR_NONE, "RAW", bar_payload, sizeof(bar_payload)))
+        return 1;
+
+    /* Zero-length v2 payloads should surface immediately after negotiation */
+    rmi_protocol_reset(ctx);
+    const char *zero_payload_v2 = "PROTO 2\nCALL empty method RAW 0\n";
+    if (rmi_protocol_feed(ctx, (const uint8_t *)zero_payload_v2, strlen(zero_payload_v2), &err) != RMI_OK)
+        return 1;
+    if (!expect_event(ctx, RMI_EVENT_PROTO, "proto", "2", "", RMI_ERROR_NONE, NULL, NULL, 0))
+        return 1;
+    if (!expect_event(ctx, RMI_EVENT_CALL, "call", "empty", "method", RMI_ERROR_NONE, "RAW", (const uint8_t *)"", 0))
+        return 1;
+
     rmi_protocol_destroy(ctx);
     printf("protocol_feed_test passed\n");
     return 0;
