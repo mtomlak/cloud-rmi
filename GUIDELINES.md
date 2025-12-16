@@ -218,6 +218,11 @@ If a change:
 - hides errors
 - or cannot be clearly reasoned about
 
+---
+## 8. Next Steps
+- study libcloudrmi/PROTOCOL.md for new protocol design details
+
+
 **It should not be merged.**
 
 When in doubt: **do less, not more.**
