@@ -4,7 +4,7 @@ namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
 /**
  * Simple implementation Remote Method Invocation server.
  *
- * @copyright Copyright (C) 2016-2025 ProfiWeb sro (http://profiweb.biz/).
+ * @copyright Copyright (C) 2016-2020 ProfiWeb sro (http://profiweb.biz/).
  * @author Marian Tomlak
  * @license Proprietary
  */
@@ -272,62 +272,54 @@ class SimpleRMIClient
 		return serialize($parameters);
 	}
 
-                protected function validateOutboundPayload($callLine, $payloadLine, $payload, array $options)
-                {
-                                if (!$ctx = $this->getProtocolContext())
-                                                return;
+		protected function validateOutboundPayload($callLine, $payloadLine, $payload, array $options)
+		{
+				if (!$ctx = $this->getProtocolContext())
+						return;
 
-                if (function_exists('cloudrmi_protocol_reset'))
-                        cloudrmi_protocol_reset($ctx);
+		if (function_exists('cloudrmi_protocol_reset'))
+			cloudrmi_protocol_reset($ctx);
 
-                                if (!function_exists('cloudrmi_protocol_feed') || !function_exists('cloudrmi_protocol_next_event'))
-                                                return;
+				if (!function_exists('cloudrmi_protocol_feed') || !function_exists('cloudrmi_protocol_next_event'))
+						return;
 
-                                $wire = '';
+				$wire = $callLine . "\n";
+				if (!is_null($payloadLine))
+						$wire .= $payloadLine . "\n";
+				$wire .= $payload;
 
-                                if ($this->protocolVersion >= 2)
-                                                $wire .= 'PROTO ' . $this->protocolVersion . "\n";
+				$feed = cloudrmi_protocol_feed($ctx, $wire);
+		if (isset($feed['status']) && defined('RMI_E_ERR') && $feed['status'] === RMI_E_ERR) {
+			$message = isset($feed['err_message']) ? $feed['err_message'] : 'Protocol error';
+			throw new RemoteMethodInvocationException($message);
+		}
 
-                                $wire .= $callLine . "\n";
-                                if (!is_null($payloadLine))
-                                                $wire .= $payloadLine . "\n";
-                                $wire .= $payload;
+		while (true) {
+			$event = cloudrmi_protocol_next_event($ctx);
+			if (!isset($event['status'])) {
+				return;
+			}
 
-                                $feed = cloudrmi_protocol_feed($ctx, $wire);
-                if (isset($feed['status']) && defined('RMI_E_ERR') && $feed['status'] === RMI_E_ERR) {
-                        $message = isset($feed['err_message']) ? $feed['err_message'] : 'Protocol error';
-                        throw new RemoteMethodInvocationException($message);
-                }
+			if (defined('RMI_E_AGAIN') && $event['status'] === RMI_E_AGAIN) {
+				throw new RemoteMethodInvocationException('Protocol parser expects more payload bytes');
+			}
 
-                while (true) {
-                        $event = cloudrmi_protocol_next_event($ctx);
-                        if (!isset($event['status'])) {
-                                return;
-                        }
+			if (defined('RMI_E_ERR') && $event['status'] === RMI_E_ERR) {
+				$message = isset($event['err_message']) ? $event['err_message'] : 'Protocol error';
+				throw new RemoteMethodInvocationException($message);
+			}
 
-                        if (defined('RMI_E_AGAIN') && $event['status'] === RMI_E_AGAIN) {
-                                throw new RemoteMethodInvocationException('Protocol parser expects more payload bytes');
-                        }
+			if (defined('RMI_OK') && $event['status'] === RMI_OK && isset($event['event']) && $event['event'] !== null) {
+				if (defined('RMI_EVENT_CALL') && (int) $event['event']['type'] !== RMI_EVENT_CALL)
+					throw new RemoteMethodInvocationException('Unexpected protocol event received during validation');
 
-                        if (defined('RMI_E_ERR') && $event['status'] === RMI_E_ERR) {
-                                $message = isset($event['err_message']) ? $event['err_message'] : 'Protocol error';
-                                throw new RemoteMethodInvocationException($message);
-                        }
+				break;
+			}
 
-                        if (defined('RMI_OK') && $event['status'] === RMI_OK && isset($event['event']) && $event['event'] !== null) {
-                                if (defined('RMI_EVENT_PROTO') && (int) $event['event']['type'] === RMI_EVENT_PROTO)
-                                        continue;
-
-                                if (defined('RMI_EVENT_CALL') && (int) $event['event']['type'] !== RMI_EVENT_CALL)
-                                        throw new RemoteMethodInvocationException('Unexpected protocol event received during validation');
-
-                                break;
-                        }
-
-                        if (!defined('RMI_E_AGAIN') || $event['status'] !== RMI_E_AGAIN)
-                                break;
-                }
-        }
+			if (!defined('RMI_E_AGAIN') || $event['status'] !== RMI_E_AGAIN)
+				break;
+		}
+	}
 
 	protected function getProtocolContext()
 	{

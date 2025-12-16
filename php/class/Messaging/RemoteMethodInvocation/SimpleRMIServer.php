@@ -29,10 +29,10 @@ class SimpleRMIServer
 	protected $readTimeout = 300;
 	protected $highReadTimeout = 300;
 	protected $noForkReadTimeout = 300;
-	protected $childTimeout = 3600; // default is 6h, use short one for web-facing servers
+	protected $childTimeout = 3600;	// default is 6h, use short one for web-facing servers
 	protected $childThrottle = false;
-	protected $childNicenessThrottle = [30 => 5, 35 => 10, 40 => 15, 45 => 20]; // X => Y: sets child niceness to Y at Xth second
-	protected $childIoNicenessThrottle = [30 => 2, 45 => 3];    // see "man ionice"
+	protected $childNicenessThrottle = [30 => 5, 35 => 10, 40 => 15, 45 => 20];	// X => Y: sets child niceness to Y at Xth second
+	protected $childIoNicenessThrottle = [30 => 2, 45 => 3];	// see "man ionice"
 	protected $throttleTimeout = false;
 	protected $throttleDuration = 0.01;
 	protected $connStarted = null;
@@ -91,7 +91,7 @@ class SimpleRMIServer
 			throw new \InvalidArgumentException("Given object does not implement "
 				. "specified interface: $interface");
 
-		if ($interface[0] != '\\')  // make sure name is absolute classname
+		if ($interface[0] != '\\')	// make sure name is absolute classname
 			$interface = "\\$interface";
 
 		$this->bindings[$interface] = $objectRef;
@@ -127,7 +127,7 @@ class SimpleRMIServer
 			}
 
 			if (!$watchdogPid = $this->forkChildWatchdog(getmypid()))
-				return;     // we're the watchdog proccess, end here
+				return;		// we're the watchdog proccess, end here
 		} else
 			$this->log("Warning: Fork support is not enabled");
 
@@ -156,7 +156,7 @@ class SimpleRMIServer
 			posix_kill($watchdogPid, SIGTERM);
 			$this->log("Shutting child proccess " . getmypid());
 			$this->doShutdown = true;
-			return $this->proc->join(); // exit child proccess
+			return $this->proc->join();	// exit child proccess
 		}
 	}
 
@@ -189,7 +189,7 @@ class SimpleRMIServer
 		switch(strtolower($command)) {
 			case 'auth':
 				if (!$result = $this->handleAuthCommand($arg)) {
-					$this->connWriteLn($socket, '401 Unauthorized');    
+					$this->connWriteLn($socket, '401 Unauthorized');	
 
 					return false;
 				}
@@ -201,7 +201,7 @@ class SimpleRMIServer
 				$this->handleCallCommand($socket, $arg);
 				break;
 
-			case 'acall':   // async call
+			case 'acall':	// async call
 				$this->handleACallCommand($socket, $arg);
 				break;
 
@@ -231,7 +231,7 @@ class SimpleRMIServer
 
 			case 'shutdown':
 				if (!$this->isAuthenticated) {
-					$this->connWriteLn($socket, '401 Unauthorized');    
+					$this->connWriteLn($socket, '401 Unauthorized');	
 					break;
 				}
 				$this->doShutdown = true;
@@ -241,12 +241,12 @@ class SimpleRMIServer
 				return false;
 
 			case 'time':
-				$this->connWriteLn($socket, date("200 D, d M y H:i:s O"));  // RFC822
+				$this->connWriteLn($socket, date("200 D, d M y H:i:s O"));	// RFC822
 				break;
 
 			case 'uptime':
 				if (!$this->isAuthenticated) {
-					$this->connWriteLn($socket, '401 Unauthorized');    
+					$this->connWriteLn($socket, '401 Unauthorized');	
 					break;
 				}
 				$diff = time() - $this->startedAt;
@@ -261,7 +261,7 @@ class SimpleRMIServer
 
 			case 'debug':
 				if (!$this->isAuthenticated) {
-					$this->connWriteLn($socket, '401 Unauthorized');    
+					$this->connWriteLn($socket, '401 Unauthorized');	
 					break;
 				}
 				$this->readTimeout = $this->highReadTimeout;
@@ -432,7 +432,7 @@ class SimpleRMIServer
 		$args = explode(' ', trim($arg), 2);
 
 		if (count($args) < 2)
-			return "400 Bad Request: Supported AUTH methods: TOKEN, LOGIN"; // . serialize($args);
+			return "400 Bad Request: Supported AUTH methods: TOKEN, LOGIN";	// . serialize($args);
 
 		list($method, $parameter) = $args;
 
@@ -459,7 +459,7 @@ class SimpleRMIServer
 					return false;
 
 			default:
-				return "400 Bad Request: Unsupported AUTH method";  
+				return "400 Bad Request: Unsupported AUTH method";	
 		}
 
 		return "400 Bad Request:";
@@ -648,7 +648,7 @@ class SimpleRMIServer
 
 		while(strpos($buff, "\n") === false) {
 			if (time() - $time > $this->readTimeout)
-				return '__timeout'; 
+				return '__timeout';	
 
 			if (feof($stream)) {
 				return false;//$this->proc->join();
@@ -699,7 +699,7 @@ class SimpleRMIServer
 	{
 		list($encoding, $payload) = (strpos($rawPayload, ':'))
 			? explode(':', $rawPayload, 2)
-			: ['PLAIN', $rawPayload];   // default encoding is plaintext (base64)
+			: ['PLAIN', $rawPayload];	// default encoding is plaintext (base64)
 
 		switch($encoding) {
 			case 'PHP':
@@ -708,15 +708,15 @@ class SimpleRMIServer
 			case 'JSON':
 				return json_decode(base64_decode($payload));
 
-			case 'PLAIN':   // default action
+			case 'PLAIN':	// default action
 				if (($data = base64_decode($payload, true)) === false)
-					return $payload;    // non-encoded plaintext fallback
+					return $payload;	// non-encoded plaintext fallback
 				else
 					return $data;
 
 			default:
 				throw new RemoteMethodInvocationException("Unsupported RMI encoding received: $encType");
-		}       
+		}		
 	}
 
 	protected function decodeMethodArgs($payload)
@@ -837,7 +837,7 @@ class SimpleRMIServer
 			sleep(1);
 
 			// check if child is alive eg. receives signals
-			if (!posix_kill($pid, 0)) { 
+			if (!posix_kill($pid, 0)) {	
 				$this->log("Shutting watchdog procces for child $pid");
 				$this->doShutdown = true;
 				return $this->proc->join();
