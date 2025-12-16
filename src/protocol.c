@@ -16,6 +16,8 @@
    #include "proxy.h"
 #endif
 
+#define SERVER_MAX_PROTOCOL_VERSION 2
+
 /**
  * Handles Cloud Simple RMI protocol and server side communication.
  *
@@ -107,6 +109,20 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state)
          return 0;
       }
       break;
+
+   case RMI_EVENT_PROTO: {
+      int requested = atoi(event->arg1);
+
+      if (requested < 1 || requested > SERVER_MAX_PROTOCOL_VERSION) {
+         stream_writeln(state->sock, "400 Bad Request");
+         free(output);
+         return 0;
+      }
+
+      state->protocol_version = requested;
+      stream_writeln(state->sock, "200 OK");
+      break;
+   }
 
    case RMI_EVENT_CALL:
       if (state->is_authenticated) {
@@ -296,9 +312,18 @@ void handle_connection (int sock)
    // Write welcome message
    char caps_buf[BUF_SZ + 1];
    rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
-   stream_writeln(sock, "220 %s Server Ready EXT %s", var_context_name, caps_buf);
+
+   for (size_t i = 0; caps_buf[i]; i++)
+      if (caps_buf[i] == ' ')
+         caps_buf[i] = ',';
+
+   if (caps_buf[0] != '\0')
+      stream_writeln(sock, "220 %s Server Ready EXT PROTO=2,%s", var_context_name, caps_buf);
+   else
+      stream_writeln(sock, "220 %s Server Ready EXT PROTO=2", var_context_name);
    state.sock = sock;
    state.is_authenticated = 0;
+   state.protocol_version = 1;
 
    debug.sock = sock;
    debug.pid = (int) getpid();

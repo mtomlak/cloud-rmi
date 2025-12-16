@@ -238,6 +238,33 @@ int main(void)
         return 1;
     rmi_protocol_reset(ctx);
 
+    /* Protocol negotiation is required before v2 framing */
+    const char *v2_call_without_proto = "CALL iface method RAW 3\nxyz";
+    if (rmi_protocol_feed(ctx, (const uint8_t *)v2_call_without_proto, strlen(v2_call_without_proto), &err) != RMI_OK)
+        return 1;
+    status = rmi_protocol_next_event(ctx, &event, &err);
+    if (status != RMI_E_ERR || err.code != RMI_ERROR_BAD_REQUEST)
+        return 1;
+
+    /* Invalid PROTO version */
+    const char *bad_proto = "PROTO 99\n";
+    if (rmi_protocol_feed(ctx, (const uint8_t *)bad_proto, strlen(bad_proto), &err) != RMI_OK)
+        return 1;
+    status = rmi_protocol_next_event(ctx, &event, &err);
+    if (status != RMI_E_ERR || err.code != RMI_ERROR_BAD_REQUEST)
+        return 1;
+
+    /* PROTO 2 enables single-line payload CALL */
+    rmi_protocol_reset(ctx);
+    const char *proto_ok = "PROTO 2\nCALL demo method RAW 4\nbody";
+    if (rmi_protocol_feed(ctx, (const uint8_t *)proto_ok, strlen(proto_ok), &err) != RMI_OK)
+        return 1;
+    if (!expect_event(ctx, RMI_EVENT_PROTO, "proto", "2", "", RMI_ERROR_NONE, NULL, NULL, 0))
+        return 1;
+    const uint8_t body_v2[] = { 'b', 'o', 'd', 'y' };
+    if (!expect_event(ctx, RMI_EVENT_CALL, "call", "demo", "method", RMI_ERROR_NONE, "RAW", body_v2, sizeof(body_v2)))
+        return 1;
+
     /* Exact RMI_MAX_LINE line length should be accepted */
     char *max_line = malloc(RMI_MAX_LINE + 2);
     if (max_line == NULL)

@@ -14,6 +14,7 @@ static void rmi_reset_event(rmi_event_t *event)
     memset(event->arg1, 0, sizeof(event->arg1));
     memset(event->arg2, 0, sizeof(event->arg2));
     memset(event->arg3, 0, sizeof(event->arg3));
+    memset(event->arg4, 0, sizeof(event->arg4));
     memset(event->encoding, 0, sizeof(event->encoding));
     event->argc = 0;
     event->type = RMI_EVENT_NONE;
@@ -57,17 +58,20 @@ int rmi_protocol_handle_line(
     char arg1[(RMI_BUF_SZ + 1)];
     char arg2[(RMI_BUF_SZ + 1)];
     char arg3[(RMI_BUF_SZ + 1)];
+    char arg4[(RMI_BUF_SZ + 1)];
 
     memset(cmd, 0, sizeof(cmd));
     memset(arg1, 0, sizeof(arg1));
     memset(arg2, 0, sizeof(arg2));
     memset(arg3, 0, sizeof(arg3));
+    memset(arg4, 0, sizeof(arg4));
 
-    out_event->argc = sscanf(line, "%s %s %s %s", cmd, arg1, arg2, arg3);
+    out_event->argc = sscanf(line, "%s %s %s %s %s", cmd, arg1, arg2, arg3, arg4);
     strncpy(out_event->cmd, cmd, RMI_BUF_SZ);
     strncpy(out_event->arg1, arg1, RMI_BUF_SZ);
     strncpy(out_event->arg2, arg2, RMI_BUF_SZ);
     strncpy(out_event->arg3, arg3, RMI_BUF_SZ);
+    strncpy(out_event->arg4, arg4, RMI_BUF_SZ);
 
     rmi_lowercase(out_event->cmd);
 
@@ -117,6 +121,8 @@ int rmi_protocol_handle_line(
         out_event->type = RMI_EVENT_CAPS;
     } else if (strcmp(out_event->cmd, "server") == 0) {
         out_event->type = RMI_EVENT_SERVER;
+    } else if (strcmp(out_event->cmd, "proto") == 0) {
+        out_event->type = RMI_EVENT_PROTO;
     } else {
         out_event->type = RMI_EVENT_UNKNOWN;
         if (err != NULL) {
