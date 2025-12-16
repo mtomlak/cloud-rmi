@@ -1,16 +1,13 @@
 <?php
-require_once __DIR__ . '/../../class/RemoteMethodInvocation/ConnectionInterface.php';
-require_once __DIR__ . '/../../class/RemoteMethodInvocation/RemoteException.php';
-require_once __DIR__ . '/../../class/RemoteMethodInvocation/RemoteErrorException.php';
-require_once __DIR__ . '/../../class/RemoteMethodInvocation/RemoteMethodInvocationException.php';
-require_once __DIR__ . '/../../class/RemoteMethodInvocation/SimpleRMIConnection.php';
-require_once __DIR__ . '/../../class/RemoteMethodInvocation/SimpleRMIClient.php';
-require_once __DIR__ . '/../../class/RemoteMethodInvocation/SimpleRMIServer.php';
-require_once __DIR__ . '/../../class/RemoteMethodInvocation/SimplePreforkRMIServer.php';
+require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/ConnectionInterface.php';
+require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteException.php';
+require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteErrorException.php';
+require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteMethodInvocationException.php';
+require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIConnection.php';
+require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIClient.php';
 
-use RemoteMethodInvocation\SimpleRMIClient;
-use RemoteMethodInvocation\SimpleRMIConnection;
-use RemoteMethodInvocation\RemoteErrorException;
+use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\SimpleRMIClient;
+use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\RemoteErrorException;
 
 function wait_for_server(string $host, int $port, int $retries = 20): void
 {
@@ -25,13 +22,14 @@ function wait_for_server(string $host, int $port, int $retries = 20): void
     throw new RuntimeException('server did not start');
 }
 
-function start_server(string $extPath, int $port): array
+function start_server(int $port): array
 {
     $cmd = [
         'php',
-        '-d', "extension={$extPath}",
-        __DIR__ . '/../../src/server.php',
+        __DIR__ . '/../support/test_server.php',
+        '--host=127.0.0.1',
         '--port=' . $port,
+        '--proto-max=2',
     ];
     $descriptors = [
         0 => ['pipe', 'r'],
@@ -56,50 +54,56 @@ function stop_server($proc, array $pipes): void
     proc_close($proc);
 }
 
-$extPath = __DIR__ . '/../../ext/profiweb_cloudrmi/modules/profiweb_cloudrmi.so';
-if (!file_exists($extPath)) {
-    fwrite(STDERR, "Extension not found at {$extPath}, skipping integration tests.\n");
-    exit(0);
-}
-
 $port = 14000 + random_int(0, 1000);
-[$proc, $pipes] = start_server($extPath, $port);
+[$proc, $pipes] = start_server($port);
 wait_for_server('127.0.0.1', $port);
 
 try {
     $client = new SimpleRMIClient('127.0.0.1', $port);
-    $response = $client->call('iface', 'method', 'hello');
+    $client->connect();
+    $response = $client->call('TestRmiInterface', 'method', 'hello');
+    $client->disconnect();
     if ($response !== 'OK') {
         throw new RuntimeException('legacy call failed: ' . $response);
     }
 
     $payloadClient = new SimpleRMIClient('127.0.0.1', $port);
-    $payloadResponse = $payloadClient->call('iface', 'upload', "bin\0bytes", ['payload' => true, 'encoding' => 'BLOB']);
+    $payloadClient->connect();
+    $payloadResponse = $payloadClient->call('TestRmiInterface', 'upload', "bin\0bytes", ['payload' => true, 'encoding' => 'RAW']);
+    $payloadClient->disconnect();
     if ($payloadResponse !== 'OK') {
         throw new RuntimeException('payload call failed');
     }
 
     // mix modes on one connection
     $mixed = new SimpleRMIClient('127.0.0.1', $port);
-    $r1 = $mixed->call('iface', 'method', 'first');
-    $r2 = $mixed->call('iface', 'upload', 'second', ['payload' => true]);
+    $mixed->connect();
+    $r1 = $mixed->call('TestRmiInterface', 'method', 'first');
+    $r2 = $mixed->call('TestRmiInterface', 'upload', 'second', ['payload' => true]);
+    $mixed->disconnect();
     if ($r1 !== 'OK' || $r2 !== 'OK') {
         throw new RuntimeException('mixed call sequence failed');
     }
 
     // invalid PAYLOAD sequence
-    $sock = new SimpleRMIConnection('127.0.0.1', $port);
-    $sock->write("PAYLOAD RAW 2\nzz");
-    $line = $sock->readLine();
+    $sock = stream_socket_client("tcp://127.0.0.1:{$port}");
+    fgets($sock, 2048); // banner
+    fwrite($sock, "PAYLOAD RAW 2\nzz");
+    $line = fgets($sock, 2048);
+    fclose($sock);
     if ($line === false || strpos($line, '400') === false) {
         throw new RuntimeException('expected error for payload without call');
     }
 
     // legacy CALL followed by stray PAYLOAD
-    $sock2 = new SimpleRMIConnection('127.0.0.1', $port);
-    $sock2->write("CALL iface method AAAA\nPAYLOAD RAW 1\nx");
-    $line2 = $sock2->readLine();
-    if ($line2 === false || strpos($line2, '400') === false) {
+    $sock2 = stream_socket_client("tcp://127.0.0.1:{$port}");
+    fgets($sock2, 2048); // banner
+    fwrite($sock2, "CALL TestRmiInterface method AAAA\nPAYLOAD RAW 1\nx");
+    $line2 = fgets($sock2, 2048);
+    $line3 = fgets($sock2, 2048);
+    fclose($sock2);
+    $hasError = (strpos((string)$line2, '400') !== false) || (strpos((string)$line3, '400') !== false);
+    if (!$hasError) {
         throw new RuntimeException('expected error for mixed legacy/payload');
     }
 
