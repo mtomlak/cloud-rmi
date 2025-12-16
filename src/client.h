@@ -9,6 +9,7 @@ struct rmi_client_conn {
    int sock;
    uint32_t capabilities;
    int capabilities_known;
+   int protocol_version;
 };
 
 int client_connect(char *ip_addr, int port_num, struct rmi_client_conn *conn);
