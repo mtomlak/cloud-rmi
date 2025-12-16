@@ -94,8 +94,8 @@ class SimpleRMIClient
 
 	public function callRemoteMethod($interface, $methodName, $parameters, $async = false)
 	{
-		if ($interface[0] != '\\')	// make sure we have absolute classname
-			$interface = "\\$interface";
+		// Server interface maps do not include a leading namespace separator.
+		$interface = ltrim($interface, '\\');
 
 		$options = $this->normalizeCallOptions($async);
 
@@ -188,26 +188,28 @@ class SimpleRMIClient
 
 	protected function normalizeCallOptions($async)
 	{
-		$options = [
-			'async' => (bool) $async,
-			'payload' => false,
-			'encoding' => null,
-			'require_payload' => false,
-		];
+                $options = [
+                        'async' => false,
+                        'payload' => false,
+                        'encoding' => null,
+                        'require_payload' => false,
+                ];
 
-		if (is_array($async)) {
-			if (array_key_exists('async', $async))
-				$options['async'] = (bool) $async['async'];
+                if (is_array($async)) {
+                        if (array_key_exists('async', $async))
+                                $options['async'] = (bool) $async['async'];
 
-			if (array_key_exists('payload', $async))
-				$options['payload'] = (bool) $async['payload'];
+                        if (array_key_exists('payload', $async))
+                                $options['payload'] = (bool) $async['payload'];
 
 			if (isset($async['encoding']))
 				$options['encoding'] = $async['encoding'];
 
-			if (isset($async['require_payload']))
-				$options['require_payload'] = (bool) $async['require_payload'];
-		}
+                        if (isset($async['require_payload']))
+                                $options['require_payload'] = (bool) $async['require_payload'];
+                } else {
+                        $options['async'] = (bool) $async;
+                }
 
 		return $options;
 	}
@@ -590,6 +592,11 @@ class SimpleRMIClient
                                 if ($length > 0) {
                                         $payload = $this->connReadExact($length, true);
                                         if (!is_string($payload) || strlen($payload) < $length)
+                                                return ['line' => $line, 'code' => false];
+                                } else {
+                                        // Consume the trailing newline emitted after zero-length payloads
+                                        $trailing = $this->connReadExact(0, true);
+                                        if ($trailing === false)
                                                 return ['line' => $line, 'code' => false];
                                 }
 

@@ -143,6 +143,14 @@ if [ "$status" != "200" ] || [ "$decoded" != "JSON:MIXEDCASE" ]; then
   exit 1
 fi
 
+php_result=$(php "$ROOT_DIR/tests/integration/php_v2_client.php" 127.0.0.1 "$TEST_PORT" "$TOKEN" "$NAMESPACE")
+first_len=$(printf "%s" "$php_result" | sed -n 's/^first_len://p')
+second=$(printf "%s" "$php_result" | sed -n 's/^second://p')
+if [ "$first_len" != "0" ] || [ "$second" != "RAW:" ]; then
+  echo "PHP v2 zero-length payload handling failed" >&2
+  exit 1
+fi
+
 check_no_zombies
 
 # Proxy tests
