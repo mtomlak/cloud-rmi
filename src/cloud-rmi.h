@@ -33,6 +33,7 @@
 struct conn_state{
    int sock;
    int is_authenticated;
+   int protocol_version;
    char username[256];
 };
 
