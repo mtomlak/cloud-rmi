@@ -59,6 +59,23 @@ def wait_for_port(host: str, port: int, timeout: float) -> None:
     raise TimeoutError(f"Port {port} on {host} did not open within {timeout}s")
 
 
+def wait_for_unix_socket(path: str, timeout: float) -> None:
+    deadline = time.time() + timeout
+    socket_path = Path(path)
+    while time.time() < deadline:
+        if socket_path.exists():
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(1)
+                    sock.connect(str(socket_path))
+                return
+            except OSError:
+                time.sleep(0.1)
+                continue
+        time.sleep(0.1)
+    raise TimeoutError(f"Unix socket {path} did not open within {timeout}s")
+
+
 def snapshot_processes() -> set[int]:
     """
     Capture the current set of zombie PIDs for rmi-server and rmi-proxy.
@@ -118,12 +135,14 @@ class ProtocolSession:
         token: str,
         namespace: str,
         timeout: float = 5.0,
+        unix_socket: str | None = None,
     ) -> None:
         self.host = host
         self.port = port
         self.token = token
         self.namespace = namespace
         self.timeout = timeout
+        self.unix_socket = unix_socket
         self.sock: Optional[socket.socket] = None
         self.protocol_version = 1
         self.trace = WireTrace()
@@ -136,8 +155,13 @@ class ProtocolSession:
         self.close()
 
     def connect(self) -> None:
-        self.sock = socket.create_connection((self.host, self.port))
-        self.sock.settimeout(self.timeout)
+        if self.unix_socket:
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.settimeout(self.timeout)
+            self.sock.connect(self.unix_socket)
+        else:
+            self.sock = socket.create_connection((self.host, self.port))
+            self.sock.settimeout(self.timeout)
         banner_line = self._read_line()
         self.trace.record("recv", banner_line)
         status, message = parse_status(banner_line)
@@ -324,6 +348,9 @@ class IntegrationEnvironment:
     proxy_port: int
     token: str
     namespace: str
+    server_unix_socket: str | None = None
+    proxy_unix_socket: str | None = None
+    upstream_unix_socket: str | None = None
     verbose: bool = False
     logger: logging.Logger = LOG
     _server: Optional[ProcessHandle] = field(default=None, init=False)
@@ -379,13 +406,24 @@ class IntegrationEnvironment:
             "-t",
             self.token,
         ]
+        if self.server_unix_socket:
+            Path(self.server_unix_socket).parent.mkdir(parents=True, exist_ok=True)
+            command.extend(["-u", self.server_unix_socket])
         self.logger.debug("Starting server: %s", " ".join(command))
         self._server = launch_process("rmi-server", command, self.logger, self.verbose)
-        wait_for_port(self.server_host, self.server_port, 10)
+        if self.server_unix_socket:
+            wait_for_unix_socket(self.server_unix_socket, 10)
+        else:
+            wait_for_port(self.server_host, self.server_port, 10)
 
     def start_proxy(self) -> None:
         if self._proxy:
             return
+        upstream_target = (
+            f"unix:{self.upstream_unix_socket}"
+            if self.upstream_unix_socket
+            else f"{self.server_host}:{self.server_port}"
+        )
         command = [
             str(self.proxy_bin),
             "-c",
@@ -395,13 +433,19 @@ class IntegrationEnvironment:
             "-p",
             str(self.proxy_port),
             "-x",
-            f"{self.server_host}:{self.server_port}",
+            upstream_target,
             "-t",
             self.token,
         ]
+        if self.proxy_unix_socket:
+            Path(self.proxy_unix_socket).parent.mkdir(parents=True, exist_ok=True)
+            command.extend(["-u", self.proxy_unix_socket])
         self.logger.debug("Starting proxy: %s", " ".join(command))
         self._proxy = launch_process("rmi-proxy", command, self.logger, self.verbose)
-        wait_for_port(self.proxy_host, self.proxy_port, 10)
+        if self.proxy_unix_socket:
+            wait_for_unix_socket(self.proxy_unix_socket, 10)
+        else:
+            wait_for_port(self.proxy_host, self.proxy_port, 10)
 
     def stop_all(self) -> None:
         for handle in (self._proxy, self._server):
@@ -423,6 +467,7 @@ class IntegrationEnvironment:
             port=self.server_port,
             token=self.token,
             namespace=self.namespace,
+            unix_socket=self.server_unix_socket,
         )
 
     def proxy_session(self) -> ProtocolSession:
@@ -431,6 +476,7 @@ class IntegrationEnvironment:
             port=self.proxy_port,
             token=self.token,
             namespace=self.namespace,
+            unix_socket=self.proxy_unix_socket,
         )
 
 

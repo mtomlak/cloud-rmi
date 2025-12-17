@@ -40,6 +40,8 @@ void show_help(char *this_cmd)
    printf("\t-p sets port number (defaults to %d)\n", var_port);
    printf("\t-r executes raw RMI command\n");
    printf("\t-s sets server name (defaults to %s)\n", var_server_name);
+   printf("\t-u sets unix socket path (overrides TCP host/port, currently %s)\n",
+      var_unix_socket_path ? var_unix_socket_path : "OFF");
    printf("\t-t sets recovery authentication token\n");
    printf("\t-v enters verbose (debug) mode (currently %s)\n\n", 
       var_debug ? "ON" : "OFF");
@@ -87,7 +89,7 @@ int main(int argc, char *argv[])
    }
 
    // Overwrite some config variables
-   while((opt = getopt(argc, argv, "c:hp:r:s:t:v")) != -1) {
+   while((opt = getopt(argc, argv, "c:hp:r:s:t:u:v")) != -1) {
       switch(opt) {
          case 'c':
             read_config(optarg);
@@ -107,6 +109,10 @@ int main(int argc, char *argv[])
 
          case 's':
             var_server_name = strdup(optarg);
+            break;
+
+         case 'u':
+            var_unix_socket_path = strdup(optarg);
             break;
 
          case 't':
@@ -154,7 +160,7 @@ int main(int argc, char *argv[])
    }
    
    // Connect to the server
-   if (client_connect(var_server_name, var_port, &conn) < 0)
+   if (client_connect(var_server_name, var_port, var_unix_socket_path, &conn) < 0)
       die_err("Error: Failed to connect to the server");
 
    // Authenticate

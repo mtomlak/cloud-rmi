@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdint.h>
@@ -182,13 +183,15 @@ static int discard_bytes(int sock, size_t len)
  * 
  * @return int socket handle or -1 on failure
  */
-int client_connect(char *hostname, int port_num, struct rmi_client_conn *conn)
+int client_connect(char *hostname, int port_num, const char *unix_socket_path, struct rmi_client_conn *conn)
 {
    int sock, status_code;  // newsock
    struct sockaddr_in serv_addr;
+   struct sockaddr_un serv_addr_un;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
    char *message = malloc(sizeof(char) * (BUF_SZ + 1));
-   char *ip_addr;
+   char *ip_addr = NULL;
+   const int use_unix_socket = unix_socket_path && strlen(unix_socket_path);
 
    if (conn == NULL)
       return -1;
@@ -201,13 +204,8 @@ int client_connect(char *hostname, int port_num, struct rmi_client_conn *conn)
    bzero(response, BUF_SZ);
    bzero(message, BUF_SZ);
 
-   ip_addr = get_ip_addr(hostname);
-
-   if (ip_addr == NULL)
-      die_err("Failed to resolve server hostname");
-
    /* First call to socket() function */
-   sock = socket(AF_INET, SOCK_STREAM, 0);
+   sock = socket(use_unix_socket ? AF_UNIX : AF_INET, SOCK_STREAM, 0);
 
    if (sock < 0) {
       printf("Error: Failed to open socket");
@@ -217,30 +215,63 @@ int client_connect(char *hostname, int port_num, struct rmi_client_conn *conn)
       return -1;
    }
 
-   bzero((char *) &serv_addr, sizeof(serv_addr));
-
-   serv_addr.sin_family = AF_INET;
-   serv_addr.sin_port = htons(port_num);
-
-   // process the IP address
-   if(inet_pton(AF_INET, ip_addr, &serv_addr.sin_addr)<=0) {
-      printf("Error: inet_pton() failed\n");
-      free(response);
-      free(message);
-      close(sock);
-
-      return -1;
-    }
-
-   /* Now connect to the remote host */
-   if (connect(sock, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
-      printf("Error: connect() failed\n");
+   if (use_unix_socket && strlen(unix_socket_path) >= sizeof(serv_addr_un.sun_path)) {
+      printf("Error: Unix socket path too long\n");
       free(response);
       free(message);
       close(sock);
 
       return -1;
    }
+
+   if (use_unix_socket) {
+      bzero((char *) &serv_addr_un, sizeof(serv_addr_un));
+      serv_addr_un.sun_family = AF_UNIX;
+      strncpy(serv_addr_un.sun_path, unix_socket_path, sizeof(serv_addr_un.sun_path) - 1);
+   } else {
+      bzero((char *) &serv_addr, sizeof(serv_addr));
+
+      ip_addr = get_ip_addr(hostname);
+
+      if (ip_addr == NULL) {
+         printf("Failed to resolve server hostname\n");
+         free(response);
+         free(message);
+         close(sock);
+
+         return -1;
+      }
+
+      serv_addr.sin_family = AF_INET;
+      serv_addr.sin_port = htons(port_num);
+
+      // process the IP address
+      if(inet_pton(AF_INET, ip_addr, &serv_addr.sin_addr)<=0) {
+         printf("Error: inet_pton() failed\n");
+         free(response);
+         free(message);
+         free(ip_addr);
+         close(sock);
+
+         return -1;
+      }
+   }
+
+   /* Now connect to the remote host */
+   if (connect(
+         sock,
+         use_unix_socket ? (struct sockaddr *)&serv_addr_un : (struct sockaddr *) &serv_addr,
+         use_unix_socket ? sizeof(serv_addr_un) : sizeof(serv_addr)) < 0) {
+      printf("Error: connect() failed\n");
+      free(response);
+      free(message);
+      free(ip_addr);
+      close(sock);
+
+      return -1;
+   }
+
+   free(ip_addr);
 
    /* And read the banner */
    if (stream_readln(sock, response, BUF_SZ) < 0) {

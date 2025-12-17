@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from harness import IntegrationEnvironment, IntegrationRunner
-from test_cases import DIRECT_CASES, PROXY_CASES
+from test_cases import DIRECT_CASES, PROXY_CASES, UNIX_CASES
 
 
 def bootstrap_venv(venv_path: Path) -> None:
@@ -46,6 +46,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--proxy-port", type=int, default=19951, help="Port for the RMI proxy.")
     parser.add_argument("--token", default="testtoken", help="Auth token for test calls.")
     parser.add_argument("--namespace", default="Test\\Integration", help="Base namespace for test interfaces.")
+    parser.add_argument("--skip-unix", action="store_true", help="Skip unix socket coverage.")
+    parser.add_argument(
+        "--unix-server-socket",
+        default="/tmp/cloud-rmi-integration-server.sock",
+        help="Unix socket path for the test server.",
+    )
+    parser.add_argument(
+        "--unix-proxy-socket",
+        default="/tmp/cloud-rmi-integration-proxy.sock",
+        help="Unix socket path for the test proxy.",
+    )
+    parser.add_argument(
+        "--unix-upstream-socket",
+        help="Unix socket path for the proxy upstream. Defaults to the server socket.",
+    )
     return parser.parse_args(remaining)
 
 
@@ -60,30 +75,73 @@ def main() -> int:
     logging.basicConfig(level=log_level, format="%(asctime)s %(levelname)s %(message)s")
 
     root = Path(__file__).resolve().parents[2]
-    env = IntegrationEnvironment(
-        root=root,
-        server_port=args.server_port,
-        proxy_port=args.proxy_port,
-        token=args.token,
-        namespace=args.namespace,
-        verbose=args.verbose > 0,
-    )
+    suites: list[tuple[IntegrationEnvironment, list]] = []
 
-    cases = DIRECT_CASES + PROXY_CASES
+    base_cases = DIRECT_CASES + PROXY_CASES
     if args.filter:
-        cases = [case for case in cases if args.filter in case.name]
+        base_cases = [case for case in base_cases if args.filter in case.name]
 
-    if not cases:
+    if base_cases:
+        suites.append(
+            (
+                IntegrationEnvironment(
+                    root=root,
+                    server_port=args.server_port,
+                    proxy_port=args.proxy_port,
+                    token=args.token,
+                    namespace=args.namespace,
+                    verbose=args.verbose > 0,
+                ),
+                base_cases,
+            )
+        )
+
+    unix_cases = UNIX_CASES
+    if args.filter:
+        unix_cases = [case for case in unix_cases if args.filter in case.name]
+
+    if not args.skip_unix and unix_cases:
+        server_socket = Path(args.unix_server_socket)
+        proxy_socket = Path(args.unix_proxy_socket)
+        upstream_socket = Path(args.unix_upstream_socket) if args.unix_upstream_socket else server_socket
+
+        for sock in (server_socket, proxy_socket, upstream_socket):
+            sock.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                sock.unlink()
+            except FileNotFoundError:
+                pass
+
+        suites.append(
+            (
+                IntegrationEnvironment(
+                    root=root,
+                    server_port=args.server_port,
+                    proxy_port=args.proxy_port,
+                    token=args.token,
+                    namespace=args.namespace,
+                    server_unix_socket=str(server_socket),
+                    proxy_unix_socket=str(proxy_socket),
+                    upstream_unix_socket=str(upstream_socket),
+                    verbose=args.verbose > 0,
+                ),
+                unix_cases,
+            )
+        )
+
+    if not suites:
         print("No tests matched the provided filter.")
         return 1
 
-    runner = IntegrationRunner(env)
-    try:
-        results = runner.run(cases, verbose=args.verbose > 0)
-    except Exception as exc:  # pragma: no cover - integration only
-        logging.exception("Integration harness failed")
-        print(f"Integration harness failed: {exc}")
-        return 1
+    results = []
+    for env, cases in suites:
+        runner = IntegrationRunner(env)
+        try:
+            results.extend(runner.run(cases, verbose=args.verbose > 0))
+        except Exception as exc:  # pragma: no cover - integration only
+            logging.exception("Integration harness failed")
+            print(f"Integration harness failed: {exc}")
+            return 1
 
     failures = [result for result in results if not result.passed]
     if failures:

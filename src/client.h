@@ -12,7 +12,7 @@ struct rmi_client_conn {
    int protocol_version;
 };
 
-int client_connect(char *ip_addr, int port_num, struct rmi_client_conn *conn);
+int client_connect(char *ip_addr, int port_num, const char *unix_socket_path, struct rmi_client_conn *conn);
 void client_disconnect(struct rmi_client_conn *conn);
 int client_parse_status_code(char *response, int *status_code, char *data);
 int client_auth_by_token(struct rmi_client_conn *conn, char *token);
