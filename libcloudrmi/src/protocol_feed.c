@@ -120,6 +120,18 @@ void rmi_protocol_reset(rmi_protocol_ctx_t *ctx)
     reset_pending_call(ctx);
 }
 
+int rmi_protocol_set_version(rmi_protocol_ctx_t *ctx, int version)
+{
+    if (ctx == NULL)
+        return 0;
+
+    if (version < 1 || version > RMI_MAX_PROTOCOL_VERSION)
+        return 0;
+
+    ctx->protocol_version = version;
+    return 1;
+}
+
 /*
  * Overflow policy:
  *

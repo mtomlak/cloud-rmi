@@ -207,3 +207,9 @@ Source: `src/proxy.c`
   the normalized form when asserting capabilities.
 - Handler stdout is trimmed of trailing newlines before framing; binary payload
   responses preserve raw bytes without trimming.
+- Unix domain socket listeners can opt into trusted transport with
+  `unix_socket_skip_auth = On`; when enabled the server marks the connection as
+  authenticated immediately without changing protocol semantics.
+- Unix socket transports always run in protocol v2 state and reject protocol
+  downgrades below v2; TCP listeners retain the legacy default of v1 unless
+  explicitly upgraded.

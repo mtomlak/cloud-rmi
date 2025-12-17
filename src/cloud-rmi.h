@@ -34,6 +34,7 @@ struct conn_state{
    int sock;
    int is_authenticated;
    int protocol_version;
+   int is_unix_socket;
    char username[256];
 };
 
@@ -47,6 +48,7 @@ struct server_iface_entry{
 #ifdef ENABLE_LINUX_FEATURES
 struct child_proc_state{
    int sock;
+   int is_unix_socket;
    void * stack;
    int stack_size;
 };
@@ -100,7 +102,7 @@ struct helper_proc_state *new_helper_state(void *stack, int stack_size);
 void server_send_stats(int sock);
 void child_exit_self(void *stack, int stack_size);
 // protocol.c
-void handle_connection(int sock);
+void handle_connection(int sock, int is_unix_socket);
 // handle_call.c
 int handle_call_cmd(
    char *iface,
