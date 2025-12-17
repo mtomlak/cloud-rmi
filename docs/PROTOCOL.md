@@ -1,9 +1,11 @@
-
 # Cloud-RMI Protocol — Unified Specification (v1 + v2)
 
 Status: Draft (intended long‑term stable reference)
 Scope: Protocol framing, parsing, state machine, negotiation, extensibility
 Out of scope: Business logic, scheduling, language bindings, transport internals
+
+Use `docs/PROTOCOL_IMPLEMENTATION.md` for the authoritative, code-aligned
+command, error, and capability reference.
 
 ---
 
@@ -74,18 +76,15 @@ All semantics below apply inside the **COMMAND LOOP**.
 Server sends a banner:
 
 ```
-220 <context> Server Ready [EXT <capability-list>]
+220 <context> Server Ready EXT PROTO=2[,<capability-list>]
 ```
 
-Capabilities are **purely informational** until explicitly acted upon.
-Examples:
-
-- `PROTO=2`
-- `PROXY`
-- `STATS`
-- vendor‑specific extensions
-
-Servers MUST advertise any non‑standard command or behavior as a capability.
+- `PROTO=2` announces the maximum version; client remains on v1 until it sends
+  `PROTO <version>`.
+- Capability tokens are uppercase words (`PAYLOAD`, `PROXY`, `STATS`, vendor
+  extensions) separated by commas in the banner and normalized to spaces in
+  responses.
+- Servers MUST advertise any non‑standard command or behavior as a capability.
 
 ### 4.3 Explicit Upgrade
 
@@ -113,22 +112,28 @@ Rules:
 
 ### 5.1 Line Framing
 
-- `MAX_LINE = 8192` bytes
-- Each command line MUST contain `\n` within 8191 bytes
+- `MAX_LINE = 10240` bytes (derived from `RMI_BUF_SZ`)
+- Each command line MUST contain `\n` within 10239 bytes
 - Otherwise:
 
 ```
 400 Bad Request
 ```
 
-### 5.2 Payload Policy Thresholds (Non‑normative)
+### 5.2 Buffer Ceilings
+
+- Total buffered data MUST NOT exceed `RMI_MAX_BUFFER = RMI_BUF_SZ * 8`
+- Overflow resets protocol state and produces `400 Bad Request`
+
+### 5.3 Payload Policy Thresholds (Non‑normative)
 
 Typical policy:
 
 - Inline base64 payloads should avoid exceeding ~4k
 - Larger payloads SHOULD use v2 payload framing
 
-This is a **policy decision**, not a protocol rule.
+This is a **policy decision**, not a protocol rule. See the implementation
+companion for exact buffering and overflow behaviors enforced by the parser.
 
 ---
 
@@ -150,7 +155,7 @@ State transitions are deterministic and protocol‑version aware.
 
 ---
 
-## 7. Commands Overview
+## 7. Commands Overview (Summary)
 
 Commands that NEVER accept payload:
 
@@ -168,13 +173,13 @@ SERVER
 PROXY
 ```
 
-If payload framing is attempted with these commands → protocol error.
-
-Servers MAY implement additional commands but MUST advertise them via banner capabilities.
+Servers MAY implement additional commands but MUST advertise them via banner
+capabilities. Detailed semantics, authentication rules, and status codes live
+in `docs/PROTOCOL_IMPLEMENTATION.md`.
 
 ---
 
-## 8. CALL Command
+## 8. CALL Command (Summary)
 
 ### 8.1 Protocol v1 (Legacy — Always Supported)
 
@@ -182,68 +187,38 @@ Servers MAY implement additional commands but MUST advertise them via banner cap
 CALL <iface> <method> <base64-args>
 ```
 
-Characteristics:
-
-- Exactly 3 arguments
-- Inline payload only
-- Immediate execution
-- Fully supported indefinitely
-
----
-
 ### 8.2 Protocol v2 (Extended Framing)
 
-Protocol v2 introduces **explicit payload framing**, without changing v1 semantics.
-
-#### Inline form (unchanged)
-
-```
-CALL <iface> <method> <base64-args>
-```
-
-#### Payload form (v2 only)
+Inline form remains valid. Payload form adds explicit framing:
 
 ```
 CALL <iface> <method> <encoding> <length>
 <raw payload bytes>
 ```
 
-Where:
-
-- `<encoding>` is symbolic (`RAW`, `PHP`, `JSON`, etc.)
-- `<length>` is decimal byte count
-- Payload follows immediately
-- No terminator
-- Binary‑safe
-
----
+Where `<length>` is decimal byte count and `<encoding>` is a symbolic token
+(`RAW`, `PHP`, `JSON`, etc.).
 
 ### 8.3 Disambiguation Rules
 
-Parsing is deterministic:
-
 - 3 arguments → inline form
-- 4 arguments → payload form
-
-Encoding tokens MUST be from a fixed identifier alphabet and MUST NOT collide with base64.
-
----
+- 4 arguments → payload form (v2 only)
+- Encoding tokens MUST be from a fixed identifier alphabet and MUST NOT collide
+  with base64
 
 ### 8.4 Payload Read Semantics
 
 - Server reads **exactly `<length>` bytes**
-- Payload may contain arbitrary binary data
+- Payload may contain arbitrary binary data (including `\0`)
 - Zero‑length payload is valid
 - Server MUST NOT read past `<length>`
 
-Errors:
-
-- Truncated payload → transport error, connection abort
-- Command before payload completion → protocol error
+See the implementation companion for handler argv contract, error mapping, and
+response formatting rules derived from the C server and proxy.
 
 ---
 
-## 9. CALL Execution Semantics
+## 9. CALL Execution Semantics (Summary)
 
 During execution:
 
@@ -259,7 +234,7 @@ Rules:
 
 ---
 
-## 10. Responses
+## 10. Responses (Summary)
 
 ### 10.1 Legacy Inline Response
 
@@ -283,36 +258,25 @@ or
 ```
 
 Rules:
-
 - Server MUST NOT emit payload responses to v1 clients
 - Server MUST NOT downgrade to inline if MAX_LINE would be exceeded
+- Payload response framing must exactly match the announced length
 
 ---
 
-## 11. Error Reporting Model
+## 11. Error Reporting Model (Summary)
 
-### 11.1 Transport / Framing Errors
+- Transport / framing errors use explicit status codes (`400`, `401`, `500`)
+- Semantic errors are reported via structured error payloads
+- Parser errors return `RMI_ERROR_BAD_REQUEST` or `RMI_ERROR_BAD_ARGS`
+- Overflow resets parser state to avoid desynchronization
 
-Examples:
-
-- `RMI_E_AGAIN`
-- `RMI_E_OVERFLOW`
-- `RMI_E_ERR`
-
-### 11.2 Semantic Errors
-
-Reported via structured error payloads:
-
-- `RMI_ERROR_BAD_REQUEST`
-- `RMI_ERROR_BAD_ARGS`
-- `RMI_ERROR_UNAUTHORIZED`
-- etc.
-
-A syntactically valid exchange may still carry a semantic error.
+Full error code mapping and recovery expectations are described in
+`docs/PROTOCOL_IMPLEMENTATION.md`.
 
 ---
 
-## 12. Handler argv Contract (Normative)
+## 12. Handler argv Contract (Summary)
 
 Handlers MUST receive stable argv layout:
 
@@ -323,25 +287,22 @@ argv[2] = encoding (PLAIN for inline)
 argv[3] = args (decoded inline args, empty or "-" for payload)
 ```
 
-Rules:
-
-- Payload bytes are always read from stdin
-- Handlers MUST treat stdin as authoritative for payload framing
+Payload bytes are always read from stdin. See the companion document for the
+exact lifecycle of payload pipes, exit-code handling, and newline trimming.
 
 ---
 
-## 13. Proxy Semantics
+## 13. Proxy Semantics (Summary)
 
 - Proxy is a full protocol endpoint on both sides
 - Maintains independent protocol states:
   - client ↔ proxy
   - proxy ↔ backend
-
-Rules:
-
-- Proxy MAY translate inline ↔ payload
+- Proxy MAY translate inline ↔ payload when bridging v1/v2 clients
 - Proxy MUST fully consume payload before forwarding
-- If backend cannot represent request → `400`
+
+Detailed pooling, keepalive, and response adaptation rules are documented in the
+implementation companion.
 
 ---
 
@@ -353,7 +314,8 @@ Rules:
   - Remain version‑scoped
   - Not alter base protocol semantics
 
-Asynchronous execution models (e.g. forked execution) are **server‑internal behavior** and outside protocol scope.
+Asynchronous execution models (e.g. forked execution) are **server‑internal
+behavior** and outside protocol scope.
 
 ---
 
@@ -373,4 +335,5 @@ Asynchronous execution models (e.g. forked execution) are **server‑internal be
 - Upgrade is explicit and deterministic
 - Protocol remains simple, evolvable, and proxy‑safe
 
-This document is intended to remain valid for the next decade.
+This document is intended to remain valid for the next decade. See
+`docs/PROTOCOL_IMPLEMENTATION.md` for code-level details and error mappings.
