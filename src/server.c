@@ -30,6 +30,7 @@
 static int server_socket_fd = -1;
 static char server_socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)] = {0};
 static volatile sig_atomic_t server_should_run = 1;
+static int server_use_unix_socket = 0;
 
 static void cleanup_listen_socket()
 {
@@ -302,7 +303,7 @@ int handle_cloned_proc(void *arg)
    }
 
    if (state.sock >= 0) {
-      handle_connection(state.sock); 
+      handle_connection(state.sock, state.is_unix_socket); 
       close(state.sock); 
    }
 
@@ -331,7 +332,7 @@ int handle_cloned_proc(void *arg)
          }
          state.sock = worker_state->next_sock;
          server_remove_spare_child(worker_state->pid);
-         handle_connection(state.sock);
+         handle_connection(state.sock, state.is_unix_socket);
          close(state.sock);
       }
 
@@ -367,11 +368,12 @@ int handle_cloned_proc(void *arg)
  * Create new child_proc_state struct in memory until it's free()-ed
  * 
  */
-struct child_proc_state *new_child_state(int sock, void *stack, int stack_size)
+struct child_proc_state *new_child_state(int sock, int is_unix_socket, void *stack, int stack_size)
 {
    struct child_proc_state *state = malloc(sizeof(struct child_proc_state));
 
    state->sock = sock;
+   state->is_unix_socket = is_unix_socket;
    state->stack = stack;
    state->stack_size = stack_size;
 
@@ -388,11 +390,11 @@ struct child_proc_state *new_child_state(int sock, void *stack, int stack_size)
  * @param  server_sock Server socket (the socket created with bind())
  * @return             0 on failure, child pid on success
  */
-int create_client_handler_proc(int sock, int server_sock)
+int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
 {
    int pid = 0;
    char *stack = malloc(CHILD_STACK_SZ + 1);
-   struct child_proc_state *child_state = new_child_state(sock, stack, CHILD_STACK_SZ);
+   struct child_proc_state *child_state = new_child_state(sock, is_unix_socket, stack, CHILD_STACK_SZ);
 
    if (var_debug)
       printf("Requested new child for socket #%i\n", sock);
@@ -457,7 +459,7 @@ void create_spare_children_proc(int min_spare_children)
    int i;
 
    for(i = server_spare_children.count; i < min_spare_children; i++)
-      create_client_handler_proc(-1, -1);
+      create_client_handler_proc(-1, -1, server_use_unix_socket);
 
 }
 
@@ -586,7 +588,7 @@ int create_worker_manager_proc()
  * @param  server_sock Server socket (the socket created with bind())
  * @return             1 on success or 0 on failure
  */
-int create_client_handler_proc(int sock, int server_sock)
+int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
 {
    int pid = 0;
 
@@ -619,7 +621,7 @@ int create_client_handler_proc(int sock, int server_sock)
          printf("+ Started new child with PID %i\n", (int) getpid());
 
       close(server_sock); // Parent has it's own copy now, close it
-      handle_connection(sock);
+      handle_connection(sock, is_unix_socket);
 
       if (var_debug)
          printf("- Shutting down child with PID %i\n", (int) getpid());
@@ -651,6 +653,7 @@ int server_start(int port_num, const char *unix_socket_path)
    server_should_run = 1;
    server_socket_fd = -1;
    server_socket_path[0] = '\0';
+   server_use_unix_socket = use_unix_socket;
 
 #ifdef REUSE_WORKER_PROC
    /* Get ready some spare children */
@@ -728,7 +731,7 @@ int server_start(int port_num, const char *unix_socket_path)
       }
 
       /* Create new child proccess to handle new connection */
-      create_client_handler_proc(newsockfd, sockfd);
+      create_client_handler_proc(newsockfd, sockfd, server_use_unix_socket);
       //   die_err("Error: Failed creating new child proccess");
       
 #ifdef PROXY_SUPPORT
