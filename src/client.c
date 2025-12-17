@@ -445,10 +445,12 @@ int client_call_remote_method_payload(
    size_t response_len = 0;
    int has_payload_response = 0;
    char response_encoding[BUF_SZ + 1];
+   char response_keyword[BUF_SZ + 1];
    char trailing = '\0';
 
    bzero(response, BUF_SZ);
    bzero(response_encoding, BUF_SZ);
+   bzero(response_keyword, BUF_SZ);
 
    if (!payload_supported(conn)) {
       snprintf(response_payload, BUF_SZ, "PAYLOAD requires PROTO 2 negotiation with PAYLOAD capability");
@@ -475,7 +477,8 @@ int client_call_remote_method_payload(
    }
 
    if ((status_code == 200 || status_code == 500) &&
-       sscanf(response_payload, "%s %zu", response_encoding, &response_len) == 2) {
+       sscanf(response_payload, "%s %s %zu", response_keyword, response_encoding, &response_len) == 3 &&
+       strcmp(response_keyword, "PAYLOAD") == 0) {
       has_payload_response = 1;
    }
 

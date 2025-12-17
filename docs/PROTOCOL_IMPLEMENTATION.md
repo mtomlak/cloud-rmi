@@ -114,9 +114,9 @@ Sources: `src/handle_call.c`, `src/server.c`
     stdin streaming without blocking.
   - Trailing `\n`/`\r` are stripped from handler output before framing.
 - **Response framing**:
-  - If payload was provided **and** client negotiated v2: `200 <encoding> <len>`
-    followed by raw bytes and a terminal newline. Encoding defaults to request
-    encoding or `PLAIN` when empty.
+  - If payload was provided **and** client negotiated v2: `200 PAYLOAD
+    <encoding> <len>` followed by raw bytes and a terminal newline. Encoding
+    defaults to request encoding or `PLAIN` when empty.
   - Otherwise: base64-encodes stdout and responds `200 <base64>` (no encoding
     token prefix).
 - **Error responses**:
@@ -162,9 +162,10 @@ Source: `src/proxy.c`
     payload bytes.
   - Inline requests: send legacy `CALL iface method <base64-args>`.
 - **Response adaptation**:
-  - Payload responses (`status 200/500` with `<encoding> <len>`) are streamed
-    directly when the downstream client is v2. For v1 clients, the proxy
-    base64-encodes the payload and responds inline (`<status> <base64>`).
+  - Payload responses (`status 200/500` with `PAYLOAD <encoding> <len>`) are
+    streamed directly when the downstream client is v2. For v1 clients, the
+    proxy base64-encodes the payload and responds inline (`<status>
+    <base64>`).
   - Inline responses are passed through unchanged.
 - **Resilience**:
   - Missing/timeout responses (status `0` or `408`) trigger a reconnect and

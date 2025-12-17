@@ -51,6 +51,7 @@ def payload_uppercase(env: IntegrationEnvironment) -> TestResult:
             decode_output=True,
         )
     _require(result.status == 200, f"expected 200 got {result.status}")
+    _require(result.message.startswith("PAYLOAD "), "payload response missing PAYLOAD keyword")
     _require(result.decoded == "JSON:MIXEDCASE", f"unexpected payload content: {result.decoded}")
     return TestResult(name="payload-uppercase", passed=True, traces=[result.trace])
 
@@ -83,6 +84,7 @@ def connection_reuse(env: IntegrationEnvironment) -> TestResult:
             decode_output=True,
         )
     _require(second.status == 200, f"expected 200 got {second.status}")
+    _require(second.message.startswith("PAYLOAD "), "payload response missing PAYLOAD keyword")
     _require(second.decoded == "RAW:combo:combo", f"unexpected combo payload: {second.decoded}")
     return TestResult(name="connection-reuse", passed=True, traces=[first.trace])
 

@@ -26,6 +26,7 @@ def proxy_payload_raw(env: IntegrationEnvironment) -> TestResult:
             decode_output=True,
         )
     _require(result.status == 200, f"expected 200 got {result.status}")
+    _require(result.message.startswith("PAYLOAD "), "payload response missing PAYLOAD keyword")
     _require(result.decoded == "RAW:PROXYPAY", f"unexpected payload response: {result.decoded}")
     return TestResult(name="proxy-payload-raw", passed=True, traces=[result.trace])
 
@@ -65,6 +66,7 @@ def proxy_multi_call(env: IntegrationEnvironment) -> TestResult:
             decode_output=True,
         )
     _require(second.status == 200, f"expected 200 got {second.status}")
+    _require(second.message.startswith("PAYLOAD "), "payload response missing PAYLOAD keyword")
     _require(second.decoded == "RAW:abc:abc", f"unexpected payload repeat: {second.decoded}")
     return TestResult(name="proxy-multi-call", passed=True, traces=[first.trace])
 
