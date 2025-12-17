@@ -349,8 +349,10 @@ int handle_shell_call(
       stream_writeln(state->sock, "500 Error: %s (%d)", output, exit_code);
 
    } else {
-      if (state->protocol_version >= 2) {
-         stream_writeln(state->sock, "200 PLAIN %zu", output_len);
+      if (payload != NULL && state->protocol_version >= 2) {
+         const char *response_enc = (encoding != NULL && encoding[0] != '\0') ? encoding : "PLAIN";
+
+         stream_writeln(state->sock, "200 %s %zu", response_enc, output_len);
 
          if (output_len > 0) {
             ssize_t written = write(state->sock, output, output_len);

@@ -438,6 +438,7 @@ int proxy_pass_call_cmd_ex(
    struct proxy_conn *conn;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
    char *message = malloc(sizeof(char) * (BUF_SZ + 1));
+   char *payload_response = NULL;
 
    if (response == NULL || message == NULL) {
       free(response);
@@ -510,12 +511,87 @@ int proxy_pass_call_cmd_ex(
       strncat(message, response, remaining);
    }
 
-   stream_writeln(client_conn->sock, "%i %s", status_code, message);
+   char response_enc[BUF_SZ + 1];
+   unsigned long long response_len = 0;
+   int is_payload_response = 0;
+
+   bzero(response_enc, sizeof(response_enc));
+
+   if (status_code == 200 || status_code == 500) {
+      if (sscanf(message, "%s %llu", response_enc, &response_len) == 2 && response_len <= SIZE_MAX) {
+         is_payload_response = 1;
+         payload_response = malloc((size_t)response_len + 1);
+
+         if (payload_response == NULL) {
+            ret = 0;
+            goto cleanup;
+         }
+
+         size_t received = 0;
+         while (received < (size_t)response_len) {
+            ssize_t n = read(conn->client.sock, payload_response + received, (size_t)response_len - received);
+
+            if (n < 0) {
+               ret = 0;
+               goto cleanup;
+            }
+
+            if (n == 0)
+               break;
+
+            received += (size_t)n;
+         }
+
+         if (received < (size_t)response_len) {
+            ret = 0;
+            goto cleanup;
+         }
+
+         payload_response[(size_t)response_len] = '\0';
+
+         // Consume trailing newline if present
+         char trailing;
+         if (read(conn->client.sock, &trailing, 1) < 0) {
+            ret = 0;
+            goto cleanup;
+         }
+      }
+   }
+
+   if (is_payload_response && payload_response != NULL) {
+      if (client_conn->protocol_version >= 2) {
+         stream_writeln(client_conn->sock, "%i %s %llu", status_code, response_enc, response_len);
+
+         if (response_len > 0)
+            proxy_write_all(client_conn->sock, (const uint8_t *)payload_response, (size_t)response_len);
+
+         stream_write(client_conn->sock, "\n");
+      } else {
+         size_t encoded_len = (((size_t)response_len + 2) / 3) * 4 + 1;
+         char *encoded = malloc(encoded_len);
+
+         if (encoded == NULL) {
+            ret = 0;
+            goto cleanup;
+         }
+
+         if (response_len > 0)
+            to64frombits((unsigned char *)encoded, (const unsigned char *)payload_response, (int)response_len);
+         else
+            encoded[0] = '\0';
+
+         stream_writeln(client_conn->sock, "%i %s", status_code, encoded);
+         free(encoded);
+      }
+   } else {
+      stream_writeln(client_conn->sock, "%i %s", status_code, message);
+   }
 
 cleanup:
    proxy_set_conn_free(conn);
    free(response);
    free(message);
+   free(payload_response);
 
    return ret;
 }
