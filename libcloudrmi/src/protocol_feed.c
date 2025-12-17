@@ -6,8 +6,6 @@
 
 #include "protocol_line.h"
 
-#define RMI_MAX_LINE RMI_BUF_SZ
-#define RMI_MAX_BUFFER (RMI_BUF_SZ * 8)
 #define RMI_MAX_PROTOCOL_VERSION 2
 
 struct rmi_protocol_ctx {

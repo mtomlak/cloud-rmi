@@ -68,6 +68,115 @@ static void normalize_capability_tokens(const char *ext, char *buffer, size_t bu
    buffer[len] = '\0';
 }
 
+static int payload_supported(const struct rmi_client_conn *conn)
+{
+   if (conn == NULL)
+      return 0;
+
+   return conn->protocol_version >= 2 && conn->capabilities_known && (conn->capabilities & RMI_CAP_PAYLOAD);
+}
+
+static int base64_encoded_length_no_nul(size_t input_len, size_t *out_len)
+{
+   size_t rounded = 0;
+
+   if (out_len == NULL)
+      return 0;
+
+   if (__builtin_add_overflow(input_len, (size_t)2, &rounded))
+      return 0;
+
+   rounded /= 3;
+
+   if (__builtin_mul_overflow(rounded, (size_t)4, &rounded))
+      return 0;
+
+   *out_len = rounded;
+   return 1;
+}
+
+static int compute_inline_call_length(const char *iface, const char *method, size_t encoded_arg_len, size_t *out_len)
+{
+   size_t total = 5; // "CALL "
+
+   if (iface == NULL || method == NULL || out_len == NULL)
+      return 0;
+
+   if (__builtin_add_overflow(total, strlen(iface), &total))
+      return 0;
+
+   if (__builtin_add_overflow(total, (size_t)1, &total))
+      return 0;
+
+   if (__builtin_add_overflow(total, strlen(method), &total))
+      return 0;
+
+   if (__builtin_add_overflow(total, (size_t)1, &total))
+      return 0;
+
+   if (__builtin_add_overflow(total, encoded_arg_len, &total))
+      return 0;
+
+   *out_len = total;
+   return 1;
+}
+
+static int read_all(int sock, char *buf, size_t len)
+{
+   size_t offset = 0;
+
+   if (len == 0)
+      return 1;
+
+   while (offset < len) {
+      ssize_t n = read(sock, buf + offset, len - offset);
+
+      if (n <= 0)
+         return 0;
+
+      offset += (size_t)n;
+   }
+
+   return 1;
+}
+
+static int write_all(int sock, const uint8_t *buf, size_t len)
+{
+   size_t offset = 0;
+
+   if (len == 0)
+      return 1;
+
+   while (offset < len) {
+      ssize_t n = write(sock, buf + offset, len - offset);
+
+      if (n <= 0)
+         return 0;
+
+      offset += (size_t)n;
+   }
+
+   return 1;
+}
+
+static int discard_bytes(int sock, size_t len)
+{
+   char buf[256];
+   size_t remaining = len;
+
+   while (remaining > 0) {
+      size_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
+      ssize_t n = read(sock, buf, chunk);
+
+      if (n <= 0)
+         return 0;
+
+      remaining -= (size_t)n;
+   }
+
+   return 1;
+}
+
 /**
  * Starts client connection
  * 
@@ -333,17 +442,16 @@ int client_call_remote_method_payload(
    int status_code = 0;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
    const char *encoding_value = encoding ? encoding : "BLOB";
+   size_t response_len = 0;
+   int has_payload_response = 0;
+   char response_encoding[BUF_SZ + 1];
+   char trailing = '\0';
 
    bzero(response, BUF_SZ);
+   bzero(response_encoding, BUF_SZ);
 
-   if (conn->protocol_version < 2) {
-      snprintf(response_payload, BUF_SZ, "PAYLOAD requires PROTO 2 negotiation");
-      status_code = 505;
-      goto done;
-   }
-
-   if (!conn->capabilities_known || !(conn->capabilities & RMI_CAP_PAYLOAD)) {
-      snprintf(response_payload, BUF_SZ, "PAYLOAD not supported by server");
+   if (!payload_supported(conn)) {
+      snprintf(response_payload, BUF_SZ, "PAYLOAD requires PROTO 2 negotiation with PAYLOAD capability");
       status_code = 505;
       goto done;
    }
@@ -354,7 +462,7 @@ int client_call_remote_method_payload(
    if (stream_writeln(conn->sock, "PAYLOAD %s %zu", encoding_value, payload_len) < 0)
       goto done;
 
-   if (payload_len > 0 && stream_write(conn->sock, (char *)payload, (int)payload_len) < 0)
+   if (!write_all(conn->sock, payload, payload_len))
       goto done;
 
    if (stream_readln(conn->sock, response, BUF_SZ) < 0)
@@ -363,6 +471,79 @@ int client_call_remote_method_payload(
    if (!client_parse_status_code(response, &status_code, response_payload)) {
       printf("Error: Cannot parse command response: %s\n", response);
       status_code = 505;
+      goto done;
+   }
+
+   if ((status_code == 200 || status_code == 500) &&
+       sscanf(response_payload, "%s %zu", response_encoding, &response_len) == 2) {
+      has_payload_response = 1;
+   }
+
+   if (has_payload_response) {
+      if (response_len > RMI_MAX_BUFFER) {
+         snprintf(response_payload, BUF_SZ, "Payload response exceeds client limit");
+         status_code = 505;
+         discard_bytes(conn->sock, response_len);
+         read(conn->sock, &trailing, 1);
+         goto done;
+      }
+
+      char *payload_buf = malloc(response_len > 0 ? response_len : 1);
+
+      if (payload_buf == NULL) {
+         snprintf(response_payload, BUF_SZ, "Error allocating payload buffer");
+         status_code = 505;
+         goto done;
+      }
+
+      if (!read_all(conn->sock, payload_buf, response_len)) {
+         snprintf(response_payload, BUF_SZ, "Error reading payload response");
+         free(payload_buf);
+         status_code = 505;
+         goto done;
+      }
+
+      read(conn->sock, &trailing, 1);
+
+      size_t encoded_len;
+      if (!base64_encoded_length_no_nul(response_len, &encoded_len)) {
+         snprintf(response_payload, BUF_SZ, "Error preparing payload response");
+         free(payload_buf);
+         status_code = 505;
+         goto done;
+      }
+
+      size_t required_len = strlen(response_encoding) + 1 + encoded_len;
+
+      if (required_len + 1 > (size_t)BUF_SZ) {
+         snprintf(response_payload, BUF_SZ, "Payload response too large for buffer");
+         free(payload_buf);
+         status_code = 505;
+         goto done;
+      }
+
+      char *encoded_payload = malloc(encoded_len + 1);
+
+      if (encoded_payload == NULL) {
+         snprintf(response_payload, BUF_SZ, "Error allocating encoded payload buffer");
+         free(payload_buf);
+         status_code = 505;
+         goto done;
+      }
+
+      if (response_len > 0)
+         to64frombits((unsigned char *)encoded_payload, (const unsigned char *)payload_buf, (int)response_len);
+      else
+         encoded_payload[0] = '\0';
+
+      size_t prefix_len = strlen(response_encoding);
+
+      memcpy(response_payload, response_encoding, prefix_len);
+      response_payload[prefix_len] = ':';
+      memcpy(response_payload + prefix_len + 1, encoded_payload, encoded_len + 1);
+
+      free(encoded_payload);
+      free(payload_buf);
    }
 
 done:
@@ -394,21 +575,71 @@ int client_call_remote_method(struct rmi_client_conn *conn, char *iface, char *m
 {
    int ret = 1;
    char *payload = malloc(sizeof(char) * (BUF_SZ + 1));
-   char *enc_args = malloc(sizeof(char) * (BUF_SZ + 1));
+   char *enc_args = NULL;
+   size_t args_len = strlen(args);
+   size_t encoded_len = 0;
+   size_t inline_line_len = 0;
+   int use_payload = 0;
+   int payload_available = payload_supported(conn);
+
+   if (payload == NULL) {
+      return 0;
+   }
 
    bzero(payload, BUF_SZ);
-   bzero(enc_args, BUF_SZ);
 
-   // Encode arguments
-   to64frombits(enc_args, args, strlen(args));
+   if (!base64_encoded_length_no_nul(args_len, &encoded_len)) {
+      snprintf(result, BUF_SZ, "Error preparing encoded arguments");
+      free(payload);
+      return 0;
+   }
 
-   if (client_call_remote_method_raw(conn, iface, method, enc_args, payload) == 200) {
-      if (strlen(payload))
-         ret = decode_payload(payload, result);
+   if (!compute_inline_call_length(iface, method, encoded_len, &inline_line_len)) {
+      snprintf(result, BUF_SZ, "Error preparing CALL line");
+      free(payload);
+      return 0;
+   }
 
+   if (args_len > RMI_INLINE_PAYLOAD_THRESHOLD && payload_available)
+      use_payload = 1;
+
+   if (!use_payload && inline_line_len >= RMI_MAX_LINE) {
+      if (payload_available) {
+         use_payload = 1;
+      } else {
+         snprintf(result, BUF_SZ, "Payload required for %zu byte CALL", args_len);
+         free(payload);
+         return 0;
+      }
+   }
+
+   if (!use_payload) {
+      enc_args = malloc(encoded_len + 1);
+
+      if (enc_args == NULL) {
+         free(payload);
+         return 0;
+      }
+
+      bzero(enc_args, encoded_len + 1);
+      to64frombits((unsigned char *)enc_args, (const unsigned char *)args, args_len);
+
+      if (client_call_remote_method_raw(conn, iface, method, enc_args, payload) == 200) {
+         if (strlen(payload))
+            ret = decode_payload(payload, result);
+
+      } else {
+         sprintf(result, "%s", payload);
+         ret = 0;
+      }
    } else {
-      sprintf(result, "%s", payload);
-      ret = 0;
+      if (client_call_remote_method_payload(conn, iface, method, "PLAIN", (const uint8_t *)args, args_len, payload) == 200) {
+         if (strlen(payload))
+            ret = decode_payload(payload, result);
+      } else {
+         sprintf(result, "%s", payload);
+         ret = 0;
+      }
    }
 
    free(payload);

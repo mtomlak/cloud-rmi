@@ -112,8 +112,8 @@ Rules:
 
 ### 5.1 Line Framing
 
-- `MAX_LINE = 10240` bytes (derived from `RMI_BUF_SZ`)
-- Each command line MUST contain `\n` within 10239 bytes
+- `MAX_LINE = 8192` bytes (derived from `RMI_BUF_SZ`)
+- Each command line MUST contain `\n` within 8192 bytes
 - Otherwise:
 
 ```
@@ -122,15 +122,21 @@ Rules:
 
 ### 5.2 Buffer Ceilings
 
-- Total buffered data MUST NOT exceed `RMI_MAX_BUFFER = RMI_BUF_SZ * 8`
+- Total buffered data MUST NOT exceed `RMI_MAX_BUFFER = RMI_BUF_SZ * 8` (65536 bytes)
 - Overflow resets protocol state and produces `400 Bad Request`
 
-### 5.3 Payload Policy Thresholds (Non‑normative)
+### 5.3 Payload Policy Thresholds (Non-normative)
 
-Typical policy:
+Default policy:
 
-- Inline base64 payloads should avoid exceeding ~4k
-- Larger payloads SHOULD use v2 payload framing
+- Inline base64 payloads are gated by
+  `RMI_INLINE_PAYLOAD_THRESHOLD = RMI_MAX_LINE - floor(RMI_MAX_LINE * 0.35) - 500`
+  (4,825 bytes with the current limits) **before** any base64 encoding.
+- Calls below that soft limit still validate the fully framed, base64-encoded
+  line against `RMI_MAX_LINE`; if the encoded line is `>= RMI_MAX_LINE`, the
+  client MUST fall back to payload framing.
+- Larger payloads SHOULD use v2 payload framing without performing the initial
+  base64 conversion.
 
 This is a **policy decision**, not a protocol rule. See the implementation
 companion for exact buffering and overflow behaviors enforced by the parser.
