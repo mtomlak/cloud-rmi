@@ -252,14 +252,14 @@ Rules:
 ### 10.2 Payload Response (v2)
 
 ```
-200 <encoding> <length>
+200 PAYLOAD <encoding> <length>
 <raw payload bytes>
 ```
 
 or
 
 ```
-500 <encoding> <length>
+500 PAYLOAD <encoding> <length>
 <raw payload bytes>
 ```
 

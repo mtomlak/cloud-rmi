@@ -512,13 +512,17 @@ int proxy_pass_call_cmd_ex(
    }
 
    char response_enc[BUF_SZ + 1];
+   char response_keyword[BUF_SZ + 1];
    unsigned long long response_len = 0;
    int is_payload_response = 0;
 
    bzero(response_enc, sizeof(response_enc));
+   bzero(response_keyword, sizeof(response_keyword));
 
    if (status_code == 200 || status_code == 500) {
-      if (sscanf(message, "%s %llu", response_enc, &response_len) == 2 && response_len <= SIZE_MAX) {
+      if (sscanf(message, "%s %s %llu", response_keyword, response_enc, &response_len) == 3 &&
+          strcmp(response_keyword, "PAYLOAD") == 0 &&
+          response_len <= SIZE_MAX) {
          is_payload_response = 1;
          payload_response = malloc((size_t)response_len + 1);
 
@@ -560,7 +564,7 @@ int proxy_pass_call_cmd_ex(
 
    if (is_payload_response && payload_response != NULL) {
       if (client_conn->protocol_version >= 2) {
-         stream_writeln(client_conn->sock, "%i %s %llu", status_code, response_enc, response_len);
+         stream_writeln(client_conn->sock, "%i PAYLOAD %s %llu", status_code, response_enc, response_len);
 
          if (response_len > 0)
             proxy_write_all(client_conn->sock, (const uint8_t *)payload_response, (size_t)response_len);

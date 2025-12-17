@@ -235,11 +235,12 @@ class ProtocolSession:
         payload_resp = b""
 
         if self.protocol_version >= 2 and status in (200, 500):
-            parts = message.split(" ", 1)
+            parts = message.split(" ")
             payload_len = None
-            if len(parts) == 2:
+
+            if len(parts) >= 3 and parts[0] == "PAYLOAD":
                 try:
-                    payload_len = int(parts[1])
+                    payload_len = int(parts[2])
                 except ValueError:
                     payload_len = None
 
