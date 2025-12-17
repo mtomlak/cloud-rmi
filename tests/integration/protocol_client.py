@@ -21,6 +21,21 @@ def read_line(sock: socket.socket) -> str:
     return data.decode("utf-8", errors="replace").strip("\r\n")
 
 
+def parse_max_proto(ext: str) -> int:
+    proto = ext.split("PROTO=", 1)
+    if len(proto) == 1:
+        return 1
+
+    digits = []
+    for ch in proto[1]:
+        if ch.isdigit():
+            digits.append(ch)
+        else:
+            break
+
+    return int("".join(digits)) if digits else 1
+
+
 def parse_status(line: str) -> Tuple[int, str]:
     if not line:
         return 0, ""
@@ -48,6 +63,8 @@ def main() -> int:
     args = parser.parse_args()
 
     payload_bytes = args.payload.encode("utf-8") if args.payload is not None else None
+    protocol_version = 1
+    server_max_proto = 1
 
     iface = args.iface
     if args.namespace and not iface.startswith("\\"):
@@ -55,12 +72,16 @@ def main() -> int:
 
     with socket.create_connection((args.host, args.port)) as sock:
         sock.settimeout(5)
-        banner = parse_status(read_line(sock))
+        banner_line = read_line(sock)
+        banner = parse_status(banner_line)
         if banner[0] != 220:
             print("status:0")
             print("message:failed banner")
             print("decoded:")
             return 1
+
+        if " EXT " in banner_line:
+            server_max_proto = parse_max_proto(banner_line.split(" EXT ", 1)[1])
 
         sock.sendall(f"AUTH TOKEN {args.token}\n".encode("utf-8"))
         auth_code, _ = parse_status(read_line(sock))
@@ -69,6 +90,12 @@ def main() -> int:
             print("message:auth failed")
             print("decoded:")
             return 1
+
+        if server_max_proto >= 2:
+            sock.sendall(b"PROTO 2\n")
+            proto_status, _ = parse_status(read_line(sock))
+            if proto_status == 200:
+                protocol_version = 2
 
         if payload_bytes is not None:
             sock.sendall(f"CALL {iface} {args.method}\n".encode("utf-8"))
@@ -83,12 +110,39 @@ def main() -> int:
 
         status_code, message = parse_status(read_line(sock))
 
+        payload_response = b""
+        if protocol_version >= 2 and status_code in (200, 500):
+            parts = message.split(" ", 1)
+            if len(parts) == 2:
+                try:
+                    payload_len = int(parts[1])
+                except ValueError:
+                    payload_len = -1
+
+                if payload_len >= 0:
+                    remaining = payload_len
+                    while remaining > 0:
+                        chunk = sock.recv(remaining)
+                        if not chunk:
+                            break
+                        payload_response += chunk
+                        remaining -= len(chunk)
+
+                    # Consume trailing newline if present to keep socket clean.
+                    if remaining == 0:
+                        sock.recv(1)
+
     decoded_message = ""
-    if args.decode_output and status_code == 200 and message:
-        try:
-            decoded_message = base64.b64decode(message).decode("utf-8", errors="replace")
-        except Exception:
-            decoded_message = ""
+    if args.decode_output and status_code == 200:
+        if payload_response:
+            decoded_message = payload_response.decode("utf-8", errors="replace")
+        elif message:
+            try:
+                decoded_message = base64.b64decode(message).decode(
+                    "utf-8", errors="replace"
+                )
+            except Exception:
+                decoded_message = ""
 
     print(f"status:{status_code}")
     print(f"message:{message}")
