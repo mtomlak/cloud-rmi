@@ -92,7 +92,7 @@ void substring(char *string, char *sub, int start, int len);
 void split_host_addr(char *host, char *ip, int *port);
 char *get_ip_addr(char *hostname);
 // server.c
-int server_start(int port_num);
+int server_start(int port_num, const char *unix_socket_path);
 void server_add_iface_entry(char *iface_name, char *file_name);
 struct server_iface_entry *server_get_iface_entry(char *iface_name);
 int read_iface_config(char *config_file);

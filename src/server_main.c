@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <libgen.h>  // for basename()
+#include <getopt.h>
 #include "cloud-rmi.h"
 #include "config.h"
 #include "capabilities.h"
@@ -61,6 +62,7 @@ void show_help(char *this_cmd)
 	printf("\t-m sets path to the interface map file\n");
 	printf("\t-n sets context name (currently to %s)\n", var_context_name);
 	printf("\t-p sets port number (currently to %d)\n", var_port);
+	printf("\t-u sets unix socket path (currently %s)\n", var_unix_socket_path ? var_unix_socket_path : "OFF");
 	printf("\t-t sets recovery authentication token\n");
 #ifdef PROXY_SUPPORT
 	printf("\t-x enables proxy to given host (currently %s)\n", 
@@ -133,7 +135,12 @@ int main(int argc, char *argv[])
 
    if (argc > 1) { 
    // Overwrite some config variables
-      while((opt = getopt(argc, argv, "b:c:dD:he:m:n:p:t:vx:")) != -1) {
+      static struct option long_options[] = {
+         {"unix-socket", required_argument, 0, 'u'},
+         {"help", no_argument, 0, 'h'},
+         {0, 0, 0, 0}
+      };
+      while((opt = getopt_long(argc, argv, "b:c:dD:he:m:n:p:t:u:vx:", long_options, NULL)) != -1) {
          switch(opt) {
          	case 'b':
                var_script_base_namespace = strdup(optarg);
@@ -168,6 +175,10 @@ int main(int argc, char *argv[])
 
             case 'p':
                var_port = atoi(optarg);
+               break;
+
+            case 'u':
+               var_unix_socket_path = strdup(optarg);
                break;
 
             case 't':
@@ -207,7 +218,10 @@ int main(int argc, char *argv[])
 
 	// Start the server, possibly in a background
 	if (daemon) {
-		printf("Starting %s daemon on port %d\n", APP_NAME, var_port);
+		if (var_unix_socket_path)
+			printf("Starting %s daemon on unix socket %s\n", APP_NAME, var_unix_socket_path);
+		else
+			printf("Starting %s daemon on port %d\n", APP_NAME, var_port);
 
 		pid = fork();
 
@@ -220,18 +234,21 @@ int main(int argc, char *argv[])
 				proxy_start(var_proxy);
 			}
 #endif
-			server_start(var_port);
+			server_start(var_port, var_unix_socket_path);
 			exit(0);
 		}
 
 	} else {
-		printf("Starting %s on port %d\n", APP_NAME, var_port);
+		if (var_unix_socket_path)
+			printf("Starting %s on unix socket %s\n", APP_NAME, var_unix_socket_path);
+		else
+			printf("Starting %s on port %d\n", APP_NAME, var_port);
 #ifdef PROXY_SUPPORT
 		if (var_proxy) {
 				proxy_start(var_proxy);
 		}
 #endif
-		server_start(var_port);
+		server_start(var_port, var_unix_socket_path);
 	}
 
 	//waitpid(-1, chldsig, WNOHANG); done in server loop
