@@ -1,51 +1,53 @@
-# CloudRMI Protocol v2 — PAYLOAD-aware Design Specification
 
-**Status:** Draft (intended as long-term stable reference)  
-**Scope:** Protocol framing, parsing, state machine, backward compatibility  
-**Out of scope:** Business logic, language bindings, transport implementation
+# Cloud-RMI Protocol — Unified Specification (v1 + v2)
+
+Status: Draft (intended long‑term stable reference)
+Scope: Protocol framing, parsing, state machine, negotiation, extensibility
+Out of scope: Business logic, scheduling, language bindings, transport internals
 
 ---
 
 ## 1. Goals & Design Constraints
 
-This protocol revision is designed to:
+The Cloud‑RMI protocol is designed to:
 
-- Preserve **full backward compatibility** with existing CloudRMI clients/servers
-- Support **large and binary payloads** efficiently
-- Avoid heuristic or ambiguous parsing
-- Be suitable for:
-  - C servers (high-performance, prefork, IPC)
-  - PHP servers (CLI, extension-backed)
-  - Mixed-language clients
+- Preserve **full backward compatibility** with all existing v1 clients
+- Allow **incremental evolution** via explicit opt‑in (v2 and later)
+- Support **large, binary‑safe payloads**
+- Avoid heuristic parsing and speculative reads
+- Remain suitable for:
+  - High‑performance C servers
+  - PHP CLI / extension servers
+  - Mixed‑language clients
 - Remain stable for **10+ years**
 
-Key principles:
+Core principles:
 
-1. **Text-based control plane**
-2. **Explicit binary payload plane**
-3. **No speculative reads**
-4. **Deterministic state machine**
-5. **Client controls argument encoding**
-6. **Server controls response encoding**
+1. Text‑based control plane
+2. Explicit framing for payloads
+3. Deterministic state machine
+4. No implicit upgrades
+5. Client controls argument encoding
+6. Server controls response encoding
+7. Encoding semantics are orthogonal to framing
 
 ---
 
 ## 2. Transport Model
 
-The protocol is **transport-agnostic**:
-
-- TCP sockets
-- Unix domain sockets
-- IPC / pipes
-
-The protocol itself assumes:
+The protocol is transport‑agnostic and assumes only:
 
 - Ordered byte stream
 - Reliable delivery
 
+Examples:
+- TCP sockets
+- Unix domain sockets
+- Pipes / IPC
+
 ---
 
-## 3. High-level Protocol Flow
+## 3. Connection Lifecycle
 
 ```
 CONNECT
@@ -59,27 +61,98 @@ All semantics below apply inside the **COMMAND LOOP**.
 
 ---
 
-## 4. Protocol States
+## 4. Protocol Versioning & Negotiation
 
-The server processes input using a strict state machine.
+### 4.1 Default Mode
+
+- Every connection **starts in protocol v1**
+- v1 parsing and framing rules remain active until explicit upgrade
+- Protocol version is **per‑connection state**
+
+### 4.2 Banner & Capabilities
+
+Server sends a banner:
+
+```
+220 <context> Server Ready [EXT <capability-list>]
+```
+
+Capabilities are **purely informational** until explicitly acted upon.
+Examples:
+
+- `PROTO=2`
+- `PROXY`
+- `STATS`
+- vendor‑specific extensions
+
+Servers MUST advertise any non‑standard command or behavior as a capability.
+
+### 4.3 Explicit Upgrade
+
+Client upgrades protocol:
+
+```
+PROTO 2
+```
+
+Server replies:
+
+```
+200 OK
+```
+
+Rules:
+
+- No implicit upgrades
+- No mid‑command upgrades
+- If client never sends `PROTO`, connection remains v1 forever
+
+---
+
+## 5. Framing & Limits
+
+### 5.1 Line Framing
+
+- `MAX_LINE = 8192` bytes
+- Each command line MUST contain `\n` within 8191 bytes
+- Otherwise:
+
+```
+400 Bad Request
+```
+
+### 5.2 Payload Policy Thresholds (Non‑normative)
+
+Typical policy:
+
+- Inline base64 payloads should avoid exceeding ~4k
+- Larger payloads SHOULD use v2 payload framing
+
+This is a **policy decision**, not a protocol rule.
+
+---
+
+## 6. Protocol States
+
+The protocol is defined by a strict state machine.
 
 ### States
 
 | State | Description |
 |-----|------------|
-| `IDLE` | Waiting for a new command line |
-| `CALL_PENDING_PAYLOAD` | CALL accepted, waiting for PAYLOAD header |
-| `READING_PAYLOAD` | Reading binary payload of known length |
-| `EXECUTE_CALL` | Decoding arguments and invoking method |
-| `SEND_RESPONSE` | Sending response (inline or PAYLOAD) |
+| IDLE | Waiting for a command line |
+| READING_PAYLOAD | Reading fixed‑length payload bytes |
+| EXECUTE_CALL | Decoding, dispatching method |
+| SEND_RESPONSE | Emitting response |
+| CLOSED | Connection closed |
+
+State transitions are deterministic and protocol‑version aware.
 
 ---
 
-## 5. Commands Overview
+## 7. Commands Overview
 
-### Commands that **never** accept payload
-
-Handled immediately in `IDLE` state:
+Commands that NEVER accept payload:
 
 ```
 AUTH
@@ -90,424 +163,214 @@ TIME
 UPTIME
 DEBUG
 QUIT
+EXIT
 SERVER
 PROXY
 ```
 
-If these commands are followed by a PAYLOAD, it is a protocol error.
+If payload framing is attempted with these commands → protocol error.
+
+Servers MAY implement additional commands but MUST advertise them via banner capabilities.
 
 ---
 
-## 6. CALL Command — Two Forms
+## 8. CALL Command
 
-### 6.1 Legacy CALL (backward compatible)
-
-```
-CALL <iface> <method> <inline_payload>
-```
-
-- `<inline_payload>` is a **single token**
-- Typically base64, `PHP:base64(...)`, etc.
-- Parsed and executed immediately
-
-State transition:
+### 8.1 Protocol v1 (Legacy — Always Supported)
 
 ```
-IDLE → EXECUTE_CALL
-```
-
-This form **must remain supported indefinitely**.
-
----
-
-### 6.2 Extended CALL (PAYLOAD-capable)
-
-```
-CALL <iface> <method>
+CALL <iface> <method> <base64-args>
 ```
 
 Characteristics:
 
-- Exactly **2 arguments**
-- No payload inline
-- Execution is deferred
-- Server validates:
-  - authentication
-  - interface existence
-  - method existence
-
-State transition:
-
-```
-IDLE → CALL_PENDING_PAYLOAD
-```
+- Exactly 3 arguments
+- Inline payload only
+- Immediate execution
+- Fully supported indefinitely
 
 ---
 
-## 7. PAYLOAD Command
+### 8.2 Protocol v2 (Extended Framing)
 
-### 7.1 PAYLOAD Header
+Protocol v2 introduces **explicit payload framing**, without changing v1 semantics.
 
-Valid **only** in `CALL_PENDING_PAYLOAD` state.
+#### Inline form (unchanged)
 
 ```
-PAYLOAD <encoding> <length>
+CALL <iface> <method> <base64-args>
+```
+
+#### Payload form (v2 only)
+
+```
+CALL <iface> <method> <encoding> <length>
+<raw payload bytes>
 ```
 
 Where:
 
-- `<encoding>`: symbolic encoding name (`PLAIN`, `PHP`, `JSON`, `BLOB`, etc.)
-- `<length>`: exact byte count of payload to follow
-
-Validation rules:
-
-- PAYLOAD is **illegal** without a preceding CALL
-- `<length>` must be ≤ configured maximum
-- `<encoding>` must be supported
-
-State transition:
-
-```
-CALL_PENDING_PAYLOAD → READING_PAYLOAD
-```
+- `<encoding>` is symbolic (`RAW`, `PHP`, `JSON`, etc.)
+- `<length>` is decimal byte count
+- Payload follows immediately
+- No terminator
+- Binary‑safe
 
 ---
 
-### 7.2 PAYLOAD Data
+### 8.3 Disambiguation Rules
 
-Immediately following the PAYLOAD header:
+Parsing is deterministic:
 
-```
-<raw binary bytes, exactly <length>>
-```
+- 3 arguments → inline form
+- 4 arguments → payload form
 
-Rules:
-
-- No line parsing
-- No terminators required
-- Binary-safe
-- Server reads exactly `<length>` bytes
-
-On completion:
-
-```
-READING_PAYLOAD → EXECUTE_CALL
-```
+Encoding tokens MUST be from a fixed identifier alphabet and MUST NOT collide with base64.
 
 ---
 
-## 8. Invalid PAYLOAD Scenarios
+### 8.4 Payload Read Semantics
 
-| Situation | Server Response |
-|--------|----------------|
-| PAYLOAD without CALL | `400 Unexpected PAYLOAD` |
-| CALL already pending | `400 CALL already pending` |
-| Any other command in `CALL_PENDING_PAYLOAD` | `400 Expected PAYLOAD` |
-| Payload too large | `413 Payload Too Large` (or `400`) |
-| Payload decode error | `400 Bad Payload` |
+- Server reads **exactly `<length>` bytes**
+- Payload may contain arbitrary binary data
+- Zero‑length payload is valid
+- Server MUST NOT read past `<length>`
 
-After error:
-- Payload buffer is discarded
-- State resets to `IDLE`
+Errors:
+
+- Truncated payload → transport error, connection abort
+- Command before payload completion → protocol error
 
 ---
 
 ## 9. CALL Execution Semantics
 
-During `EXECUTE_CALL`:
+During execution:
 
-1. Payload (inline or PAYLOAD) is decoded
+1. Payload is decoded according to encoding
 2. Arguments are hydrated
 3. Method is invoked
 4. Result or exception is produced
 
-Encoding rules:
+Rules:
 
-- **Client chooses encoding for arguments**
-- **Server chooses encoding for result**
+- Client chooses argument encoding
+- Server chooses response encoding
 
 ---
 
 ## 10. Responses
 
-### 10.1 Inline Response (legacy-compatible)
+### 10.1 Legacy Inline Response
 
 ```
-200 <encoded-payload>
+200 <encoding>:<base64>
+500 <encoding>:<base64>
 ```
 
-Used when:
-- Payload is small
-- Client compatibility is required
-
----
-
-### 10.2 PAYLOAD Response (extended)
+### 10.2 Payload Response (v2)
 
 ```
-200 PAYLOAD <encoding> <length>
-<raw bytes>
+200 <encoding> <length>
+<raw payload bytes>
 ```
 
-Notes:
-
-- Same PAYLOAD semantics as request side
-- Binary-safe
-- Length is exact
-
-Server may downgrade to inline form if needed.
-
-State transition:
+or
 
 ```
-SEND_RESPONSE → IDLE
+500 <encoding> <length>
+<raw payload bytes>
 ```
+
+Rules:
+
+- Server MUST NOT emit payload responses to v1 clients
+- Server MUST NOT downgrade to inline if MAX_LINE would be exceeded
 
 ---
 
 ## 11. Error Reporting Model
 
-Two independent channels:
-
 ### 11.1 Transport / Framing Errors
-Reported via protocol status:
+
+Examples:
 
 - `RMI_E_AGAIN`
 - `RMI_E_OVERFLOW`
 - `RMI_E_ERR`
 
-These indicate stream-level issues.
+### 11.2 Semantic Errors
 
-### 11.2 Semantic / Protocol Errors
-Reported via `err->code`:
+Reported via structured error payloads:
 
 - `RMI_ERROR_BAD_REQUEST`
 - `RMI_ERROR_BAD_ARGS`
 - `RMI_ERROR_UNAUTHORIZED`
 - etc.
 
-A syntactically valid event may still carry a semantic error.
+A syntactically valid exchange may still carry a semantic error.
 
 ---
 
-## 12. Backward Compatibility Guarantees
+## 12. Handler argv Contract (Normative)
 
-- Old clients using legacy CALL continue to work unchanged
-- PAYLOAD is opt-in and explicitly advertised
-- No existing command syntax is broken
-- Inline payload semantics remain valid
+Handlers MUST receive stable argv layout:
 
----
+```
+argv[0] = file
+argv[1] = method
+argv[2] = encoding (PLAIN for inline)
+argv[3] = args (decoded inline args, empty or "-" for payload)
+```
 
-## 13. Encoding Notes
+Rules:
 
-Encodings are **payload semantics**, not protocol framing.
-
-Examples:
-
-- `PLAIN` — base64 or raw plaintext fallback
-- `PHP` — PHP `serialize()` + base64 (legacy)
-- `JSON` — JSON + base64
-- `BLOB` — raw binary
-
-Future encodings may be added without protocol changes.
+- Payload bytes are always read from stdin
+- Handlers MUST treat stdin as authoritative for payload framing
 
 ---
 
-## 14. Rationale (Why This Design)
-
-- Eliminates line-length limitations for arguments
-- Avoids scanning payload content for magic bytes
-- Allows fixed-size buffers for command parsing
-- Cleanly separates:
-  - framing
-  - decoding
-  - execution
-- Maps directly to feed/emit engines
-- Matches patterns used in mature RPC protocols
-
----
-
-## 15. Implementation Notes (Non-normative)
-
-- PAYLOAD should only be allowed immediately after CALL
-- Protocol engine should be reusable from:
-  - C server
-  - PHP extension
-  - Test harness
-- Default max payload size must be configurable
-- Banner should advertise PAYLOAD support explicitly (e.g. `EXT PAYLOAD`)
-
----
-
-## 16. Summary
-
-This protocol design:
-
-- Preserves legacy behavior
-- Introduces explicit payload framing
-- Scales to large and binary data
-- Is simple enough to reason about formally
-- Avoids accidental complexity
-
-**This document is intended to remain valid for the next decade.**
-
-
----
-
-update for v2:
-
-
-# Cloud-RMI Protocol v2 – Framing, Negotiation, and Proxy Semantics
-
-## 1. Line Length & Framing Limits
-
-### Hard limits
-- MAX_LINE = 8192 bytes  
-- Any command line must contain '\n' within 8191 bytes  
-- Otherwise: 400 Bad Request
--
-
-### Client policy thresholds (soft)
-- PAYLOAD_INLINE_AVOID_B64 = 4096 bytes  
-- If arguments or results would exceed ~4k after base64, prefer payload framing  
-- This is a client/server policy, not a protocol constraint
-
----
-
-## 2. Protocol Versioning & Negotiation
-
-### Default behavior
-- Every new connection starts in legacy mode (protocol v1)
-- Server must not change parsing or framing rules until client explicitly opts in
-
-### Banner
-Server advertises maximum supported protocol:
-
-220 <context> Server Ready EXT PROTO=2,STATS,PROXY
-
-### Client opt-in
-Client explicitly upgrades:
-
-PROTO 2
-
-Server responds:
-
-200 OK
-
-### Rules
-- If client never sends PROTO, connection remains protocol v1 forever
-- Protocol version is per-connection state
-- No implicit or mid-command upgrades
-
----
-
-## 3. CALL Command Formats
-
-### Protocol v1 (legacy)
-
-CALL <iface> <method> <base64-args>
-
----
-
-### Protocol v2
-
-We should prefer faster, inline form, until the encoded payload is larger than MAX_LINE minus some safety
-threshold of cca 500 bytes for CALL symbol, interface name, method name etc..
-
-To save time we should do educated guess how long is base64 gonna be - usually is like 4 * ceil(N / 3)
-i think, or similar, we can do more precise calculation. So, if educated guess of base64 is bigger than
-MAX_LINE - 500, we should use payload form. Same, if we estimate base64 is smaller than threshold but 
-after physical base64 encoding it indeed is bigger, we should use payload form.
-
-
-#### Inline form (same as v1)
-
-CALL <iface> <method> <base64-args>
-
-#### Payload form (new)
-
-CALL <iface> <method> <encoding> <length>
-<raw payload bytes>
-
-- encoding: RAW, PHP, JSON
-- length: decimal byte count
-- Payload follows immediately, no terminator
-
-
-
-### Disambiguation
-- 3 args → inline
-- 4 args → payload
-
-
-
----
-
-## 4. Response Formats
-
-### Legacy
-
-200 <encoding>:<base64>
-500 <encoding>:<base64>
-
-### Payload response (v2)
-
-200 <encoding> <length>
-<raw payload bytes>
-
-500 <encoding> <length>
-<raw payload bytes>
-
----
-
-## 5. Proxy Semantics
+## 13. Proxy Semantics
 
 - Proxy is a full protocol endpoint on both sides
 - Maintains independent protocol states:
   - client ↔ proxy
   - proxy ↔ backend
 
-### Translation allowed
-Proxy may translate inline ↔ payload as required.
+Rules:
 
-If backend cannot safely represent request, proxy returns 400.
-
----
-
-## 6. Client Behavior
-
-- After banner, if PROTO 2 advertised → send PROTO 2
-- Use inline when small
-- Use payload when exceeding thresholds
+- Proxy MAY translate inline ↔ payload
+- Proxy MUST fully consume payload before forwarding
+- If backend cannot represent request → `400`
 
 ---
 
-## 7. Server Behavior
+## 14. Extensibility & Vendor Commands
 
-- Start in legacy mode
-- Switch to v2 only after PROTO 2
-- Never emit payload framing to legacy clients
+- Servers MAY implement additional commands
+- Such commands MUST:
+  - Be advertised via banner capability
+  - Remain version‑scoped
+  - Not alter base protocol semantics
 
----
-
-## 8. Handler argv Contract (IMPORTANT)
-
-Always keep argv stable:
-
-argv[0] = file  
-argv[1] = method  
-argv[2] = encoding (PLAIN for inline)  
-argv[3] = args (decoded args for inline, empty or '-' for payload)  
-
-Payload bytes are always read from stdin.
+Asynchronous execution models (e.g. forked execution) are **server‑internal behavior** and outside protocol scope.
 
 ---
 
-## 9. Rationale
+## 15. Backward Compatibility Guarantees
 
-- Full backward compatibility
-- Removes base64 overhead for large payloads
-- Deterministic parsing
-- Proxy-safe
-- Clean evolution path
+- v1 remains supported indefinitely
+- v2 is opt‑in only
+- No framing changes without `PROTO 2`
+- Inline CALL semantics remain valid forever
+
+---
+
+## 16. Summary
+
+- v1 is stable and permanent
+- v2 introduces explicit payload framing
+- Upgrade is explicit and deterministic
+- Protocol remains simple, evolvable, and proxy‑safe
+
+This document is intended to remain valid for the next decade.
