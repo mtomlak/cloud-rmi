@@ -3,6 +3,8 @@ namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
 
 use ProfiWeb\Cloud\Infrastructure\System\ProcessControl\ProcessFork;
 
+require_once __DIR__ . '/../../System/ProcessControl/ProcessFork.php';
+
 /**
  * Simple implementation of Remote Method Invocation server.
  *
@@ -36,11 +38,13 @@ class SimpleRMIServer
 	protected $throttleTimeout = false;
 	protected $throttleDuration = 0.01;
 	protected $connStarted = null;
-        protected $bindings;
-        protected $startedAt;
-        protected $proc;
-        protected $serverPid;
-        protected $requireAuth = true;
+	protected $bindings;
+	protected $startedAt;
+	protected $proc;
+	protected $serverPid;
+	protected $requireAuth = true;
+	protected $enablePayloadCapability = true;
+	protected $enableAsyncCapability = true;
         // Protocol-related
 	protected $maxPlainStringBytes = 1024;
         protected $protocolVersion = 1;
@@ -54,15 +58,18 @@ class SimpleRMIServer
                         $this->readTimeout = $this->noForkReadTimeout;
         }
 
-        public function setMaxProtocolVersion($version)
-        {
-                $version = (int) $version;
+	public function setMaxProtocolVersion($version)
+	{
+		$version = (int) $version;
 
-                if ($version < 1)
-                        $version = 1;
+		if ($version < 1)
+			$version = 1;
 
-                $this->maxProtocolVersion = $version;
-        }
+		if ($version > 2)
+			$version = 2;
+
+		$this->maxProtocolVersion = $version;
+	}
 
         public function setRequireAuth($requireAuth)
         {
@@ -128,10 +135,56 @@ class SimpleRMIServer
                         $this->handleConnection($conn);
         }
 
-        protected function getMaxProtocolVersion()
-        {
-                return $this->maxProtocolVersion;
-        }
+	protected function getMaxProtocolVersion()
+	{
+		return $this->maxProtocolVersion;
+	}
+
+	protected function buildBannerLine()
+	{
+		return "220 " . $this->contextName . " Server Ready EXT PROTO=" . $this->getMaxProtocolVersion() . $this->formatBannerCapabilities();
+	}
+
+	protected function formatBannerCapabilities()
+	{
+		$caps = $this->getAdvertisedCapabilities();
+
+		if (empty($caps))
+			return '';
+
+		return ',' . implode(',', $caps);
+	}
+
+	protected function getAdvertisedCapabilities()
+	{
+		$caps = [];
+
+		if ($this->canHandlePayloadRequests() && $this->getMaxProtocolVersion() >= 2)
+			$caps[] = 'PAYLOAD';
+
+		if ($this->isAsyncCapabilityAdvertised())
+			$caps[] = 'ACALL';
+
+		return $caps;
+	}
+
+	protected function canHandlePayloadRequests()
+	{
+		return ($this->enablePayloadCapability && $this->getMaxProtocolVersion() >= 2);
+	}
+
+	protected function getMaxPayloadLength()
+	{
+		if (defined('RMI_MAX_BUFFER'))
+			return (int) RMI_MAX_BUFFER;
+
+		return 65536;
+	}
+
+	protected function isAsyncCapabilityAdvertised()
+	{
+		return ($this->enableAsyncCapability && $this->hasForkSupport());
+	}
 
 	protected function handleConnection($socket)
 	{
@@ -153,11 +206,11 @@ class SimpleRMIServer
 
 		stream_set_timeout($socket, $this->readTimeout);
 		stream_set_blocking($socket, true);
-                $this->connWriteLn($socket, "220 " . $this->contextName . " Server Ready EXT PROTO=" . $this->getMaxProtocolVersion());
-                $this->isAuthenticated = !$this->requireAuth;
-                $this->username = null;
-                $this->protocolVersion = 1;
-                $this->connStarted = time();
+		$this->connWriteLn($socket, $this->buildBannerLine());
+		$this->isAuthenticated = !$this->requireAuth;
+		$this->username = null;
+		$this->protocolVersion = 1;
+		$this->connStarted = time();
 
 		do {
 			$input = $this->connReadLn($socket);
@@ -220,20 +273,30 @@ class SimpleRMIServer
 				$this->handleCallCommand($socket, $arg);
 				break;
 
-			case 'acall':	// async call
-				$this->handleACallCommand($socket, $arg);
-				break;
+		case 'acall':	// async call
+			$this->handleACallCommand($socket, $arg);
+			break;
 
-			case 'proto':
-                                list($version, $caps) = $this->parseProtoCommand($arg);
-                                $this->protocolVersion = $version;
-                                $this->connWriteLn($socket, "200 PROTO $version");
-				break;
+		case 'proto':
+			list($ok, $version) = $this->parseProtoCommand($arg);
 
-			case 'help':
-				$this->connWriteLn($socket, "200 Supported commands:\n"
-					. "ACALL\nAUTH\nCALL\nHELP\nIFACES\nNOOP\nSHUTDOWN\nTIME\nUPTIME\nQUIT\n");
+			if (!$ok) {
+				$this->connWriteLn($socket, "400 Bad Request");
 				break;
+			}
+
+			$this->protocolVersion = $version;
+			$this->connWriteLn($socket, "200 PROTO $version");
+			break;
+
+		case 'caps':
+			$this->connWriteLn($socket, "200 " . implode(' ', $this->getAdvertisedCapabilities()));
+			break;
+
+		case 'help':
+			$this->connWriteLn($socket, "200 Supported commands:\n"
+				. "ACALL\nAUTH\nCALL\nCAPS\nHELP\nIFACES\nNOOP\nPROTO\nSHUTDOWN\nTIME\nUPTIME\nQUIT\n");
+			break;
 
 			// list of supported extensions - interfaces
 			case 'ifaces':
@@ -317,90 +380,102 @@ class SimpleRMIServer
 
 	protected function handleCallCommand(&$socket, $arg)
 	{
-                if ($this->requireAuth && !$this->isAuthenticated) {
-                        $this->connWriteLn($socket, '401 Unauthorized');
-                        return;
-                }
-
-		list($iface, $method, $params, $payloadMode) = $this->parseCallArguments($socket, $arg);
-
-		if ($iface === null || $method === null) {
-			$this->connWriteLn($socket, "400 Bad Request: Missing argument");
+		if ($this->requireAuth && !$this->isAuthenticated) {
+			$this->connWriteLn($socket, '401 Unauthorized');
 			return;
 		}
 
-		if (!$binding = $this->getBinding($iface)) {
+		$request = $this->parseCallArguments($socket, $arg);
+
+		if ($request['error'] === 'timeout') {
+			$this->connWriteLn($socket, '408 Request Timeout');
+			return;
+		}
+
+		if ($request['error'] === 'bad_request') {
+			$this->connWriteLn($socket, '400 Bad Request');
+			return;
+		}
+
+		if ($request['error'] === 'bad_args') {
+			$this->connWriteLn($socket, "400 Bad Request Arguments");
+			return;
+		}
+
+		if ($request['iface'] === null || $request['method'] === null) {
+			$this->connWriteLn($socket, "400 Bad Request Arguments");
+			return;
+		}
+
+		if ($request['payload'] && !$this->canHandlePayloadRequests()) {
+			$this->connWriteLn($socket, '400 Bad Request');
+			return;
+		}
+
+		if (!$binding = $this->getBinding($request['iface'])) {
 			$this->connWriteLn($socket, "404 Not Found");
 			return;
 		}
 
-		if (!in_array($method, $this->getBindingMethods($iface))) {
+		if (!in_array($request['method'], $this->getBindingMethods($request['iface']))) {
 			$this->connWriteLn($socket, "405 Method Not Allowed");
 			return;
 		}
 
-		try {
-			$result = @call_user_func_array(
-				array($binding, $method),
-				is_array($params) ? $params : [$params]
-				);
+		$outcome = $this->executeCall($binding, $request);
 
-		} catch (\Throwable $e) {
-			$this->log(' ! ' . get_class($e) . ': ' . $e->getMessage());
-
-			$ex = new RemoteException(
-				$e,
-				$this->contextName,
-				$this->host,
-				$this->port
-				);
-
-                        if ($payloadMode && $this->protocolVersion >= 2) {
-                                $this->sendPayloadResponse($socket, 500, $ex);
-                                return;
-                        }
-
-                        $this->connWriteLn($socket, "500 " . $this->encodePayload($ex));
+		if ($outcome['payload'] && $this->protocolVersion >= 2) {
+			$this->sendPayloadResponse($socket, $outcome['code'], $outcome['data'], $request['encoding']);
 			return;
 		}
 
-                if ($payloadMode && $this->protocolVersion >= 2) {
-                        $this->sendPayloadResponse($socket, 200, $result);
-                        return;
-                }
-
 		try {
-			$encodedResult = $this->encodePayload($result);
+			$encodedResult = $this->encodePayload($outcome['data']);
 
 		} catch (\Throwable $e) {
-			$this->connWriteLn($socket, "500 Unable to transmit result: " . $iface . '::' . $method . ': ' . $e->getMessage());
+			$this->connWriteLn($socket, "500 Unable to transmit result: " . $request['iface'] . '::' . $request['method'] . ': ' . $e->getMessage());
 			return;
 		}
 
-		$this->connWriteLn($socket, "200 " . $encodedResult);
+		$this->connWriteLn($socket, $outcome['code'] . " " . $encodedResult);
 	}
 
 	protected function handleACallCommand(&$socket, $arg)
 	{
-                if ($this->requireAuth && !$this->isAuthenticated) {
-                        $this->connWriteLn($socket, '401 Unauthorized');
-                        return;
-                }
-
-		list($iface, $method, $params, $payloadMode) = $this->parseCallArguments($socket, $arg);
-
-		if ($iface === null || $method === null) {
-			$this->connWriteLn($socket, "400 Bad Request: Missing argument");
+		if ($this->requireAuth && !$this->isAuthenticated) {
+			$this->connWriteLn($socket, '401 Unauthorized');
 			return;
 		}
 
-		if (!$binding = $this->getBinding($iface)) {
+		if (!$this->isAsyncCapabilityAdvertised()) {
+			$this->connWriteLn($socket, '405 Method Not Allowed');
+			return;
+		}
+
+		$request = $this->parseCallArguments($socket, $arg);
+
+		if ($request['error'] === 'timeout') {
+			$this->connWriteLn($socket, '408 Request Timeout');
+			return;
+		}
+
+		if ($request['iface'] === null || $request['method'] === null) {
+			$this->connWriteLn($socket, "400 Bad Request Arguments");
+			return;
+		}
+
+		if ($request['payload'] && !$this->canHandlePayloadRequests()) {
+			$this->connWriteLn($socket, '400 Bad Request');
+			return;
+		}
+
+		if (!$binding = $this->getBinding($request['iface'])) {
 			$this->connWriteLn($socket, "404 Not Found");
 			return;
 		}
 
-		if (!in_array($method, $this->getBindingMethods($iface))) {
-			$this->connWriteLn($socket, "405 Method Not Allowed: $method: ".implode(', ', $this->getBindingMethods($iface)));
+		if (!in_array($request['method'], $this->getBindingMethods($request['iface']))) {
+			$this->connWriteLn($socket, "405 Method Not Allowed: " . $request['method'] . ': ' . implode(', ', $this->getBindingMethods($request['iface'])));
 			return;
 		}
 
@@ -414,7 +489,7 @@ class SimpleRMIServer
 
 		if ($proc->isParent()) {
 			$this->log("Forked new async child proccess with PID $pid");
-			$this->connWriteLn($socket, "200 Call Executed");
+			$this->connWriteLn($socket, "200 " . $this->encodePayload('Call Executed'));
 			return;
 		}
 
@@ -422,10 +497,7 @@ class SimpleRMIServer
 			return;
 
 		try {
-			@call_user_func_array(
-				array($binding, $method),
-				is_array($params) ? $params : [$params]
-				);
+			$this->executeCall($binding, $request);
 		} catch (\Throwable $e) {
 			$this->log(' ! ' . get_class($e) . ': ' . $e->getMessage());
 		}
@@ -485,36 +557,53 @@ class SimpleRMIServer
 
 	protected function parseProtoCommand($arg)
 	{
-		$version = 1;
+		if (is_null($arg))
+			return [false, 1];
 
-                if (!is_null($arg)) {
-                        $parts = explode(' ', trim((string) $arg), 2);
-                        if (isset($parts[0]) && is_numeric($parts[0]))
-                                $version = (int) $parts[0];
-                }
+		$parts = explode(' ', trim((string) $arg), 2);
 
-                if ($version < 1)
-                        $version = 1;
+		if (!isset($parts[0]) || !is_numeric($parts[0]))
+			return [false, 1];
 
-                if ($version > $this->getMaxProtocolVersion())
-                        $version = $this->getMaxProtocolVersion();
+		$version = (int) $parts[0];
 
-                return [$version, null];
-        }
+		if ($version < 1 || $version > 2)
+			return [false, 1];
+
+		if ($version > $this->getMaxProtocolVersion())
+			$version = $this->getMaxProtocolVersion();
+
+		return [true, $version];
+	}
 
 	protected function parseCallArguments(&$socket, $arg)
 	{
+		$result = [
+			'iface' => null,
+			'method' => null,
+			'params' => null,
+			'payload' => false,
+			'encoding' => null,
+			'error' => null,
+		];
+
 		$arg = trim((string) $arg);
 
-                if ($this->protocolVersion >= 2) {
+		if ($this->protocolVersion >= 2) {
 			$parts = preg_split('/\s+/', $arg, 4);
 
 			if (count($parts) == 4 && is_numeric($parts[3])) {
+				if (!$this->canHandlePayloadRequests()) {
+					$result['error'] = 'bad_request';
+					return $result;
+				}
+
 				list($iface, $method, $enc, $lenStr) = $parts;
 				$len = (int) $lenStr;
 
-				if ($len < 0) {
-					return [null, null, null, true];
+				if ($len < 0 || $len > $this->getMaxPayloadLength()) {
+					$result['error'] = 'bad_request';
+					return $result;
 				}
 
 				if ($iface && $iface[0] != '\\')
@@ -522,31 +611,88 @@ class SimpleRMIServer
 
 				$payload = ($len > 0) ? $this->connReadExact($socket, $len) : '';
 
-				if ($payload === false || !is_string($payload))
-					return [null, null, null, true];
+				if ($payload === '__timeout') {
+					$result['error'] = 'timeout';
+					return $result;
+				}
 
-				$params = $this->decodePayloadBytes($enc, $payload);
+				if ($payload === false || !is_string($payload) || strlen($payload) != $len) {
+					$result['error'] = 'bad_request';
+					return $result;
+				}
 
-				return [$iface, $method, $params, true];
+				try {
+					$params = $this->decodePayloadBytes($enc, $payload);
+				} catch (\Throwable $e) {
+					$result['error'] = 'bad_request';
+					return $result;
+				}
+
+				$result['iface'] = $iface;
+				$result['method'] = $method;
+				$result['params'] = $params;
+				$result['payload'] = true;
+				$result['encoding'] = $enc;
+
+				return $result;
 			}
 		}
 
 		$args = explode(' ', $arg, 3);
 
-		if (count($args) != 3)
-			return [null, null, null, false];
+		if (count($args) != 3) {
+			$result['error'] = 'bad_args';
+			return $result;
+		}
 
 		list($iface, $method, $vars) = $args;
 
 		if ($iface && $iface[0] != '\\')
 			$iface = "\\$iface";
 
-		return [$iface, $method, $this->decodeMethodArgs($vars), false];
+		$result['iface'] = $iface;
+		$result['method'] = $method;
+		$result['params'] = $this->decodeMethodArgs($vars);
+
+		return $result;
+	}
+
+	protected function executeCall($binding, array $request)
+	{
+		$code = 200;
+		$data = null;
+
+		try {
+			$data = @call_user_func_array(
+				[$binding, $request['method']],
+				is_array($request['params']) ? $request['params'] : [$request['params']]
+			);
+
+		} catch (\Throwable $e) {
+			$this->log(' ! ' . get_class($e) . ': ' . $e->getMessage());
+
+			$data = new RemoteException(
+				$e,
+				$this->contextName,
+				$this->host,
+				$this->port
+			);
+			$code = 500;
+		}
+
+		return [
+			'code' => $code,
+			'data' => $data,
+			'payload' => ($request['payload'] && $this->protocolVersion >= 2 && $this->canHandlePayloadRequests()),
+		];
 	}
 
 	protected function decodePayloadBytes($encoding, $payload)
 	{
 		$encoding = strtoupper((string) $encoding);
+
+		if ($encoding === '')
+			$encoding = 'RAW';
 
 		switch ($encoding) {
 			case 'RAW':
@@ -564,24 +710,41 @@ class SimpleRMIServer
 		}
 	}
 
-	protected function sendPayloadResponse(&$socket, $code, $data)
+	protected function sendPayloadResponse(&$socket, $code, $data, $requestEncoding = '')
 	{
-		$encoding = 'PHP';
-		$bytes = '';
+		$response = $this->resolvePayloadResponse($data, $requestEncoding);
+		$len = strlen($response['bytes']);
 
-		if (is_string($data) && strlen($data) < $this->maxPlainStringBytes) {
-			$encoding = 'RAW';
-			$bytes = $data;
-		} else {
-			$bytes = serialize($data);
-		}
-
-		$len = strlen($bytes);
-
-		$this->connWriteLn($socket, $code . " PAYLOAD " . $encoding . " " . $len);
+		$this->connWriteLn($socket, $code . " PAYLOAD " . $response['encoding'] . " " . $len);
 
 		if ($len) {
-			$this->connWriteRaw($socket, $bytes);
+			$this->connWriteRaw($socket, $response['bytes']);
+		}
+	}
+
+	protected function resolvePayloadResponse($data, $requestEncoding)
+	{
+		$encoding = strtoupper((string) $requestEncoding);
+
+		if ($encoding === '')
+			$encoding = 'PLAIN';
+
+		if (!is_string($data))
+			return ['encoding' => 'PHP', 'bytes' => serialize($data)];
+
+		switch ($encoding) {
+			case 'PHP':
+				return ['encoding' => 'PHP', 'bytes' => serialize($data)];
+
+			case 'JSON':
+				return ['encoding' => 'JSON', 'bytes' => json_encode($data)];
+
+			case 'RAW':
+			case 'PLAIN':
+				return ['encoding' => $encoding, 'bytes' => $data];
+
+			default:
+				return ['encoding' => 'PLAIN', 'bytes' => $data];
 		}
 	}
 

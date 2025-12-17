@@ -65,11 +65,16 @@ try {
     }
     fclose($sock);
 
-    // payload call ok with binary data
-    $sock = cloudrmi_connect('127.0.0.1', $port);
-    $payload = "bin\0bytes";
-    cloudrmi_send_payload_call($sock, 'iface', 'upload', 'RAW', $payload);
-    $payloadLine = fgets($sock, 2048);
+	// payload call ok with binary data
+	$sock = cloudrmi_connect('127.0.0.1', $port);
+	fwrite($sock, "PROTO 2\n");
+	$protoLine = fgets($sock, 2048);
+	if ($protoLine === false || strpos($protoLine, '200') !== 0) {
+		throw new RuntimeException('proto negotiation failed');
+	}
+	$payload = "bin\0bytes";
+	cloudrmi_send_payload_call($sock, 'iface', 'upload', 'RAW', $payload);
+	$payloadLine = fgets($sock, 2048);
     if ($payloadLine === false || strpos($payloadLine, '200') !== 0) {
         throw new RuntimeException('payload call failed');
     }
