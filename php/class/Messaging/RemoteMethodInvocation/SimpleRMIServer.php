@@ -41,10 +41,11 @@ class SimpleRMIServer
         protected $proc;
         protected $serverPid;
         protected $requireAuth = true;
-        // Protocol-related
+	// Protocol-related
 	protected $maxPlainStringBytes = 1024;
         protected $protocolVersion = 1;
         protected $maxProtocolVersion = 2;
+        protected $maxLineLength = 8192;
 
         public function __construct()
         {
@@ -299,10 +300,15 @@ class SimpleRMIServer
 
 				return false;
 
-			case '__timeout':
-				$this->connWriteLn($socket, "408 Request Timeout");
+		case '__timeout':
+			$this->connWriteLn($socket, "408 Request Timeout");
 
-				return false;
+			return false;
+
+		case '__overflow':
+			$this->connWriteLn($socket, "400 Bad Request");
+
+			return false;
 
 			case '':
 				break;
@@ -695,6 +701,9 @@ class SimpleRMIServer
 				return false;
 
 			$buff .= $result;
+
+			if (strlen($buff) >= $this->maxLineLength)
+				return '__overflow';
 		}
 
 		return trim($buff);

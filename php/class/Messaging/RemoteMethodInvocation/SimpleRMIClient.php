@@ -24,6 +24,7 @@ class SimpleRMIClient
 	protected $defaultPayloadEncoding = 'RAW';
 	protected $protocolCtx = null;
 	protected $protocolVersion = 1;
+	protected $maxLineLength = 8192;
 
 	public function __construct($host = 'localhost', $port = 8000, $connTimeout = false, $readTimeout = 600, $throttleTimeout = false)
 	{
@@ -239,28 +240,16 @@ class SimpleRMIClient
 				$payload = $this->normalizePayloadBytes($parameters, $encoding);
 				$callLine = ($options['async'] ? 'ACALL' : 'CALL') . " $interface $methodName";
 
-                                if ($this->protocolVersion >= 2) {
-                                                $callLine .= " $encoding " . strlen($payload);
+				if ($this->protocolVersion < 2)
+					throw new RemoteMethodInvocationException('PAYLOAD framing requires negotiated protocol version 2');
 
-                                                if ($this->connWriteLn($callLine) === false)
-                                                                return false;
+				$callLine .= " $encoding " . strlen($payload);
 
-                                                if ($payload !== '' && $this->connWriteRaw($payload) === false)
-                                                                return false;
-                                } else {
-						$payloadLine = "PAYLOAD $encoding " . strlen($payload);
+				if ($this->connWriteLn($callLine) === false)
+						return false;
 
-						$this->validateOutboundPayload($callLine, $payloadLine, $payload, $options);
-
-						if ($this->connWriteLn($callLine) === false)
-								return false;
-
-						if ($this->connWriteLn($payloadLine) === false)
-								return false;
-
-						if ($payload !== '' && $this->connWriteRaw($payload) === false)
-								return false;
-				}
+				if ($payload !== '' && $this->connWriteRaw($payload) === false)
+						return false;
 
 				return true;
 		}
@@ -508,6 +497,9 @@ class SimpleRMIClient
 				return false;
 
 			$buff .= $result;
+
+			if (strlen($buff) >= $this->maxLineLength)
+				return false;
 		}
 
 		return trim($buff);
