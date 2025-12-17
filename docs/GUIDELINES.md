@@ -220,10 +220,12 @@ If a change:
 
 ---
 ## 8. Next Steps
-- study libcloudrmi/PROTOCOL.md for new protocol design details
+- Study `docs/PROTOCOL.md` **and** its companion `docs/PROTOCOL_IMPLEMENTATION.md`
+  for protocol design and command semantics. Read them end-to-end before
+  making any edits—skipping protocol details is considered a violation of
+  these guidelines.
 
 
 **It should not be merged.**
 
 When in doubt: **do less, not more.**
-
