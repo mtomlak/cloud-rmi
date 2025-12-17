@@ -142,10 +142,10 @@ int main(void)
         return 1;
 
     /* Framing overflow: line too long without newline */
-    char long_line[RMI_BUF_SZ + 2];
+    char long_line[RMI_MAX_LINE + 1];
     memset(long_line, 'a', sizeof(long_line));
     long_line[sizeof(long_line) - 1] = '\0';
-    rmi_status_t status = rmi_protocol_feed(ctx, (const uint8_t *)long_line, RMI_BUF_SZ + 1, &err);
+    rmi_status_t status = rmi_protocol_feed(ctx, (const uint8_t *)long_line, RMI_MAX_LINE, &err);
     if (status != RMI_E_OVERFLOW)
         return 1;
     rmi_event_t event;
@@ -318,14 +318,14 @@ int main(void)
     if (!expect_event(ctx, RMI_EVENT_CALL, "call", "demo", "method", RMI_ERROR_NONE, "RAW", bar_payload, sizeof(bar_payload)))
         return 1;
 
-    /* Exact RMI_MAX_LINE line length should be accepted */
+    /* Newline at the framing boundary should be accepted */
     char *max_line = malloc(RMI_MAX_LINE + 2);
     if (max_line == NULL)
         return 1;
-    memset(max_line, 'a', RMI_MAX_LINE);
-    max_line[RMI_MAX_LINE] = '\n';
-    max_line[RMI_MAX_LINE + 1] = '\0';
-    if (rmi_protocol_feed(ctx, (const uint8_t *)max_line, RMI_MAX_LINE + 1, &err) != RMI_OK) {
+    memset(max_line, 'a', RMI_MAX_LINE - 1);
+    max_line[RMI_MAX_LINE - 1] = '\n';
+    max_line[RMI_MAX_LINE] = '\0';
+    if (rmi_protocol_feed(ctx, (const uint8_t *)max_line, RMI_MAX_LINE, &err) != RMI_OK) {
         free(max_line);
         return 1;
     }

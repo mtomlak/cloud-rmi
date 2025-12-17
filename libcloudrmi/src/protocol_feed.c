@@ -6,8 +6,6 @@
 
 #include "protocol_line.h"
 
-#define RMI_MAX_LINE RMI_BUF_SZ
-#define RMI_MAX_BUFFER (RMI_BUF_SZ * 8)
 #define RMI_MAX_PROTOCOL_VERSION 2
 
 struct rmi_protocol_ctx {
@@ -186,7 +184,7 @@ rmi_status_t rmi_protocol_feed(
 
     if (ctx->state != RMI_PROTOCOL_READING_PAYLOAD &&
         memchr(ctx->buffer, '\n', ctx->len) == NULL &&
-        ctx->len > RMI_MAX_LINE) {
+        ctx->len >= RMI_MAX_LINE) {
         if (err != NULL) {
             err->code = RMI_ERROR_BAD_REQUEST;
             err->message = "Line too long";
@@ -294,7 +292,7 @@ rmi_status_t rmi_protocol_next_event(
         if (line_end > 0 && ctx->buffer[line_end - 1] == '\r')
             line_len--;
 
-        if (line_len > RMI_MAX_LINE) {
+        if (line_len >= RMI_MAX_LINE) {
             if (err != NULL) {
                 err->code = RMI_ERROR_BAD_REQUEST;
                 err->message = "Line too long";
