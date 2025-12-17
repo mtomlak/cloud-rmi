@@ -33,6 +33,7 @@ char *var_context_name = "tst.rmi";
 char *var_script_exec_dir = "/usr/local/libexec/cloud-rmi";
 char *var_script_base_namespace = "ProfiWeb\\Cloud\\Interfaces\\RMI";
 char *var_config_file = CONFIGURATION_FILE;
+char *var_unix_socket_path = NULL;
 char *var_interface_map_file = INTERFACE_MAP_FILE;
 
 #ifdef PROXY_SUPPORT
@@ -131,6 +132,15 @@ int read_config(char *config_file)
                log_event(LOG_INFO, "Set script_base_namespace=\"%s\"\n", var_script_base_namespace);
             }
          } 
+         else if(strcasecmp(conf_name, "listen_unix") == 0) {
+            if((var_unix_socket_path = strdup(conf_value)) == (char *)NULL) {
+               die_err("parse_config() -- strdup() failed");
+            }
+
+            if(log_level > 0) {
+               log_event(LOG_INFO, "Set listen_unix=\"%s\"\n", var_unix_socket_path);
+            }
+         }
          else if(strcasecmp(conf_name, "interface_map_file") == 0) {
             if((var_interface_map_file = strdup(conf_value)) == (char *)NULL) {
                die_err("parse_config() -- strdup() failed");

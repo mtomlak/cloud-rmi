@@ -29,6 +29,7 @@ extern char *var_recovery_token;
 extern char *var_context_name;
 extern char *var_script_exec_dir;
 extern char *var_script_base_namespace;
+extern char *var_unix_socket_path;
 extern char *var_interface_map_file;
 #ifdef PROXY_SUPPORT
 extern char *var_proxy;

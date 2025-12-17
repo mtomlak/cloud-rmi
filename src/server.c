@@ -9,6 +9,8 @@
 #include <netinet/in.h>
 #include <string.h>
 #include <sys/types.h>  // good for getpid()
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 #include <signal.h>
 #include "cloud-rmi.h"
@@ -24,6 +26,45 @@
  * @author Marian Tomlak
  * @license BSD
  */
+
+static int server_socket_fd = -1;
+static char server_socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)] = {0};
+static volatile sig_atomic_t server_should_run = 1;
+
+static void cleanup_listen_socket()
+{
+   server_should_run = 0;
+
+   if (server_socket_fd >= 0) {
+      shutdown(server_socket_fd, SHUT_RDWR);
+      close(server_socket_fd);
+      server_socket_fd = -1;
+   }
+
+   if (server_socket_path[0]) {
+      unlink(server_socket_path);
+      server_socket_path[0] = '\0';
+   }
+}
+
+static void shutdown_handler(int signo)
+{
+   (void)signo;
+
+   cleanup_listen_socket();
+}
+
+static void install_shutdown_handlers()
+{
+   struct sigaction sa;
+
+   sa.sa_handler = shutdown_handler;
+   sigemptyset(&sa.sa_mask);
+   sa.sa_flags = 0;
+
+   sigaction(SIGINT, &sa, NULL);
+   sigaction(SIGTERM, &sa, NULL);
+}
 
 static void reap_children_handler(int signo)
 {
@@ -449,6 +490,8 @@ struct helper_proc_state *new_helper_state(void *stack, int stack_size)
 
 void manager_handle_sigterm(int signum)
 {
+   shutdown_handler(signum);
+
    if (var_debug)
       printf("WorkerManager: Terminating all children\n");
 
@@ -596,11 +639,18 @@ int create_client_handler_proc(int sock, int server_sock)
  * 
  * @return [description]
  */
-int server_start(int port_num)
+int server_start(int port_num, const char *unix_socket_path)
 {
-   int sockfd, newsockfd, clilen;
-   char buffer[BUF_SZ];
-   struct sockaddr_in serv_addr, cli_addr;
+   int sockfd, newsockfd;
+   socklen_t clilen;
+   struct sockaddr_in serv_addr;
+   struct sockaddr_un serv_addr_un;
+   struct sockaddr_storage cli_addr;
+   const int use_unix_socket = unix_socket_path && strlen(unix_socket_path);
+
+   server_should_run = 1;
+   server_socket_fd = -1;
+   server_socket_path[0] = '\0';
 
 #ifdef REUSE_WORKER_PROC
    /* Get ready some spare children */
@@ -609,31 +659,54 @@ int server_start(int port_num)
 #endif
 
    install_reaper();
+   install_shutdown_handlers();
+   atexit(cleanup_listen_socket);
 
    /* Save the boot timestamp */
    var_server_start_time = (int)time(NULL);
 
+   if (use_unix_socket && strlen(unix_socket_path) >= sizeof(serv_addr_un.sun_path))
+      die_err("Error: Unix socket path too long");
+
    /* First call to socket() function */
-   sockfd = socket(AF_INET, SOCK_STREAM, 0);   
+   sockfd = socket(use_unix_socket ? AF_UNIX : AF_INET, SOCK_STREAM, 0);
 
    if (sockfd < 0) {
       die_err("Error opening socket");
    }
 
-   /* Set socket option to enable port reuse */
-   if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int)) < 0)
-      die_err("setsockopt(SO_REUSEADDR) failed");
-   
-   /* Initialize socket structure */
-   bzero((char *) &serv_addr, sizeof(serv_addr));
-   
-   serv_addr.sin_family = AF_INET;
-   serv_addr.sin_addr.s_addr = INADDR_ANY;
-   serv_addr.sin_port = htons(port_num);
-   
-   /* Now bind the host address using bind() call.*/
-   if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
-      die_err("Error: Bind failed");
+   server_socket_fd = sockfd;
+
+   if (use_unix_socket) {
+      bzero((char *) &serv_addr_un, sizeof(serv_addr_un));
+      serv_addr_un.sun_family = AF_UNIX;
+      strncpy(server_socket_path, unix_socket_path, sizeof(server_socket_path) - 1);
+      unlink(server_socket_path);
+      strncpy(serv_addr_un.sun_path, unix_socket_path, sizeof(serv_addr_un.sun_path) - 1);
+
+      /* Now bind the host address using bind() call.*/
+      if (bind(sockfd, (struct sockaddr *) &serv_addr_un, sizeof(serv_addr_un)) < 0)
+         die_err("Error: Bind failed");
+
+      clilen = sizeof(struct sockaddr_un);
+   } else {
+      /* Set socket option to enable port reuse */
+      if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int)) < 0)
+         die_err("setsockopt(SO_REUSEADDR) failed");
+      
+      /* Initialize socket structure */
+      bzero((char *) &serv_addr, sizeof(serv_addr));
+      
+      serv_addr.sin_family = AF_INET;
+      serv_addr.sin_addr.s_addr = INADDR_ANY;
+      serv_addr.sin_port = htons(port_num);
+      
+      /* Now bind the host address using bind() call.*/
+      if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
+         die_err("Error: Bind failed");
+
+      clilen = sizeof(struct sockaddr_in);
+   }
    
    /* Now start listening for the clients, here
     * process will go in sleep mode and will wait
@@ -641,14 +714,18 @@ int server_start(int port_num)
     */
    
    listen(sockfd, 5);
-   clilen = sizeof(cli_addr);
    
-   while (1) {
+   while (server_should_run) {
+      clilen = use_unix_socket ? sizeof(struct sockaddr_un) : sizeof(struct sockaddr_in);
       /* Wait for new connections */
       newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
         
-      if (newsockfd < 0)
+      if (newsockfd < 0) {
+         if (!server_should_run)
+            break;
+
          die_err("Error: Accept failed");
+      }
 
       /* Create new child proccess to handle new connection */
       create_client_handler_proc(newsockfd, sockfd);
@@ -669,9 +746,13 @@ int server_start(int port_num)
 
    } /* end of while */
 
+   cleanup_listen_socket();
+
 #ifdef REUSE_WORKER_PROC
    manager_handle_sigterm(SIGTERM);
 #endif
+
+   return 0;
 }
 
 struct server_iface_entry *new_server_iface_entry(char *iface_name, char *file_name, struct server_iface_entry *next, struct server_iface_entry *prev)
