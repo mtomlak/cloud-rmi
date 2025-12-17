@@ -1,5 +1,5 @@
 CC ?= gcc
-CFLAGS ?= -Wall -I../../include -I../../src -I../../../src -DPROXY_SUPPORT
+CFLAGS ?= -g -Wall -I../../include -I../../src -I../../../src -DPROXY_SUPPORT
 LDFLAGS ?= ../../libcloudrmi.a
 
 protocol_feed_test: protocol_feed_test.c

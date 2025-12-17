@@ -351,6 +351,15 @@ rmi_status_t rmi_protocol_next_event(
         }
 
         if (ctx->state == RMI_PROTOCOL_CALL_PENDING_PAYLOAD) {
+            if (ctx->protocol_version < 2) {
+                if (err != NULL) {
+                    err->code = RMI_ERROR_BAD_REQUEST;
+                    err->message = "Protocol upgrade required";
+                }
+                rmi_protocol_reset(ctx);
+                return RMI_E_ERR;
+            }
+
             if (parsed_event.type != RMI_EVENT_PAYLOAD) {
                 if (err != NULL) {
                     err->code = RMI_ERROR_BAD_REQUEST;
@@ -489,6 +498,15 @@ rmi_status_t rmi_protocol_next_event(
         }
 
         if (parsed_event.type == RMI_EVENT_CALL && parsed_event.argc == 3 && parsed_event.arg3[0] == '\0') {
+            if (ctx->protocol_version < 2) {
+                if (err != NULL) {
+                    err->code = RMI_ERROR_BAD_REQUEST;
+                    err->message = "Protocol upgrade required";
+                }
+                rmi_protocol_reset(ctx);
+                return RMI_E_ERR;
+            }
+
             strncpy(ctx->pending_iface, parsed_event.arg1, RMI_BUF_SZ);
             strncpy(ctx->pending_method, parsed_event.arg2, RMI_BUF_SZ);
             ctx->state = RMI_PROTOCOL_CALL_PENDING_PAYLOAD;

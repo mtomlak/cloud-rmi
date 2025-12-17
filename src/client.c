@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdint.h>
+#include <ctype.h>
 #include "cloud-rmi.h"
 #include "capabilities.h"
 #include "client.h"
@@ -36,6 +37,37 @@ int client_parse_status_code(char *response, int *status_code, char *data)
    return 0;
 }
 
+static int parse_max_proto(const char *ext)
+{
+   const char *proto = strstr(ext, "PROTO=");
+   int version = 0;
+
+   if (proto != NULL) {
+      proto += 6;
+
+      while (isdigit((unsigned char)*proto)) {
+         version = version * 10 + (*proto - '0');
+         proto++;
+      }
+   }
+
+   return version > 0 ? version : 1;
+}
+
+static void normalize_capability_tokens(const char *ext, char *buffer, size_t buffer_len)
+{
+   size_t len = strlen(ext);
+
+   if (len >= buffer_len)
+      len = buffer_len - 1;
+
+   for (size_t i = 0; i < len; i++) {
+      buffer[i] = (ext[i] == ',') ? ' ' : ext[i];
+   }
+
+   buffer[len] = '\0';
+}
+
 /**
  * Starts client connection
  * 
@@ -55,6 +87,7 @@ int client_connect(char *hostname, int port_num, struct rmi_client_conn *conn)
    conn->sock = -1;
    conn->capabilities = 0;
    conn->capabilities_known = 0;
+   conn->protocol_version = 1;
 
    bzero(response, BUF_SZ);
    bzero(message, BUF_SZ);
@@ -128,11 +161,21 @@ int client_connect(char *hostname, int port_num, struct rmi_client_conn *conn)
 
    conn->sock = sock;
 
+   int server_max_proto = 1;
    char *ext = strstr(response, " EXT ");
    if (ext != NULL) {
+      char *caps_tokens = malloc(sizeof(char) * (BUF_SZ + 1));
+
       ext += 5;
-      conn->capabilities = rmi_parse_capabilities(ext);
-      conn->capabilities_known = 1;
+      server_max_proto = parse_max_proto(ext);
+
+      if (caps_tokens != NULL) {
+         normalize_capability_tokens(ext, caps_tokens, BUF_SZ + 1);
+         conn->capabilities = rmi_parse_capabilities(caps_tokens);
+         conn->capabilities_known = 1;
+      }
+
+      free(caps_tokens);
    }
 
    if (!conn->capabilities_known) {
@@ -153,6 +196,16 @@ int client_connect(char *hostname, int port_num, struct rmi_client_conn *conn)
 
       free(caps_response);
       free(caps_message);
+   }
+
+   if (server_max_proto >= 2) {
+      bzero(response, BUF_SZ);
+      bzero(message, BUF_SZ);
+
+      if (stream_writeln(sock, "PROTO 2") >= 0 && stream_readln(sock, response, BUF_SZ) >= 0) {
+         if (client_parse_status_code(response, &status_code, message) && status_code == 200)
+            conn->protocol_version = 2;
+      }
    }
 
    free(response);
@@ -282,6 +335,12 @@ int client_call_remote_method_payload(
    const char *encoding_value = encoding ? encoding : "BLOB";
 
    bzero(response, BUF_SZ);
+
+   if (conn->protocol_version < 2) {
+      snprintf(response_payload, BUF_SZ, "PAYLOAD requires PROTO 2 negotiation");
+      status_code = 505;
+      goto done;
+   }
 
    if (!conn->capabilities_known || !(conn->capabilities & RMI_CAP_PAYLOAD)) {
       snprintf(response_payload, BUF_SZ, "PAYLOAD not supported by server");
