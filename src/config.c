@@ -34,6 +34,7 @@ char *var_script_exec_dir = "/usr/local/libexec/cloud-rmi";
 char *var_script_base_namespace = "ProfiWeb\\Cloud\\Interfaces\\RMI";
 char *var_config_file = CONFIGURATION_FILE;
 char *var_unix_socket_path = NULL;
+int var_unix_socket_skip_auth = 0;
 char *var_interface_map_file = INTERFACE_MAP_FILE;
 
 #ifdef PROXY_SUPPORT
@@ -139,6 +140,17 @@ int read_config(char *config_file)
 
             if(log_level > 0) {
                log_event(LOG_INFO, "Set listen_unix=\"%s\"\n", var_unix_socket_path);
+            }
+         }
+         else if(strcasecmp(conf_name, "unix_socket_skip_auth") == 0) {
+            if(strcasecmp(conf_value, "Yes") == 0 || strcasecmp(conf_value, "On") == 0 || strcasecmp(conf_value, "1") == 0) {
+               var_unix_socket_skip_auth = 1;
+            } else {
+               var_unix_socket_skip_auth = 0;
+            }
+
+            if(log_level > 0) {
+               log_event(LOG_INFO, "Set unix_socket_skip_auth=\"%s\"\n", var_unix_socket_skip_auth ? "True" : "False");
             }
          }
          else if(strcasecmp(conf_name, "interface_map_file") == 0) {

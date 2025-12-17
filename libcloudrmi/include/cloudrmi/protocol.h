@@ -12,6 +12,7 @@ typedef struct rmi_protocol_ctx rmi_protocol_ctx_t;
 rmi_protocol_ctx_t *rmi_protocol_create(void);
 void rmi_protocol_destroy(rmi_protocol_ctx_t *ctx);
 void rmi_protocol_reset(rmi_protocol_ctx_t *ctx);
+int rmi_protocol_set_version(rmi_protocol_ctx_t *ctx, int version);
 
 // Feed raw bytes into protocol engine (never blocks)
 rmi_status_t rmi_protocol_feed(

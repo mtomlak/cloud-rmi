@@ -92,7 +92,7 @@ void handle_print_ifaces(struct conn_state *state)
    stream_write(state->sock, "\n");
 }
 
-static int handle_command_event(rmi_event_t *event, struct conn_state *state)
+static int handle_command_event(rmi_event_t *event, struct conn_state *state, rmi_protocol_ctx_t *protocol_ctx)
 {
    int time_diff;
    char *output = malloc(sizeof(char) * (BUF_SZ + 1));
@@ -115,6 +115,14 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state)
 
       if (requested < 1 || requested > SERVER_MAX_PROTOCOL_VERSION) {
          stream_writeln(state->sock, "400 Bad Request");
+         free(output);
+         return 0;
+      }
+
+      if (state->is_unix_socket && requested < 2) {
+         stream_writeln(state->sock, "400 Bad Request");
+         if (protocol_ctx != NULL)
+            rmi_protocol_set_version(protocol_ctx, state->protocol_version);
          free(output);
          return 0;
       }
@@ -299,7 +307,7 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state)
  * Handles a single socket connection to the client.
  * 
  */
-void handle_connection (int sock)
+void handle_connection (int sock, int is_unix_socket)
 {
    int loop = 1, bytes = 0;
    char buf[(BUF_SZ + 1)];
@@ -308,6 +316,20 @@ void handle_connection (int sock)
    rmi_protocol_ctx_t *protocol_ctx = rmi_protocol_create();
    if (protocol_ctx == NULL)
       return;
+
+   memset(&state, 0, sizeof(state));
+   state.sock = sock;
+   state.is_unix_socket = is_unix_socket;
+   state.protocol_version = is_unix_socket ? 2 : 1;
+   state.is_authenticated = (is_unix_socket && var_unix_socket_skip_auth);
+
+   if (state.is_authenticated)
+      strncpy(state.username, "UnixSocket", sizeof(state.username) - 1);
+
+   if (is_unix_socket && !rmi_protocol_set_version(protocol_ctx, state.protocol_version)) {
+      rmi_protocol_destroy(protocol_ctx);
+      return;
+   }
 
    // Write welcome message
    char caps_buf[BUF_SZ + 1];
@@ -321,10 +343,6 @@ void handle_connection (int sock)
       stream_writeln(sock, "220 %s Server Ready EXT PROTO=2,%s", var_context_name, caps_buf);
    else
       stream_writeln(sock, "220 %s Server Ready EXT PROTO=2", var_context_name);
-   state.sock = sock;
-   state.is_authenticated = 0;
-   state.protocol_version = 1;
-
    debug.sock = sock;
    debug.pid = (int) getpid();
 
@@ -355,7 +373,7 @@ void handle_connection (int sock)
                stream_writeln(state.sock, "400 Bad Request Arguments");
                loop = 1;
             } else {
-               loop = handle_command_event(&event, &state);
+               loop = handle_command_event(&event, &state, protocol_ctx);
             }
          } else if (status == RMI_E_ERR) {
             if (parse_err.code == RMI_ERROR_BAD_ARGS)

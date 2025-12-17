@@ -30,6 +30,7 @@ extern char *var_context_name;
 extern char *var_script_exec_dir;
 extern char *var_script_base_namespace;
 extern char *var_unix_socket_path;
+extern int var_unix_socket_skip_auth;
 extern char *var_interface_map_file;
 #ifdef PROXY_SUPPORT
 extern char *var_proxy;
