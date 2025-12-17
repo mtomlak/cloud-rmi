@@ -10,11 +10,17 @@ status codes, and bridging behaviors.
 
 Source: `libcloudrmi/src/protocol_feed.c`, `libcloudrmi/include/cloudrmi/types.h`
 
-- **Line length**: `MAX_LINE = RMI_BUF_SZ = 10240` bytes. Lines without a `\n`
-after 10239 bytes trigger `RMI_E_OVERFLOW` and reset the parser.
-- **Total buffer ceiling**: `RMI_MAX_BUFFER = RMI_BUF_SZ * 8` (81920 bytes).
+- **Line length**: `MAX_LINE = RMI_BUF_SZ = 8192` bytes. Lines without a `\n`
+  after 8192 bytes trigger `RMI_E_OVERFLOW` and reset the parser.
+- **Total buffer ceiling**: `RMI_MAX_BUFFER = RMI_BUF_SZ * 8` (65536 bytes).
   Exceeding this resets the parser and reports `RMI_E_OVERFLOW` with
   `RMI_ERROR_BAD_REQUEST`.
+- **Inline payload soft limit**: `RMI_INLINE_PAYLOAD_THRESHOLD = RMI_MAX_LINE -
+  floor(RMI_MAX_LINE * 0.35) - 500` (4,825 bytes with the current limits).
+  Clients prefer payload framing when raw arguments exceed this threshold; for
+  smaller payloads they still verify the fully framed, base64-encoded CALL line
+  does not reach `RMI_MAX_LINE`, falling back to payload framing when the
+  encoded line is too large.
 - **States**: `IDLE → CALL_PENDING_PAYLOAD → READING_PAYLOAD →
   EXECUTE_CALL → SEND_RESPONSE`. Pending CALL state is used when a payload
   header is received without inline args.

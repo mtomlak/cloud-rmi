@@ -10,6 +10,10 @@ namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
  */
 class SimpleRMIClient
 {
+	protected const DEFAULT_MAX_LINE = 8192;
+	protected const INLINE_PAYLOAD_OVERHEAD_PERCENT = 35;
+	protected const INLINE_PAYLOAD_HEADROOM = 500;
+
 	protected $port = 8000;
 	protected $host = 'localhost';
 	protected $connection = null;
@@ -101,14 +105,44 @@ class SimpleRMIClient
 			$interface = "\\$interface";
 
 		$options = $this->normalizeCallOptions($async);
+		$command = $options['async'] ? 'ACALL' : 'CALL';
+		$preferPayload = $this->shouldUsePayloadChannel($parameters, $options);
+		if (!empty($options['require_payload']))
+			$preferPayload = true;
+		$payloadChannelAvailable = $this->canUsePayloadChannel($options);
+		$inlinePayload = null;
+		$inlineLength = null;
 
-		if ($this->shouldUsePayloadChannel($parameters, $options)) {
+		if (!$preferPayload || !$payloadChannelAvailable) {
+			$inlinePayload = $this->encodePayload($parameters);
+			$inlineLength = strlen("$command $interface $methodName " . $inlinePayload);
+
+			if (!$preferPayload && $inlineLength >= $this->getMaxLineLength())
+				$preferPayload = true;
+		}
+
+		if ($preferPayload && !$payloadChannelAvailable) {
+			if (!empty($options['require_payload']))
+				throw new RemoteMethodInvocationException('Payload required but not supported by negotiated protocol version');
+
+			if (is_null($inlinePayload)) {
+				$inlinePayload = $this->encodePayload($parameters);
+				$inlineLength = strlen("$command $interface $methodName " . $inlinePayload);
+			}
+
+			if ($inlineLength >= $this->getMaxLineLength())
+				throw new RemoteMethodInvocationException('Payload required but not supported by negotiated protocol version');
+
+			$preferPayload = false;
+		}
+
+		if ($preferPayload) {
 			if ($this->sendPayloadCall($interface, $methodName, $parameters, $options) === false)
 				return false;
 			$result = $this->readResponse();
 		} else {
-			$command = ($options['async'] ? 'ACALL' : 'CALL') . " $interface $methodName " . $this->encodePayload($parameters);
-			if ($this->connWriteLn($command) === false)
+			$commandLine = "$command $interface $methodName " . $inlinePayload;
+			if ($this->connWriteLn($commandLine) === false)
 				return false;
 			$result = $this->readResponse();
 		}
@@ -222,12 +256,39 @@ class SimpleRMIClient
 		return $options;
 	}
 
+	protected function getMaxLineLength()
+	{
+		if (defined('RMI_MAX_LINE'))
+			return (int) RMI_MAX_LINE;
+
+		return self::DEFAULT_MAX_LINE;
+	}
+
+	protected function getInlinePayloadThreshold()
+	{
+		if (!is_null($this->payloadThreshold))
+			return (int) $this->payloadThreshold;
+
+		if (defined('RMI_INLINE_PAYLOAD_THRESHOLD'))
+			return (int) RMI_INLINE_PAYLOAD_THRESHOLD;
+
+		$maxLine = $this->getMaxLineLength();
+		return (int) max(0, $maxLine - floor(($maxLine * self::INLINE_PAYLOAD_OVERHEAD_PERCENT) / 100) - self::INLINE_PAYLOAD_HEADROOM);
+	}
+
+	protected function canUsePayloadChannel(array $options)
+	{
+		return $this->protocolVersion >= 2;
+	}
+
 	protected function shouldUsePayloadChannel($parameters, array $options)
 	{
 		if (!empty($options['payload']))
 			return true;
 
-		if (!is_null($this->payloadThreshold) && is_string($parameters) && strlen($parameters) >= $this->payloadThreshold)
+		$threshold = $this->getInlinePayloadThreshold();
+
+		if (!is_null($threshold) && is_string($parameters) && strlen($parameters) > $threshold)
 			return true;
 
 		return false;
