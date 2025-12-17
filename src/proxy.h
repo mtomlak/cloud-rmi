@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/un.h>
 #include "client.h"
 
 #define PROXY_PROTOCOL_VERSION	"1.0"
@@ -10,6 +11,7 @@
 #define PROXY_IFACE_MAX_SZ	512
 #define PROXY_IFACE_LIST_SZ	16
 #define PROXY_HOSTNAME_SZ	256
+#define PROXY_UNIX_PATH_SZ	sizeof(((struct sockaddr_un *)0)->sun_path)
 
 struct proxy_conn{
         int conn_id;
@@ -22,6 +24,8 @@ struct proxy_server{
 	int proxy_id;
 	char hostname[256];
 	int port;
+   int use_unix_socket;
+   char unix_socket_path[PROXY_UNIX_PATH_SZ];
 	struct proxy_conn conns[PROXY_CONN_LIST_SZ];
 	int conn_count;
 };

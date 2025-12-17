@@ -64,6 +64,48 @@ static int proxy_write_all(int fd, const uint8_t *buf, size_t len)
    return 1;
 }
 
+static int parse_proxy_address(
+   const char *address,
+   char *hostname,
+   size_t hostname_len,
+   int *port,
+   char *unix_socket_path,
+   size_t unix_socket_len)
+{
+   if (address == NULL || hostname == NULL || port == NULL || unix_socket_path == NULL)
+      return 0;
+
+   if (hostname_len > 0)
+      bzero(hostname, hostname_len);
+
+   if (unix_socket_len > 0)
+      bzero(unix_socket_path, unix_socket_len);
+
+   if (strncmp(address, "unix:", 5) == 0) {
+      const char *path = address + 5;
+
+      if (strlen(path) >= unix_socket_len)
+         return 0;
+
+      strncpy(unix_socket_path, path, unix_socket_len - 1);
+      *port = 0;
+      return 1;
+   }
+
+   if (address[0] == '/') {
+      if (strlen(address) >= unix_socket_len)
+         return 0;
+
+      strncpy(unix_socket_path, address, unix_socket_len - 1);
+      *port = 0;
+      return 1;
+   }
+
+   split_host_addr((char *)address, hostname, port);
+   unix_socket_path[0] = '\0';
+   return 1;
+}
+
 
 //
 // Proxy list management
@@ -101,21 +143,28 @@ int proxy_list_add(struct proxy_server proxy)
    return id;
 }
 
-struct proxy_server new_proxy_struct(char *hostname, int port)
+struct proxy_server new_proxy_struct(const char *hostname, int port, const char *unix_socket_path)
 {
    struct proxy_server proxy;
 
+   bzero(&proxy, sizeof(proxy));
    proxy.proxy_id = 0;      // will be set when it gets ID assigned
    proxy.conn_count = 0;
    proxy.port = port;
-   strcpy(proxy.hostname, hostname);
+   if (hostname != NULL) {
+      strncpy(proxy.hostname, hostname, sizeof(proxy.hostname) - 1);
+   }
+   if (unix_socket_path != NULL && strlen(unix_socket_path)) {
+      proxy.use_unix_socket = 1;
+      strncpy(proxy.unix_socket_path, unix_socket_path, sizeof(proxy.unix_socket_path) - 1);
+   }
 
    return proxy;
 }
 
-int proxy_list_add_new(char *hostname, int port)
+int proxy_list_add_new(const char *hostname, int port, const char *unix_socket_path)
 {
-   return proxy_list_add(new_proxy_struct(hostname, port));
+   return proxy_list_add(new_proxy_struct(hostname, port, unix_socket_path));
 }
 
 //
@@ -152,11 +201,13 @@ struct proxy_conn *proxy_get_conn(int proxy_id, int conn_id)
 int proxy_start_new_conn(int proxy_id)
 {
    struct rmi_client_conn client;
+   struct proxy_server *proxy = proxy_list_get(proxy_id);
 
    // Connect
    if (client_connect(
-      proxy_list_get(proxy_id)->hostname,
-      proxy_list_get(proxy_id)->port,
+      proxy->hostname,
+      proxy->port,
+      proxy->use_unix_socket ? proxy->unix_socket_path : NULL,
       &client
       ) < 0)
       die_err("Error: Failed to connect to the server as a proxy");
@@ -173,15 +224,18 @@ int proxy_start_new_conn(int proxy_id)
 int proxy_restart_conn(struct proxy_conn *conn)
 {
    int proxy_id;
+   struct proxy_server *proxy;
 
    if (var_debug)
       printf("Proxy: Restarting connection to proxy #%i", conn->proxy_id);
 
    proxy_id = conn->proxy_id;
+   proxy = proxy_list_get(proxy_id);
    client_disconnect(&conn->client);
    if (client_connect(
-      proxy_list_get(proxy_id)->hostname,
-      proxy_list_get(proxy_id)->port,
+      proxy->hostname,
+      proxy->port,
+      proxy->use_unix_socket ? proxy->unix_socket_path : NULL,
       &conn->client
       ) < 0)
       die_err("Error: Failed to connect to the server as a proxy");
@@ -362,7 +416,14 @@ void proxy_send_stats(int sock)
 
    for (i = 0; i < proxy_count; i++) {
       proxy = proxy_list_get(i);
-      stream_writeln(sock,  "%s\t%i\t%i/%i", proxy->hostname, proxy->port, proxy_get_spare_conn_count(i), proxy->conn_count);
+      const char *label = proxy->use_unix_socket ? proxy->unix_socket_path : proxy->hostname;
+      char port_buf[32];
+      snprintf(port_buf, sizeof(port_buf), "%s", proxy->use_unix_socket ? "-" : "");
+
+      if (!proxy->use_unix_socket)
+         snprintf(port_buf, sizeof(port_buf), "%i", proxy->port);
+
+      stream_writeln(sock,  "%s\t%s\t%i/%i", label, port_buf, proxy_get_spare_conn_count(i), proxy->conn_count);
    }
 
    stream_writeln(sock, "\nClient Connections:");
@@ -739,6 +800,7 @@ int proxy_conn_keepalive(struct proxy_conn *conn)
    proxy_set_conn_free(conn);
 
    free(response);
+   return ret;
 }
 
 void proxy_all_keepalive_conns()
@@ -820,21 +882,22 @@ int create_proxy_manager_proc()
  * Starts new proxy link
  * 
  */
-int proxy_start_new(char *proxy_ip, int proxy_port)
+int proxy_start_new(const char *proxy_ip, int proxy_port, const char *unix_socket_path)
 {
-   int sock, id, i;
-   struct proxy_server proxy;
+   int id, i;
 
    if (var_debug)
-      printf("Starting proxy to %s:%i\n", proxy_ip, proxy_port);
+      printf("Starting proxy to %s\n",
+         unix_socket_path ? unix_socket_path : proxy_ip);
 
    // Add new proxy struct to the list
-   id = proxy_list_add_new(proxy_ip, proxy_port);
+   id = proxy_list_add_new(proxy_ip, proxy_port, unix_socket_path);
 
    for(i = 0; i < var_proxy_min_spare_conns; i++)
       proxy_start_new_conn(id);
 
    proxy_fetch_interfaces(id);
+   return 1;
 }
 
 /**
@@ -846,10 +909,12 @@ int proxy_start(char *host_addresses)
    int proxy_port, byte, size = 0;
    char *hostname = malloc(sizeof(char) * (PROXY_HOSTNAME_SZ + 1));
    char *address = malloc(sizeof(char) * (PROXY_HOSTNAME_SZ + 1));
+   char *unix_socket = malloc(sizeof(char) * (PROXY_UNIX_PATH_SZ + 1));
    char *proxy_ip;
 
    bzero(hostname, PROXY_HOSTNAME_SZ);
    bzero(address, PROXY_HOSTNAME_SZ);
+   bzero(unix_socket, PROXY_UNIX_PATH_SZ);
 
    // Parse list of proxy servers separated by ","
    for(byte = 0; byte <= strlen(host_addresses); byte++) {
@@ -857,16 +922,25 @@ int proxy_start(char *host_addresses)
          continue;
 
       if (host_addresses[byte] == ',' || host_addresses[byte] == '\0') {
-         split_host_addr(address, hostname, &proxy_port);
-         proxy_ip = get_ip_addr(hostname);
-
-         if (proxy_ip == NULL) {
-            die_err("failed to resolve proxy hostname");
+         if (!parse_proxy_address(address, hostname, PROXY_HOSTNAME_SZ, &proxy_port, unix_socket, PROXY_UNIX_PATH_SZ)) {
+            die_err("failed to parse proxy hostname or unix socket path");
          }
-         proxy_start_new(proxy_ip, proxy_port);
+
+         if (unix_socket[0] != '\0') {
+            proxy_start_new(NULL, 0, unix_socket);
+         } else {
+            proxy_ip = get_ip_addr(hostname);
+ 
+            if (proxy_ip == NULL) {
+               die_err("failed to resolve proxy hostname");
+            }
+            proxy_start_new(proxy_ip, proxy_port, NULL);
+            free(proxy_ip);
+         }
 
          bzero(hostname, PROXY_HOSTNAME_SZ);
          bzero(address, PROXY_HOSTNAME_SZ);
+         bzero(unix_socket, PROXY_UNIX_PATH_SZ);
          size = 0;
          continue;
       }
@@ -880,6 +954,9 @@ int proxy_start(char *host_addresses)
    create_proxy_manager_proc();
 #endif
 
-   //free(proxy_ip);
-   //free(address);
+   free(hostname);
+   free(address);
+   free(unix_socket);
+
+   return 1;
 }
