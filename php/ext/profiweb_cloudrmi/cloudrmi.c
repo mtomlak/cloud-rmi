@@ -236,6 +236,7 @@ PHP_MINIT_FUNCTION(cloudrmi)
 {
     le_cloudrmi_ctx = zend_register_list_destructors_ex(cloudrmi_ctx_dtor, NULL, "cloudrmi_protocol_ctx", module_number);
     cloudrmi_register_constants(INIT_FUNC_ARGS_PASSTHRU);
+    cloudrmi_register_classes(INIT_FUNC_ARGS_PASSTHRU);
     return SUCCESS;
 }
 
