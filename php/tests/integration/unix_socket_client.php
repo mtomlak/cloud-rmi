@@ -1,12 +1,6 @@
 <?php
-if (!extension_loaded('cloudrmi')) {
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/ConnectionInterface.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteException.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteErrorException.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteMethodInvocationException.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIConnection.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/CloudRMIClient.php';
-}
+require_once __DIR__ . '/../support/extension_helpers.php';
+ensure_cloudrmi_extension_loaded();
 
 use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\CloudRMIClient;
 
@@ -26,14 +20,17 @@ function wait_for_unix_server(string $path, int $retries = 40): void
     throw new RuntimeException('unix server did not start at ' . $path);
 }
 
-function start_unix_server(string $socketPath): array
+function start_unix_server(string $extPath, string $socketPath): array
 {
-    $cmd = [
-        'php',
-        __DIR__ . '/../support/test_server.php',
-        '--unix-socket=' . $socketPath,
-        '--proto-max=2',
-    ];
+    $cmd = array_merge(
+        ['php'],
+        cloudrmi_extension_cli($extPath),
+        [
+            __DIR__ . '/../support/test_server.php',
+            '--unix-socket=' . $socketPath,
+            '--proto-max=2',
+        ]
+    );
     $descriptors = [
         0 => ['pipe', 'r'],
         1 => ['pipe', 'w'],
@@ -57,8 +54,9 @@ function stop_server($proc, array $pipes): void
     proc_close($proc);
 }
 
+$extPath = cloudrmi_extension_path();
 $socketPath = sys_get_temp_dir() . '/cloudrmi-' . uniqid('', true) . '.sock';
-[$proc, $pipes] = start_unix_server($socketPath);
+[$proc, $pipes] = start_unix_server($extPath, $socketPath);
 wait_for_unix_server($socketPath);
 
 try {

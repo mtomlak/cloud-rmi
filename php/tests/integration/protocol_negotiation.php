@@ -1,12 +1,6 @@
 <?php
-if (!extension_loaded('cloudrmi')) {
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/ConnectionInterface.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteException.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteErrorException.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteMethodInvocationException.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIConnection.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/CloudRMIClient.php';
-}
+require_once __DIR__ . '/../support/extension_helpers.php';
+ensure_cloudrmi_extension_loaded();
 
 use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\CloudRMIClient;
 
@@ -23,15 +17,18 @@ function wait_for_server(string $host, int $port, int $retries = 20): void
     throw new RuntimeException('server did not start');
 }
 
-function start_test_server(int $port, int $maxProto): array
+function start_test_server(string $extPath, int $port, int $maxProto): array
 {
-    $cmd = [
-        'php',
-        __DIR__ . '/../support/test_server.php',
-        '--host=127.0.0.1',
-        '--port=' . $port,
-        '--proto-max=' . $maxProto,
-    ];
+    $cmd = array_merge(
+        ['php'],
+        cloudrmi_extension_cli($extPath),
+        [
+            __DIR__ . '/../support/test_server.php',
+            '--host=127.0.0.1',
+            '--port=' . $port,
+            '--proto-max=' . $maxProto,
+        ]
+    );
     $descriptors = [
         0 => ['pipe', 'r'],
         1 => ['pipe', 'w'],
@@ -69,8 +66,9 @@ function read_banner(int $port): string
     return trim($line);
 }
 
+$extPath = cloudrmi_extension_path();
 $portV2 = 15000 + random_int(0, 500);
-[$procV2, $pipesV2] = start_test_server($portV2, 2);
+[$procV2, $pipesV2] = start_test_server($extPath, $portV2, 2);
 wait_for_server('127.0.0.1', $portV2);
 
 try {
@@ -116,7 +114,7 @@ try {
 }
 
 $portV1 = 16000 + random_int(0, 500);
-[$procV1, $pipesV1] = start_test_server($portV1, 1);
+[$procV1, $pipesV1] = start_test_server($extPath, $portV1, 1);
 wait_for_server('127.0.0.1', $portV1);
 
 try {

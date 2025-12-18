@@ -1,12 +1,6 @@
 <?php
-if (!extension_loaded('cloudrmi')) {
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/ConnectionInterface.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteException.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteErrorException.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteMethodInvocationException.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIConnection.php';
-    require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/CloudRMIClient.php';
-}
+require_once __DIR__ . '/../support/extension_helpers.php';
+ensure_cloudrmi_extension_loaded();
 
 use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\CloudRMIClient;
 
@@ -28,15 +22,18 @@ function wait_for_server(string $host, int $port, int $retries = 20): void
     throw new RuntimeException('server did not start');
 }
 
-function start_server(int $port, bool $enableFork): array
+function start_server(string $extPath, int $port, bool $enableFork): array
 {
-    $cmd = [
-        'php',
-        __DIR__ . '/../support/test_server.php',
-        '--host=127.0.0.1',
-        '--port=' . $port,
-        '--proto-max=2',
-    ];
+    $cmd = array_merge(
+        ['php'],
+        cloudrmi_extension_cli($extPath),
+        [
+            __DIR__ . '/../support/test_server.php',
+            '--host=127.0.0.1',
+            '--port=' . $port,
+            '--proto-max=2',
+        ]
+    );
 
     if ($enableFork) {
         $cmd[] = '--enable-fork=1';
@@ -103,8 +100,10 @@ function read_caps(int $port): string
     return trim($line);
 }
 
+$extPath = cloudrmi_extension_path();
+
 $asyncPort = 17000 + random_int(0, 200);
-[$asyncProc, $asyncPipes] = start_server($asyncPort, true);
+[$asyncProc, $asyncPipes] = start_server($extPath, $asyncPort, true);
 wait_for_server('127.0.0.1', $asyncPort);
 
 try {
@@ -131,7 +130,7 @@ try {
 }
 
 $fallbackPort = 18000 + random_int(0, 200);
-[$fallbackProc, $fallbackPipes] = start_server($fallbackPort, false);
+[$fallbackProc, $fallbackPipes] = start_server($extPath, $fallbackPort, false);
 wait_for_server('127.0.0.1', $fallbackPort);
 
 try {
