@@ -6,6 +6,7 @@
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_interfaces.h"
 #include "Zend/zend_smart_str.h"
+#include "main/php_streams.h"
 #include "ext/json/php_json.h"
 
 #include <arpa/inet.h>
@@ -196,6 +197,16 @@ static void cloudrmi_client_update_properties(cloudrmi_client_object *obj)
 
     ZVAL_BOOL(&zv, obj->supports_async);
     zend_update_property(obj->std.ce, zobj, ZEND_STRL("supportsAsyncCapability"), &zv);
+
+    array_init(&zv);
+    if (obj->supports_payload) {
+        add_next_index_string(&zv, "PAYLOAD");
+    }
+    if (obj->supports_async) {
+        add_next_index_string(&zv, "ACALL");
+    }
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("capabilities"), &zv);
+    zval_ptr_dtor(&zv);
 }
 
 static void cloudrmi_client_sync_from_properties(cloudrmi_client_object *obj)
@@ -251,6 +262,57 @@ static void cloudrmi_client_sync_from_properties(cloudrmi_client_object *obj)
     if (Z_TYPE_P(prop) == IS_LONG) {
         obj->advertised_max_protocol = Z_LVAL_P(prop);
     }
+}
+
+static void cloudrmi_client_set_connection_property(cloudrmi_client_object *obj, zval *connection)
+{
+    zval target;
+
+    if (connection) {
+        ZVAL_COPY(&target, connection);
+    } else {
+        ZVAL_NULL(&target);
+    }
+
+    zend_update_property(obj->std.ce, &obj->std, ZEND_STRL("connection"), &target);
+    zval_ptr_dtor(&target);
+}
+
+static void cloudrmi_client_refresh_connection_property(cloudrmi_client_object *obj)
+{
+    zval connection;
+    ZVAL_NULL(&connection);
+
+    zend_string *conn_class = zend_string_init(CLOUDRMI_NS "\\SimpleRMIConnection", sizeof(CLOUDRMI_NS "\\SimpleRMIConnection") - 1, 0);
+    zend_class_entry *conn_ce = zend_lookup_class(conn_class);
+    zend_string_release(conn_class);
+
+    if (conn_ce) {
+        object_init_ex(&connection, conn_ce);
+
+        zval host_zv, port_zv, socket_zv, path_zv;
+        ZVAL_STR_COPY(&host_zv, obj->host);
+        ZVAL_LONG(&port_zv, obj->port);
+        ZVAL_LONG(&socket_zv, obj->socket_fd);
+        if (obj->unix_path) {
+            ZVAL_STR_COPY(&path_zv, obj->unix_path);
+        } else {
+            ZVAL_NULL(&path_zv);
+        }
+
+        zend_update_property(conn_ce, Z_OBJ(connection), ZEND_STRL("host"), &host_zv);
+        zend_update_property(conn_ce, Z_OBJ(connection), ZEND_STRL("port"), &port_zv);
+        zend_update_property(conn_ce, Z_OBJ(connection), ZEND_STRL("socket"), &socket_zv);
+        zend_update_property(conn_ce, Z_OBJ(connection), ZEND_STRL("unixSocketPath"), &path_zv);
+
+        zval_ptr_dtor(&host_zv);
+        zval_ptr_dtor(&port_zv);
+        zval_ptr_dtor(&socket_zv);
+        zval_ptr_dtor(&path_zv);
+    }
+
+    cloudrmi_client_set_connection_property(obj, &connection);
+    zval_ptr_dtor(&connection);
 }
 
 static zend_string *cloudrmi_trim(const zend_string *str)
@@ -654,6 +716,7 @@ static void cloudrmi_client_close_socket(cloudrmi_client_object *obj)
         obj->socket_fd = -1;
     }
     obj->connected = 0;
+    cloudrmi_client_set_connection_property(obj, NULL);
 }
 
 static void cloudrmi_client_free_obj(zend_object *object)
@@ -692,6 +755,16 @@ static zend_object *cloudrmi_client_create_obj(zend_class_entry *ce)
     intern->supports_payload = 0;
     intern->supports_async = 0;
     intern->connected = 0;
+
+    zval auth_arr;
+    array_init(&auth_arr);
+    zend_update_property(cloudrmi_client_ce, &intern->std, ZEND_STRL("auth"), &auth_arr);
+    zval_ptr_dtor(&auth_arr);
+
+    zval caps_arr;
+    array_init(&caps_arr);
+    zend_update_property(cloudrmi_client_ce, &intern->std, ZEND_STRL("capabilities"), &caps_arr);
+    zval_ptr_dtor(&caps_arr);
 
     intern->std.handlers = &cloudrmi_client_handlers;
 
@@ -1677,6 +1750,20 @@ ZEND_BEGIN_ARG_INFO_EX(arginfo_cloudrmi_client_call, 0, 0, 3)
     ZEND_ARG_INFO(0, async)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_client_is_connected, 0, 0, _IS_BOOL, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_client_auth_token, 0, 1, _IS_BOOL, 0)
+    ZEND_ARG_TYPE_INFO(0, token, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_cloudrmi_client_get_connection, 0, 0, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_cloudrmi_client_set_connection, 0, 0, 1)
+    ZEND_ARG_OBJ_INFO(0, connection, ProfiWeb\\Cloud\\Infrastructure\\Messaging\\RemoteMethodInvocation\\ConnectionInterface, 0)
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_INFO_EX(arginfo_cloudrmi_server_unix_path, 0, 0, 1)
     ZEND_ARG_TYPE_INFO(0, path, IS_STRING, 0)
 ZEND_END_ARG_INFO()
@@ -1734,6 +1821,11 @@ PHP_METHOD(CloudRMIClient, connect)
 
     cloudrmi_client_sync_from_properties(obj);
 
+    zend_long started = (zend_long)time(NULL);
+    zval started_zv;
+    ZVAL_LONG(&started_zv, started);
+    zend_update_property(obj->std.ce, Z_OBJ_P(zobj), ZEND_STRL("connStarted"), &started_zv);
+
     obj->socket_fd = cloudrmi_socket_connect(obj->host, obj->port, obj->unix_path, obj->conn_timeout);
     if (obj->socket_fd < 0) {
         zend_throw_exception(cloudrmi_exception_ce, "Cannot connect to RMI server", 0);
@@ -1757,6 +1849,7 @@ PHP_METHOD(CloudRMIClient, connect)
     cloudrmi_client_negotiate_protocol(obj);
     cloudrmi_client_discover_caps(obj);
 
+    cloudrmi_client_refresh_connection_property(obj);
     cloudrmi_client_update_properties(obj);
 
     RETURN_TRUE;
@@ -1776,6 +1869,63 @@ PHP_METHOD(CloudRMIClient, disconnect)
 
     cloudrmi_client_close_socket(obj);
     RETURN_TRUE;
+}
+
+PHP_METHOD(CloudRMIClient, isConnected)
+{
+    cloudrmi_client_object *obj = cloudrmi_client_from_obj(Z_OBJ_P(getThis()));
+
+    zval rv;
+    zval *connection = zend_read_property(obj->std.ce, Z_OBJ_P(getThis()), ZEND_STRL("connection"), 1, &rv);
+    zend_bool has_connection = connection && Z_TYPE_P(connection) != IS_NULL && !Z_ISUNDEF_P(connection);
+
+    RETURN_BOOL(obj->connected || has_connection);
+}
+
+PHP_METHOD(CloudRMIClient, authByToken)
+{
+    zend_string *token = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(token)
+    ZEND_PARSE_PARAMETERS_END();
+
+    cloudrmi_client_object *obj = cloudrmi_client_from_obj(Z_OBJ_P(getThis()));
+    cloudrmi_client_sync_from_properties(obj);
+
+    if (!obj->connected) {
+        zend_throw_exception(cloudrmi_exception_ce, "Not connected", 0);
+        RETURN_NULL();
+    }
+
+    smart_str line = {0};
+    smart_str_appends(&line, "AUTH TOKEN ");
+    smart_str_append(&line, token);
+    smart_str_0(&line);
+
+    if (!line.s || cloudrmi_socket_write_line(obj->socket_fd, line.s) < 0) {
+        if (line.s) {
+            zend_string_release(line.s);
+        }
+        zend_throw_exception(cloudrmi_exception_ce, "RMI authentication error: failed to write auth command", 0);
+        RETURN_NULL();
+    }
+
+    zend_string_release(line.s);
+
+    zend_string *resp = cloudrmi_socket_read_line(obj->socket_fd, obj->read_timeout);
+    if (!resp) {
+        zend_throw_exception(cloudrmi_exception_ce, "RMI authentication error: empty response", 0);
+        RETURN_NULL();
+    }
+
+    int code = atoi(ZSTR_VAL(resp));
+    if (code == 200) {
+        zend_string_release(resp);
+        RETURN_TRUE;
+    }
+
+    zend_throw_exception_ex(cloudrmi_exception_ce, 0, "RMI authentication error: %s", ZSTR_VAL(resp));
+    zend_string_release(resp);
 }
 
 PHP_METHOD(CloudRMIClient, callRemoteMethod)
@@ -2000,6 +2150,52 @@ PHP_METHOD(CloudRMIClient, callRemoteMethod)
     RETVAL_ZVAL(&decoded, 1, 0);
 }
 
+PHP_METHOD(CloudRMIClient, getConnection)
+{
+    cloudrmi_client_object *obj = cloudrmi_client_from_obj(Z_OBJ_P(getThis()));
+    zval rv;
+    zval *connection = zend_read_property(obj->std.ce, Z_OBJ_P(getThis()), ZEND_STRL("connection"), 1, &rv);
+
+    RETURN_ZVAL(connection, 1, 0);
+}
+
+PHP_METHOD(CloudRMIClient, setConnection)
+{
+    zval *connection = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_OBJECT(connection)
+    ZEND_PARSE_PARAMETERS_END();
+
+    cloudrmi_client_object *obj = cloudrmi_client_from_obj(Z_OBJ_P(getThis()));
+
+    cloudrmi_client_set_connection_property(obj, connection);
+
+    int fd = obj->socket_fd;
+    zval retval;
+    ZVAL_UNDEF(&retval);
+    zend_call_method_with_0_params(Z_OBJ_P(connection), Z_OBJCE_P(connection), NULL, "getSocket", &retval);
+    if (Z_TYPE(retval) == IS_LONG) {
+        fd = (int)Z_LVAL(retval);
+    } else if (Z_TYPE(retval) == IS_RESOURCE) {
+        php_stream *stream = NULL;
+        php_stream_from_zval_no_verify(stream, &retval);
+        if (stream) {
+            int cast_fd = -1;
+            if (php_stream_cast(stream, PHP_STREAM_AS_FD_FOR_SELECT | PHP_STREAM_CAST_INTERNAL, (void *)&cast_fd, 1) == SUCCESS && cast_fd >= 0) {
+                fd = cast_fd;
+            }
+        }
+    }
+    if (!Z_ISUNDEF(retval)) {
+        zval_ptr_dtor(&retval);
+    }
+
+    obj->socket_fd = fd;
+    obj->connected = (fd >= 0);
+
+    RETURN_ZVAL(connection, 1, 0);
+}
+
 PHP_METHOD(CloudRMIServer, __construct)
 {
     // defaults handled in create handler
@@ -2088,6 +2284,13 @@ PHP_METHOD(CloudRMIServer, bind)
     zend_string_release(interface);
 }
 
+PHP_METHOD(CloudRMIServer, handleProccessShutdown)
+{
+    cloudrmi_server_object *obj = cloudrmi_server_from_obj(Z_OBJ_P(getThis()));
+    obj->do_shutdown = 1;
+    cloudrmi_server_close_listener(obj);
+}
+
 PHP_METHOD(CloudRMIServer, start)
 {
     cloudrmi_server_object *obj = cloudrmi_server_from_obj(Z_OBJ_P(getThis()));
@@ -2153,8 +2356,12 @@ static const zend_function_entry cloudrmi_client_methods[] = {
     PHP_ME(CloudRMIClient, __construct, arginfo_cloudrmi_client_construct, ZEND_ACC_PUBLIC | ZEND_ACC_CTOR)
     PHP_ME(CloudRMIClient, connect, arginfo_cloudrmi_void, ZEND_ACC_PUBLIC)
     PHP_ME(CloudRMIClient, disconnect, arginfo_cloudrmi_void, ZEND_ACC_PUBLIC)
+    PHP_ME(CloudRMIClient, isConnected, arginfo_cloudrmi_client_is_connected, ZEND_ACC_PUBLIC)
+    PHP_ME(CloudRMIClient, authByToken, arginfo_cloudrmi_client_auth_token, ZEND_ACC_PUBLIC)
     PHP_ME(CloudRMIClient, callRemoteMethod, arginfo_cloudrmi_client_call, ZEND_ACC_PUBLIC)
     PHP_MALIAS(CloudRMIClient, call, callRemoteMethod, arginfo_cloudrmi_client_call, ZEND_ACC_PUBLIC)
+    PHP_ME(CloudRMIClient, setConnection, arginfo_cloudrmi_client_set_connection, ZEND_ACC_PUBLIC)
+    PHP_ME(CloudRMIClient, getConnection, arginfo_cloudrmi_client_get_connection, ZEND_ACC_PUBLIC)
     PHP_FE_END
 };
 
@@ -2165,6 +2372,7 @@ static const zend_function_entry cloudrmi_server_methods[] = {
     PHP_ME(CloudRMIServer, setMaxProtocolVersion, arginfo_cloudrmi_server_max_proto, ZEND_ACC_PUBLIC)
     PHP_ME(CloudRMIServer, setRequireAuth, arginfo_cloudrmi_server_bool, ZEND_ACC_PUBLIC)
     PHP_ME(CloudRMIServer, bind, arginfo_cloudrmi_server_bind, ZEND_ACC_PUBLIC)
+    PHP_ME(CloudRMIServer, handleProccessShutdown, arginfo_cloudrmi_void, ZEND_ACC_PUBLIC)
     PHP_ME(CloudRMIServer, start, arginfo_cloudrmi_void, ZEND_ACC_PUBLIC)
     PHP_FE_END
 };
@@ -2201,6 +2409,13 @@ void cloudrmi_register_classes(INIT_FUNC_ARGS)
     zend_declare_property_long(cloudrmi_client_ce, ZEND_STRL("advertisedMaxProtocol"), 1, ZEND_ACC_PROTECTED);
     zend_declare_property_bool(cloudrmi_client_ce, ZEND_STRL("supportsPayloadCapability"), 0, ZEND_ACC_PROTECTED);
     zend_declare_property_bool(cloudrmi_client_ce, ZEND_STRL("supportsAsyncCapability"), 0, ZEND_ACC_PROTECTED);
+    zend_declare_property_null(cloudrmi_client_ce, ZEND_STRL("connection"), ZEND_ACC_PROTECTED);
+    zend_declare_property_null(cloudrmi_client_ce, ZEND_STRL("connStarted"), ZEND_ACC_PROTECTED);
+    zend_declare_property_null(cloudrmi_client_ce, ZEND_STRL("auth"), ZEND_ACC_PROTECTED);
+    zend_declare_property_null(cloudrmi_client_ce, ZEND_STRL("capabilities"), ZEND_ACC_PROTECTED);
+    zend_declare_property_null(cloudrmi_client_ce, ZEND_STRL("payloadThreshold"), ZEND_ACC_PROTECTED);
+    zend_declare_property_string(cloudrmi_client_ce, ZEND_STRL("defaultPayloadEncoding"), "RAW", ZEND_ACC_PROTECTED);
+    zend_declare_property_null(cloudrmi_client_ce, ZEND_STRL("protocolCtx"), ZEND_ACC_PROTECTED);
 
     INIT_NS_CLASS_ENTRY(ce, CLOUDRMI_NS, "CloudRMIServer", cloudrmi_server_methods);
     cloudrmi_server_ce = zend_register_internal_class(&ce);
