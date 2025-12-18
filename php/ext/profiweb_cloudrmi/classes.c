@@ -17,6 +17,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -2014,6 +2015,7 @@ PHP_METHOD(CloudRMIServer, setUnixSocketPath)
     ZEND_PARSE_PARAMETERS_END();
 
     cloudrmi_server_object *obj = cloudrmi_server_from_obj(Z_OBJ_P(getThis()));
+    cloudrmi_server_sync_from_properties(obj);
     if (obj->unix_path) zend_string_release(obj->unix_path);
     obj->unix_path = zend_string_copy(path);
     cloudrmi_server_update_properties(obj);
@@ -2027,6 +2029,7 @@ PHP_METHOD(CloudRMIServer, setUnixSocketSkipAuth)
     ZEND_PARSE_PARAMETERS_END();
 
     cloudrmi_server_object *obj = cloudrmi_server_from_obj(Z_OBJ_P(getThis()));
+    cloudrmi_server_sync_from_properties(obj);
     obj->unix_socket_skip_auth = skip;
     cloudrmi_server_update_properties(obj);
 }
@@ -2039,6 +2042,7 @@ PHP_METHOD(CloudRMIServer, setMaxProtocolVersion)
     ZEND_PARSE_PARAMETERS_END();
 
     cloudrmi_server_object *obj = cloudrmi_server_from_obj(Z_OBJ_P(getThis()));
+    cloudrmi_server_sync_from_properties(obj);
     if (version < 1) version = 1;
     if (version > 2) version = 2;
     obj->max_protocol_version = version;
@@ -2053,6 +2057,7 @@ PHP_METHOD(CloudRMIServer, setRequireAuth)
     ZEND_PARSE_PARAMETERS_END();
 
     cloudrmi_server_object *obj = cloudrmi_server_from_obj(Z_OBJ_P(getThis()));
+    cloudrmi_server_sync_from_properties(obj);
     obj->require_auth = require;
     cloudrmi_server_update_properties(obj);
 }
@@ -2081,8 +2086,6 @@ PHP_METHOD(CloudRMIServer, bind)
     Z_TRY_ADDREF_P(handler);
     zend_hash_update(&obj->bindings, interface, handler);
     zend_string_release(interface);
-
-    cloudrmi_server_update_properties(obj);
 }
 
 PHP_METHOD(CloudRMIServer, start)
@@ -2098,14 +2101,45 @@ PHP_METHOD(CloudRMIServer, start)
 
     obj->do_shutdown = 0;
     while (!obj->do_shutdown) {
+        if (!obj->disable_fork) {
+            while (waitpid(-1, NULL, WNOHANG) > 0) {
+                /* reap exited children */
+            }
+        }
+
         int client_fd = accept(obj->listen_fd, NULL, NULL);
         if (client_fd < 0) {
             if (errno == EINTR) {
                 continue;
             }
+            if (!obj->disable_fork) {
+                while (waitpid(-1, NULL, WNOHANG) > 0) {
+                    /* reap exited children */
+                }
+            }
             break;
         }
-        cloudrmi_socket_set_timeout(client_fd, obj->read_timeout);
+
+        if (!obj->disable_fork) {
+            pid_t pid = fork();
+            if (pid == 0) {
+                close(obj->listen_fd);
+                cloudrmi_socket_set_timeout(client_fd, obj->high_read_timeout);
+                cloudrmi_server_handle_client(obj, client_fd);
+                close(client_fd);
+                _exit(0);
+            } else if (pid > 0) {
+                close(client_fd);
+                continue;
+            } else {
+                cloudrmi_socket_set_timeout(client_fd, obj->nofork_read_timeout);
+                cloudrmi_server_handle_client(obj, client_fd);
+                close(client_fd);
+                continue;
+            }
+        }
+
+        cloudrmi_socket_set_timeout(client_fd, obj->nofork_read_timeout);
         cloudrmi_server_handle_client(obj, client_fd);
         close(client_fd);
     }
