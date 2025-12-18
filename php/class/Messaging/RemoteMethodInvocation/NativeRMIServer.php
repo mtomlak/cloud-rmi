@@ -10,7 +10,7 @@ use ProfiWeb\Cloud\Infrastructure\System\ProcessControl\ProcessFork;
  * @author Marian Tomlak
  * @license Proprietary
  */
-class SimpleRMIServer
+class NativeRMIServer
 {
 	protected $serverSocket;
 	// Configuration parameters
@@ -421,14 +421,14 @@ class SimpleRMIServer
 	protected function connWriteLn(&$stream, $line)
 	{
 		if (feof($stream) || feof($stream)) {
-			//syslog($errorSeverity, "SimpleRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket unavailable");
+			//syslog($errorSeverity, "NativeRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket unavailable");
 			return false;//$this->proc->join();
 		}
 
 		$info = stream_get_meta_data($stream);
 
 		if ($info['timed_out']) {
-			syslog(LOG_DEBUG, "SimpleRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket native timeout");
+			syslog(LOG_DEBUG, "NativeRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket native timeout");
 			return false;//$this->proc->join();
 		}
 
@@ -450,14 +450,14 @@ class SimpleRMIServer
 			}
 
 			if (!is_resource($stream)) {
-				//syslog(LOG_DEBUG, "SimpleRMIServer::connReadLn(): Exiting worker " .  getmypid() . ": socket unavailable");
+				//syslog(LOG_DEBUG, "NativeRMIServer::connReadLn(): Exiting worker " .  getmypid() . ": socket unavailable");
 				return false;//$this->proc->join();
 			}
 
 			$info = stream_get_meta_data($stream);
 
 			if ($info['timed_out']) {
-				syslog(LOG_DEBUG, "SimpleRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket native timeout");
+				syslog(LOG_DEBUG, "NativeRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket native timeout");
 				return '__timeout';//$this->proc->join();
 			}
 
@@ -668,7 +668,7 @@ class SimpleRMIServer
 
 		// Timed out, need to kill the child
 		$this->log("Terminating unresponsive child $pid");
-		syslog(LOG_CRIT, "SimpleRMIServer: Detected unresponsive child $pid");
+		syslog(LOG_CRIT, "NativeRMIServer: Detected unresponsive child $pid");
 		posix_kill($pid, SIGKILL);
 		$this->doShutdown = true;
 		return $this->proc->join();

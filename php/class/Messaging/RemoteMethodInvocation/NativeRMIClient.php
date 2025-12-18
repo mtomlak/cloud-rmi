@@ -8,7 +8,7 @@ namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
  * @author Marian Tomlak
  * @license Proprietary
  */
-class SimpleRMIClient
+class NativeRMIClient
 {
 	protected $port = 8000;
 	protected $host = 'localhost';
