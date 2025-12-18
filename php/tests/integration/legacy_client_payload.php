@@ -4,9 +4,9 @@ require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteExce
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteErrorException.php';
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteMethodInvocationException.php';
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIConnection.php';
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIClient.php';
+require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/CloudRMIClient.php';
 
-use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\SimpleRMIClient;
+use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\CloudRMIClient;
 
 function wait_for_server(string $host, int $port, int $retries = 20): void
 {
@@ -60,7 +60,7 @@ $port = 14000 + random_int(0, 1000);
 wait_for_server('127.0.0.1', $port);
 
 try {
-    $legacy = new SimpleRMIClient('127.0.0.1', $port);
+    $legacy = new CloudRMIClient('127.0.0.1', $port);
     $legacy->connect();
     $legacyResponse = $legacy->callRemoteMethod('TestRmiInterface', 'method', 'hello');
     $legacy->disconnect();
@@ -68,7 +68,7 @@ try {
         throw new RuntimeException('legacy call failed: ' . var_export($legacyResponse, true));
     }
 
-    $payloadClient = new SimpleRMIClient('127.0.0.1', $port);
+    $payloadClient = new CloudRMIClient('127.0.0.1', $port);
     $payloadClient->connect();
     $payloadResponse = $payloadClient->callRemoteMethod('TestRmiInterface', 'upload', "bin\0bytes", ['payload' => true, 'encoding' => 'RAW']);
     $payloadClient->disconnect();
@@ -77,7 +77,7 @@ try {
     }
 
     $binaryBody = random_bytes(8) . "\0" . random_bytes(4);
-    $binary = new SimpleRMIClient('127.0.0.1', $port);
+    $binary = new CloudRMIClient('127.0.0.1', $port);
     $binary->connect();
     $binaryResponse = $binary->callRemoteMethod('TestRmiInterface', 'upload', $binaryBody, ['payload' => true]);
     $binary->disconnect();
@@ -85,7 +85,7 @@ try {
         throw new RuntimeException('binary payload call failed');
     }
 
-    $mixed = new SimpleRMIClient('127.0.0.1', $port);
+    $mixed = new CloudRMIClient('127.0.0.1', $port);
     $mixed->connect();
     $mixedLegacy = $mixed->callRemoteMethod('TestRmiInterface', 'method', 'first');
     $mixedPayload = $mixed->callRemoteMethod('TestRmiInterface', 'upload', 'second', ['payload' => true]);
@@ -114,7 +114,7 @@ try {
         throw new RuntimeException('expected error for mixed legacy/payload');
     }
 
-    fwrite(STDOUT, "SimpleRMIClient payload integration tests passed\n");
+    fwrite(STDOUT, "CloudRMIClient payload integration tests passed\n");
 } finally {
     stop_server($proc, $pipes);
 }
