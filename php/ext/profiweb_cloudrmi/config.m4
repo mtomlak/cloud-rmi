@@ -21,5 +21,5 @@ if test "$PHP_PROFIWEB_CLOUDRMI" != "no"; then
   fi
 
   PHP_SUBST(PROFIWEB_CLOUDRMI_SHARED_LIBADD)
-  PHP_NEW_EXTENSION(profiweb_cloudrmi, cloudrmi.c, yes)
+  PHP_NEW_EXTENSION(profiweb_cloudrmi, cloudrmi.c classes.c, yes)
 fi
