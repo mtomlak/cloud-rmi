@@ -116,6 +116,24 @@ PHP_FUNCTION(cloudrmi_protocol_reset)
     rmi_protocol_reset(wrapper->ctx);
 }
 
+PHP_FUNCTION(cloudrmi_protocol_set_version)
+{
+    zval *zctx;
+    zend_long version;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_RESOURCE(zctx)
+        Z_PARAM_LONG(version)
+    ZEND_PARSE_PARAMETERS_END();
+
+    cloudrmi_context_wrapper *wrapper = cloudrmi_fetch_ctx(zctx);
+    if (wrapper == NULL || wrapper->ctx == NULL) {
+        RETURN_FALSE;
+    }
+
+    RETURN_BOOL(rmi_protocol_set_version(wrapper->ctx, (int)version));
+}
+
 PHP_FUNCTION(cloudrmi_protocol_feed)
 {
     zval *zctx;
@@ -181,6 +199,11 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_protocol_reset, 0, 1, I
     ZEND_ARG_INFO(0, ctx)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_protocol_set_version, 0, 2, _IS_BOOL, 0)
+    ZEND_ARG_INFO(0, ctx)
+    ZEND_ARG_TYPE_INFO(0, version, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_protocol_feed, 0, 2, IS_ARRAY, 0)
     ZEND_ARG_INFO(0, ctx)
     ZEND_ARG_TYPE_INFO(0, bytes, IS_STRING, 0)
@@ -194,6 +217,7 @@ static const zend_function_entry cloudrmi_functions[] = {
     PHP_FE(cloudrmi_protocol_create, arginfo_cloudrmi_protocol_create)
     PHP_FE(cloudrmi_protocol_destroy, arginfo_cloudrmi_protocol_destroy)
     PHP_FE(cloudrmi_protocol_reset, arginfo_cloudrmi_protocol_reset)
+    PHP_FE(cloudrmi_protocol_set_version, arginfo_cloudrmi_protocol_set_version)
     PHP_FE(cloudrmi_protocol_feed, arginfo_cloudrmi_protocol_feed)
     PHP_FE(cloudrmi_protocol_next_event, arginfo_cloudrmi_protocol_next_event)
     PHP_FE_END

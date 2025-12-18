@@ -3,6 +3,8 @@
 
 #include "ext/standard/base64.h"
 #include "ext/standard/php_var.h"
+#include "Zend/zend_exceptions.h"
+#include "Zend/zend_interfaces.h"
 #include "Zend/zend_smart_str.h"
 #include "ext/json/php_json.h"
 
@@ -31,7 +33,6 @@ static zend_object_handlers cloudrmi_client_handlers;
 static zend_object_handlers cloudrmi_server_handlers;
 
 typedef struct _cloudrmi_client_object {
-    zend_object std;
     zend_string *host;
     zend_string *unix_path;
     zend_long port;
@@ -45,6 +46,7 @@ typedef struct _cloudrmi_client_object {
     zend_bool supports_payload;
     zend_bool supports_async;
     zend_bool connected;
+    zend_object std;
 } cloudrmi_client_object;
 
 typedef struct _cloudrmi_server_binding {
@@ -53,7 +55,6 @@ typedef struct _cloudrmi_server_binding {
 } cloudrmi_server_binding;
 
 typedef struct _cloudrmi_server_object {
-    zend_object std;
     HashTable bindings;
     zend_string *host;
     zend_string *context_name;
@@ -74,6 +75,7 @@ typedef struct _cloudrmi_server_object {
     time_t started_at;
     int listen_fd;
     zend_bool do_shutdown;
+    zend_object std;
 } cloudrmi_server_object;
 
 #define CLOUDRMI_INLINE_THRESHOLD_FALLBACK 4825
@@ -90,27 +92,17 @@ static inline cloudrmi_server_object *cloudrmi_server_from_obj(zend_object *obj)
 
 static zend_string *cloudrmi_base64_encode_str(const zend_string *input)
 {
-    int out_len = 0;
-    unsigned char *out = php_base64_encode((const unsigned char *)ZSTR_VAL(input), (int)ZSTR_LEN(input), &out_len);
-    if (!out) {
-        return NULL;
-    }
-
-    zend_string *result = zend_string_init((char *)out, out_len, 0);
-    efree(out);
-    return result;
+    return php_base64_encode((const unsigned char *)ZSTR_VAL(input), ZSTR_LEN(input));
 }
 
 static zend_bool cloudrmi_base64_decode_str(const zend_string *input, zend_string **decoded, zend_bool strict)
 {
-    int out_len = 0;
-    unsigned char *out = php_base64_decode_ex((const unsigned char *)ZSTR_VAL(input), (int)ZSTR_LEN(input), &out_len, strict);
-    if (!out) {
+    zend_string *result = php_base64_decode_ex((const unsigned char *)ZSTR_VAL(input), ZSTR_LEN(input), strict);
+    if (!result) {
         return 0;
     }
 
-    *decoded = zend_string_init((char *)out, out_len, 0);
-    efree(out);
+    *decoded = result;
     return 1;
 }
 
@@ -163,47 +155,46 @@ static zend_string *cloudrmi_json_encode_zval(zval *value)
 static void cloudrmi_client_update_properties(cloudrmi_client_object *obj)
 {
     zval zv;
-    zval obj_zv;
-    ZVAL_OBJ(&obj_zv, &obj->std);
+    zend_object *zobj = &obj->std;
 
     ZVAL_STR_COPY(&zv, obj->host);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("host"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("host"), &zv);
     zval_ptr_dtor(&zv);
 
     ZVAL_LONG(&zv, obj->port);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("port"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("port"), &zv);
 
     ZVAL_LONG(&zv, obj->conn_timeout);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("connTimeout"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("connTimeout"), &zv);
 
     ZVAL_LONG(&zv, obj->read_timeout);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("readTimeout"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("readTimeout"), &zv);
 
     ZVAL_BOOL(&zv, obj->throttle_timeout);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("throttleTimeout"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("throttleTimeout"), &zv);
 
     ZVAL_DOUBLE(&zv, obj->throttle_duration);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("throttleDuration"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("throttleDuration"), &zv);
 
     if (obj->unix_path) {
         ZVAL_STR_COPY(&zv, obj->unix_path);
     } else {
         ZVAL_NULL(&zv);
     }
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("unixSocketPath"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("unixSocketPath"), &zv);
     zval_ptr_dtor(&zv);
 
     ZVAL_LONG(&zv, obj->protocol_version);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("protocolVersion"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("protocolVersion"), &zv);
 
     ZVAL_LONG(&zv, obj->advertised_max_protocol);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("advertisedMaxProtocol"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("advertisedMaxProtocol"), &zv);
 
     ZVAL_BOOL(&zv, obj->supports_payload);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("supportsPayloadCapability"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("supportsPayloadCapability"), &zv);
 
     ZVAL_BOOL(&zv, obj->supports_async);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("supportsAsyncCapability"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("supportsAsyncCapability"), &zv);
 }
 
 static void cloudrmi_client_sync_from_properties(cloudrmi_client_object *obj)
@@ -211,52 +202,51 @@ static void cloudrmi_client_sync_from_properties(cloudrmi_client_object *obj)
     zval rv;
     zval *prop;
 
-    zval obj_zv;
-    ZVAL_OBJ(&obj_zv, &obj->std);
+    zend_object *zobj = &obj->std;
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("host"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("host"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_STRING && Z_STRLEN_P(prop) > 0) {
         if (obj->host) zend_string_release(obj->host);
         obj->host = zend_string_copy(Z_STR_P(prop));
     }
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("port"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("port"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_LONG) {
         obj->port = Z_LVAL_P(prop);
     }
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("connTimeout"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("connTimeout"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_LONG) {
         obj->conn_timeout = Z_LVAL_P(prop);
     }
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("readTimeout"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("readTimeout"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_LONG) {
         obj->read_timeout = Z_LVAL_P(prop);
     }
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("throttleTimeout"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("throttleTimeout"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_TRUE || Z_TYPE_P(prop) == IS_FALSE) {
         obj->throttle_timeout = Z_TYPE_P(prop) == IS_TRUE;
     }
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("throttleDuration"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("throttleDuration"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_DOUBLE) {
         obj->throttle_duration = Z_DVAL_P(prop);
     }
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("unixSocketPath"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("unixSocketPath"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_STRING) {
         if (obj->unix_path) zend_string_release(obj->unix_path);
         obj->unix_path = zend_string_copy(Z_STR_P(prop));
     }
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("protocolVersion"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("protocolVersion"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_LONG) {
         obj->protocol_version = Z_LVAL_P(prop);
     }
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("advertisedMaxProtocol"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("advertisedMaxProtocol"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_LONG) {
         obj->advertised_max_protocol = Z_LVAL_P(prop);
     }
@@ -387,11 +377,14 @@ static zend_bool cloudrmi_decode_payload_inline(const zend_string *raw, zval *re
                 return 0;
             }
             zval ex;
+            zval arg;
             object_init_ex(&ex, cloudrmi_remote_error_ce);
-            zend_call_method_with_2_params(Z_OBJ(ex), cloudrmi_remote_error_ce, NULL, "__construct", NULL, b64, NULL);
+            ZVAL_STR_COPY(&arg, b64);
+            zend_call_method_with_2_params(Z_OBJ(ex), cloudrmi_remote_error_ce, NULL, "__construct", NULL, &arg, NULL);
+            zval_ptr_dtor(&arg);
             zend_string_release(b64);
+            ZVAL_COPY(return_value, &ex);
             zval_ptr_dtor(&ex);
-            ZVAL_OBJ(return_value, Z_OBJ(ex));
             return 1;
         }
 
@@ -409,7 +402,7 @@ static zend_bool cloudrmi_decode_payload_inline(const zend_string *raw, zval *re
     return 1;
 }
 
-static zend_bool cloudrmi_decode_payload_response(const zend_string *encoding, const zend_string *payload, zval *return_value)
+static zend_bool cloudrmi_decode_payload_response(const zend_string *encoding, zend_string *payload, zval *return_value)
 {
     if (zend_string_equals_literal_ci(encoding, "PHP")) {
         return cloudrmi_unserialize(payload, return_value);
@@ -426,10 +419,13 @@ static zend_bool cloudrmi_decode_payload_response(const zend_string *encoding, c
 
     if (zend_string_equals_literal_ci(encoding, "ERROR")) {
         zval ex;
+        zval arg;
         object_init_ex(&ex, cloudrmi_remote_error_ce);
-        zend_call_method_with_2_params(Z_OBJ(ex), cloudrmi_remote_error_ce, NULL, "__construct", NULL, payload, NULL);
+        ZVAL_STR_COPY(&arg, payload);
+        zend_call_method_with_2_params(Z_OBJ(ex), cloudrmi_remote_error_ce, NULL, "__construct", NULL, &arg, NULL);
+        zval_ptr_dtor(&arg);
+        ZVAL_COPY(return_value, &ex);
         zval_ptr_dtor(&ex);
-        ZVAL_OBJ(return_value, Z_OBJ(ex));
         return 1;
     }
 
@@ -562,6 +558,8 @@ static ssize_t cloudrmi_socket_write_all(int fd, const char *buf, size_t len)
     }
     return (ssize_t)offset;
 }
+
+static ssize_t cloudrmi_socket_write_line(int fd, const zend_string *line);
 
 static void cloudrmi_socket_write_const_line(int fd, const char *msg)
 {
@@ -915,7 +913,7 @@ static zend_bool cloudrmi_server_decode_payload_bytes(const zend_string *encodin
     return 0;
 }
 
-static zend_bool cloudrmi_server_send_payload_response(int client_fd, int code, zval *data, const zend_string *request_encoding)
+static zend_bool cloudrmi_server_send_payload_response(int client_fd, int code, zval *data, zend_string *request_encoding)
 {
     zend_string *encoding = NULL;
     zend_string *bytes = NULL;
@@ -1245,22 +1243,21 @@ static void cloudrmi_server_close_listener(cloudrmi_server_object *server)
 static void cloudrmi_server_update_properties(cloudrmi_server_object *obj)
 {
     zval zv;
-    zval obj_zv;
-    ZVAL_OBJ(&obj_zv, &obj->std);
+    zend_object *zobj = &obj->std;
 
     ZVAL_STR_COPY(&zv, obj->host);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("host"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("host"), &zv);
     zval_ptr_dtor(&zv);
 
     ZVAL_LONG(&zv, obj->port);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("port"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("port"), &zv);
 
     if (obj->recovery_token) {
         ZVAL_STR_COPY(&zv, obj->recovery_token);
     } else {
         ZVAL_NULL(&zv);
     }
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("recoveryToken"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("recoveryToken"), &zv);
     zval_ptr_dtor(&zv);
 
     if (obj->context_name) {
@@ -1268,46 +1265,46 @@ static void cloudrmi_server_update_properties(cloudrmi_server_object *obj)
     } else {
         ZVAL_NULL(&zv);
     }
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("contextName"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("contextName"), &zv);
     zval_ptr_dtor(&zv);
 
     ZVAL_BOOL(&zv, obj->disable_fork);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("disableFork"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("disableFork"), &zv);
 
     ZVAL_BOOL(&zv, obj->require_auth);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("requireAuth"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("requireAuth"), &zv);
 
     ZVAL_BOOL(&zv, obj->enable_payload_capability);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("enablePayloadCapability"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("enablePayloadCapability"), &zv);
 
     ZVAL_BOOL(&zv, obj->enable_async_capability);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("enableAsyncCapability"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("enableAsyncCapability"), &zv);
 
     if (obj->unix_path) {
         ZVAL_STR_COPY(&zv, obj->unix_path);
     } else {
         ZVAL_NULL(&zv);
     }
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("unixSocketPath"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("unixSocketPath"), &zv);
     zval_ptr_dtor(&zv);
 
     ZVAL_BOOL(&zv, obj->unix_socket_skip_auth);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("unixSocketSkipAuth"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("unixSocketSkipAuth"), &zv);
 
     ZVAL_LONG(&zv, obj->max_protocol_version);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("maxProtocolVersion"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("maxProtocolVersion"), &zv);
 
     ZVAL_LONG(&zv, obj->max_plain_string_bytes);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("maxPlainStringBytes"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("maxPlainStringBytes"), &zv);
 
     ZVAL_LONG(&zv, obj->read_timeout);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("readTimeout"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("readTimeout"), &zv);
 
     ZVAL_LONG(&zv, obj->high_read_timeout);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("highReadTimeout"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("highReadTimeout"), &zv);
 
     ZVAL_LONG(&zv, obj->nofork_read_timeout);
-    zend_update_property(obj->std.ce, &obj_zv, ZEND_STRL("noForkReadTimeout"), &zv);
+    zend_update_property(obj->std.ce, zobj, ZEND_STRL("noForkReadTimeout"), &zv);
 }
 
 static void cloudrmi_server_sync_from_properties(cloudrmi_server_object *obj)
@@ -1315,64 +1312,63 @@ static void cloudrmi_server_sync_from_properties(cloudrmi_server_object *obj)
     zval rv;
     zval *prop;
 
-    zval obj_zv;
-    ZVAL_OBJ(&obj_zv, &obj->std);
+    zend_object *zobj = &obj->std;
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("host"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("host"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_STRING && Z_STRLEN_P(prop) > 0) {
         if (obj->host) zend_string_release(obj->host);
         obj->host = zend_string_copy(Z_STR_P(prop));
     }
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("port"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("port"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_LONG) obj->port = Z_LVAL_P(prop);
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("recoveryToken"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("recoveryToken"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_STRING) {
         if (obj->recovery_token) zend_string_release(obj->recovery_token);
         obj->recovery_token = zend_string_copy(Z_STR_P(prop));
     }
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("contextName"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("contextName"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_STRING && Z_STRLEN_P(prop) > 0) {
         if (obj->context_name) zend_string_release(obj->context_name);
         obj->context_name = zend_string_copy(Z_STR_P(prop));
     }
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("disableFork"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("disableFork"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_TRUE || Z_TYPE_P(prop) == IS_FALSE) obj->disable_fork = (Z_TYPE_P(prop) == IS_TRUE);
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("requireAuth"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("requireAuth"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_TRUE || Z_TYPE_P(prop) == IS_FALSE) obj->require_auth = (Z_TYPE_P(prop) == IS_TRUE);
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("enablePayloadCapability"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("enablePayloadCapability"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_TRUE || Z_TYPE_P(prop) == IS_FALSE) obj->enable_payload_capability = (Z_TYPE_P(prop) == IS_TRUE);
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("enableAsyncCapability"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("enableAsyncCapability"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_TRUE || Z_TYPE_P(prop) == IS_FALSE) obj->enable_async_capability = (Z_TYPE_P(prop) == IS_TRUE);
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("unixSocketPath"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("unixSocketPath"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_STRING) {
         if (obj->unix_path) zend_string_release(obj->unix_path);
         obj->unix_path = zend_string_copy(Z_STR_P(prop));
     }
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("unixSocketSkipAuth"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("unixSocketSkipAuth"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_TRUE || Z_TYPE_P(prop) == IS_FALSE) obj->unix_socket_skip_auth = (Z_TYPE_P(prop) == IS_TRUE);
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("maxProtocolVersion"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("maxProtocolVersion"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_LONG) obj->max_protocol_version = Z_LVAL_P(prop);
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("maxPlainStringBytes"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("maxPlainStringBytes"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_LONG) obj->max_plain_string_bytes = Z_LVAL_P(prop);
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("readTimeout"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("readTimeout"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_LONG) obj->read_timeout = Z_LVAL_P(prop);
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("highReadTimeout"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("highReadTimeout"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_LONG) obj->high_read_timeout = Z_LVAL_P(prop);
 
-    prop = zend_read_property(obj->std.ce, &obj_zv, ZEND_STRL("noForkReadTimeout"), 1, &rv);
+    prop = zend_read_property(obj->std.ce, zobj, ZEND_STRL("noForkReadTimeout"), 1, &rv);
     if (Z_TYPE_P(prop) == IS_LONG) obj->nofork_read_timeout = Z_LVAL_P(prop);
 }
 
@@ -1483,7 +1479,7 @@ static void cloudrmi_server_handle_client(cloudrmi_server_object *server, int cl
             if (!arg) {
                 cloudrmi_socket_write_const_line(client_fd, "400 Bad Request");
             } else {
-                zend_long requested = (zend_long)zend_atol(ZSTR_VAL(arg), ZSTR_LEN(arg));
+                zend_long requested = (zend_long)strtol(ZSTR_VAL(arg), NULL, 10);
                 if (requested < cloudrmi_server_min_proto(server)) {
                     requested = cloudrmi_server_min_proto(server);
                 }
@@ -1677,7 +1673,7 @@ ZEND_BEGIN_ARG_INFO_EX(arginfo_cloudrmi_client_call, 0, 0, 3)
     ZEND_ARG_TYPE_INFO(0, interface, IS_STRING, 0)
     ZEND_ARG_TYPE_INFO(0, method, IS_STRING, 0)
     ZEND_ARG_INFO(0, parameters)
-    ZEND_ARG_TYPE_INFO(0, async, _IS_BOOL, 1)
+    ZEND_ARG_INFO(0, async)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_cloudrmi_server_unix_path, 0, 0, 1)
@@ -1786,13 +1782,16 @@ PHP_METHOD(CloudRMIClient, callRemoteMethod)
     zend_string *interface = NULL, *method = NULL;
     zval *params = NULL, *options = NULL;
     zend_bool async = 0;
+    zend_bool prefer_payload_option = 0;
+    zend_bool require_payload = 0;
+    zend_string *encoding = NULL;
 
     ZEND_PARSE_PARAMETERS_START(3, 4)
         Z_PARAM_STR(interface)
         Z_PARAM_STR(method)
         Z_PARAM_ZVAL(params)
         Z_PARAM_OPTIONAL
-        Z_PARAM_BOOL(async)
+        Z_PARAM_ZVAL(options)
     ZEND_PARSE_PARAMETERS_END();
 
     cloudrmi_client_object *obj = cloudrmi_client_from_obj(Z_OBJ_P(getThis()));
@@ -1814,7 +1813,29 @@ PHP_METHOD(CloudRMIClient, callRemoteMethod)
         zend_string_addref(iface_norm);
     }
 
-    zend_string *encoding = NULL;
+    if (options) {
+        if (Z_TYPE_P(options) == IS_ARRAY) {
+            zval *zasync = zend_hash_str_find(Z_ARRVAL_P(options), "async", sizeof("async") - 1);
+            if (zasync) {
+                async = zend_is_true(zasync);
+            }
+            zval *zpayload = zend_hash_str_find(Z_ARRVAL_P(options), "payload", sizeof("payload") - 1);
+            if (zpayload) {
+                prefer_payload_option = zend_is_true(zpayload);
+            }
+            zval *zencoding = zend_hash_str_find(Z_ARRVAL_P(options), "encoding", sizeof("encoding") - 1);
+            if (zencoding && Z_TYPE_P(zencoding) == IS_STRING) {
+                encoding = zend_string_copy(Z_STR_P(zencoding));
+            }
+            zval *zrequire = zend_hash_str_find(Z_ARRVAL_P(options), "require_payload", sizeof("require_payload") - 1);
+            if (zrequire) {
+                require_payload = zend_is_true(zrequire);
+            }
+        } else {
+            async = zend_is_true(options);
+        }
+    }
+
     zend_string *payload_bytes = NULL;
     cloudrmi_client_normalize_payload_bytes(params, &encoding, &payload_bytes);
 
@@ -1828,11 +1849,7 @@ PHP_METHOD(CloudRMIClient, callRemoteMethod)
         RETURN_NULL();
     }
     size_t inline_length = strlen("CALL ") + ZSTR_LEN(iface_norm) + 1 + ZSTR_LEN(method) + 1 + (inline_payload ? ZSTR_LEN(inline_payload) : 0);
-    zend_bool prefer_payload = 0;
-
-    if (async) {
-        prefer_payload = 0;
-    }
+    zend_bool prefer_payload = prefer_payload_option || require_payload;
 
     if (Z_TYPE_P(params) == IS_STRING && Z_STRLEN_P(params) > (size_t)threshold) {
         prefer_payload = 1;
@@ -1848,6 +1865,10 @@ PHP_METHOD(CloudRMIClient, callRemoteMethod)
 
     zend_bool can_payload = obj->protocol_version >= 2 && obj->supports_payload;
     const char *command = (async && obj->supports_async) ? "ACALL" : "CALL";
+
+    if (require_payload) {
+        prefer_payload = 1;
+    }
 
     if (prefer_payload && !can_payload) {
         zend_throw_exception(cloudrmi_exception_ce, "Payload required but not supported by negotiated protocol version", 0);
