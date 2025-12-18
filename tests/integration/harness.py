@@ -518,12 +518,15 @@ class IntegrationRunner:
 
     def _run_case(self, case: TestCase, verbose: bool) -> TestResult:
         print(f"testing {case.name}... ", end="", flush=True)
+        start = time.perf_counter()
         try:
             result = case.runner(self.env)
             if not result.name:
                 result.name = case.name
             outcome = "ok" if result.passed else "FAIL"
-            print(outcome)
+            elapsed = time.perf_counter() - start
+            suffix = f" ({elapsed:.3f}s)" if verbose else ""
+            print(f"{outcome}{suffix}")
             if verbose and result.traces:
                 for idx, trace in enumerate(result.traces, start=1):
                     header = f"- transcript {idx} for {case.name}"
@@ -532,7 +535,9 @@ class IntegrationRunner:
                         print(f"  {line}")
             return result
         except Exception as exc:  # pragma: no cover - defensive, integration only
-            print("FAIL")
+            elapsed = time.perf_counter() - start
+            suffix = f" ({elapsed:.3f}s)" if verbose else ""
+            print(f"FAIL{suffix}")
             message = str(exc)
             self.logger.error("Test %s failed: %s", case.name, message)
             if verbose:
