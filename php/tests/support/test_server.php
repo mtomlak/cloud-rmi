@@ -1,10 +1,10 @@
 <?php
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIServer.php';
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIClient.php';
+require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/CloudRMIServer.php';
+require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/CloudRMIClient.php';
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteMethodInvocationException.php';
 require_once __DIR__ . '/../../class/System/ProcessControl/ProcessFork.php';
 
-use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\SimpleRMIServer;
+use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\CloudRMIServer;
 
 interface TestRmiInterface
 {
@@ -25,9 +25,9 @@ class TestRmiHandler implements TestRmiInterface
     }
 }
 
-class TestRMIServer extends SimpleRMIServer
+class TestRMIServer extends CloudRMIServer
 {
-	public function __construct(string $host, int $port, int $maxProto, bool $enableFork)
+	public function __construct(string $host, int $port, int $maxProto, bool $enableFork, ?string $unixSocketPath = null)
 	{
 		parent::__construct();
 		$this->host = $host;
@@ -38,16 +38,24 @@ class TestRMIServer extends SimpleRMIServer
 		$this->setRequireAuth(false);
 		$this->readTimeout = 5;
 		$this->highReadTimeout = 5;
+		$this->setUnixSocketPath($unixSocketPath);
 	}
 }
 
-$options = getopt('', ['port:', 'host::', 'proto-max::', 'enable-fork::']);
+$options = getopt('', ['port:', 'host::', 'proto-max::', 'enable-fork::', 'unix-socket::', 'skip-auth::']);
 $port = isset($options['port']) ? (int) $options['port'] : 15555;
 $host = $options['host'] ?? '127.0.0.1';
 $protoMax = isset($options['proto-max']) ? (int) $options['proto-max'] : 2;
 $enableFork = isset($options['enable-fork']) && $options['enable-fork'] !== '0';
+$unixSocketPath = $options['unix-socket'] ?? null;
+$skipAuth = isset($options['skip-auth']) && $options['skip-auth'] !== '0';
 
-$server = new TestRMIServer($host, $port, $protoMax, $enableFork);
+$server = new TestRMIServer($host, $port, $protoMax, $enableFork, $unixSocketPath);
+
+if ($skipAuth) {
+	$server->setUnixSocketSkipAuth(true);
+	$server->setRequireAuth(false);
+}
 $handler = new TestRmiHandler();
 $server->bind(TestRmiInterface::class, $handler);
 $server->start();

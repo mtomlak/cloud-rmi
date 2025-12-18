@@ -4,9 +4,9 @@ require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteExce
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteErrorException.php';
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteMethodInvocationException.php';
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIConnection.php';
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIClient.php';
+require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/CloudRMIClient.php';
 
-use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\SimpleRMIClient;
+use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\CloudRMIClient;
 use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\RemoteErrorException;
 
 function wait_for_server(string $host, int $port, int $retries = 20): void
@@ -59,7 +59,7 @@ $port = 14000 + random_int(0, 1000);
 wait_for_server('127.0.0.1', $port);
 
 try {
-    $client = new SimpleRMIClient('127.0.0.1', $port);
+    $client = new CloudRMIClient('127.0.0.1', $port);
     $client->connect();
     $response = $client->call('TestRmiInterface', 'method', 'hello');
     $client->disconnect();
@@ -67,7 +67,7 @@ try {
         throw new RuntimeException('legacy call failed: ' . $response);
     }
 
-    $payloadClient = new SimpleRMIClient('127.0.0.1', $port);
+    $payloadClient = new CloudRMIClient('127.0.0.1', $port);
     $payloadClient->connect();
     $payloadResponse = $payloadClient->call('TestRmiInterface', 'upload', "bin\0bytes", ['payload' => true, 'encoding' => 'RAW']);
     $payloadClient->disconnect();
@@ -76,7 +76,7 @@ try {
     }
 
     // mix modes on one connection
-    $mixed = new SimpleRMIClient('127.0.0.1', $port);
+    $mixed = new CloudRMIClient('127.0.0.1', $port);
     $mixed->connect();
     $r1 = $mixed->call('TestRmiInterface', 'method', 'first');
     $r2 = $mixed->call('TestRmiInterface', 'upload', 'second', ['payload' => true]);
@@ -107,7 +107,7 @@ try {
         throw new RuntimeException('expected error for mixed legacy/payload');
     }
 
-    fwrite(STDOUT, "SimpleRMIClient integration tests passed\n");
+    fwrite(STDOUT, "CloudRMIClient integration tests passed\n");
 } finally {
     stop_server($proc, $pipes);
 }

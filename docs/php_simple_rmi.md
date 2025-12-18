@@ -1,13 +1,14 @@
-# PHP Simple RMI classes
+# PHP Cloud RMI classes
 
-The PHP reference client/server pair (`SimpleRMIClient`, `SimpleRMIServer`) now mirrors the C reference implementation and the `libcloudrmi` parser semantics while preserving the legacy PHP API.
+The PHP reference client/server pair (`CloudRMIClient`, `CloudRMIServer`) mirrors the C reference implementation and the `libcloudrmi` parser semantics while preserving the legacy PHP API. The legacy names (`SimpleRMIClient`, `SimpleRMIServer`) remain available through class aliases for backward compatibility.
 
 ## Negotiation and capabilities
 
-- Connections always start on protocol v1 and upgrade only after an explicit `PROTO 2` exchange.
+- TCP connections always start on protocol v1 and upgrade only after an explicit `PROTO 2` exchange. Unix socket transports require protocol v2, refuse downgrades, and are created via `setUnixSocketPath()` on the server and the `$unixSocketPath` constructor argument on the client.
 - The server banner follows the canonical format `220 <context> Server Ready EXT PROTO=<max>[,<capabilities>]`.
 - `CAPS` is supported to fetch a normalized capability list when the banner omits it.
 - Payload framing is gated by two conditions: the negotiated protocol version must be `2` **and** the `PAYLOAD` capability must be advertised. The client will fall back to inline calls when either gate is missing.
+- Trusted unix socket listeners can skip authentication by calling `setUnixSocketSkipAuth(true)`, mirroring the `unix_socket_skip_auth` behavior in the C server.
 
 ## Payload handling
 
@@ -19,7 +20,7 @@ The PHP reference client/server pair (`SimpleRMIClient`, `SimpleRMIServer`) now 
 ## ACALL extension
 
 - Asynchronous execution is exposed as the vendor capability `ACALL` and advertised in both the banner and `CAPS` output when enabled.
-- `SimpleRMIServer` only advertises and honors `ACALL` when forking support is available **and** `$enableAsyncCapability` is `true`. Set this property to `false` in subclasses to disable the extension.
+- `CloudRMIServer` only advertises and honors `ACALL` when forking support is available **and** `$enableAsyncCapability` is `true`. Set this property to `false` in subclasses to disable the extension.
 - The client issues `ACALL` commands only when the capability is advertised; otherwise it transparently falls back to synchronous `CALL` semantics even when `async` was requested.
 - ACALL responses acknowledge with `200 Call Executed`; work is executed in a forked child and does not stream a result back to the caller.
 
