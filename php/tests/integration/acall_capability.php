@@ -4,9 +4,9 @@ require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteExce
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteErrorException.php';
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteMethodInvocationException.php';
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIConnection.php';
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIClient.php';
+require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/CloudRMIClient.php';
 
-use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\SimpleRMIClient;
+use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\CloudRMIClient;
 
 if (!function_exists('pcntl_fork')) {
     fwrite(STDOUT, "pcntl extension missing, skipping ACALL capability tests\n");
@@ -116,7 +116,7 @@ try {
         throw new RuntimeException('CAPS did not include ACALL');
     }
 
-    $async = new SimpleRMIClient('127.0.0.1', $asyncPort);
+    $async = new CloudRMIClient('127.0.0.1', $asyncPort);
     $async->connect();
     $response = $async->call('TestRmiInterface', 'method', 'async', ['async' => true]);
     $async->disconnect();
@@ -143,7 +143,7 @@ try {
         throw new RuntimeException('CAPS listed ACALL without fork support');
     }
 
-    $client = new SimpleRMIClient('127.0.0.1', $fallbackPort);
+    $client = new CloudRMIClient('127.0.0.1', $fallbackPort);
     $client->connect();
     $syncResponse = $client->call('TestRmiInterface', 'method', 'sync', ['async' => true]);
     $client->disconnect();

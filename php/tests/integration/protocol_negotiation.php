@@ -4,9 +4,9 @@ require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteExce
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteErrorException.php';
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteMethodInvocationException.php';
 require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIConnection.php';
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIClient.php';
+require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/CloudRMIClient.php';
 
-use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\SimpleRMIClient;
+use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\CloudRMIClient;
 
 function wait_for_server(string $host, int $port, int $retries = 20): void
 {
@@ -96,7 +96,7 @@ try {
     }
     fclose($raw);
 
-    $clientV2 = new SimpleRMIClient('127.0.0.1', $portV2);
+    $clientV2 = new CloudRMIClient('127.0.0.1', $portV2);
     $clientV2->connect();
     $clientResult = $clientV2->call('TestRmiInterface', 'method', 'hello');
     if ($clientResult !== 'OK') {
@@ -132,7 +132,7 @@ try {
     }
     fclose($rawV1);
 
-    $clientV1 = new SimpleRMIClient('127.0.0.1', $portV1);
+    $clientV1 = new CloudRMIClient('127.0.0.1', $portV1);
     $clientV1->connect();
     $legacy = $clientV1->call('TestRmiInterface', 'method', 'legacy');
     if ($legacy !== 'OK') {
