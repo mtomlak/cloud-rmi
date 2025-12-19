@@ -695,32 +695,44 @@ class CloudRMIClient
 
 	protected function connReadLn()
 	{
-                $buff = '';
-		$result = 0;
+		$socket = $this->getConnection()->getSocket();
 		$time = time();
-		$info = stream_get_meta_data($this->getConnection()->getSocket());
+		$maxLine = $this->getMaxLineLength();
+		$buffer = '';
 
-		while (is_resource($this->getConnection()->getSocket()) && !feof($this->getConnection()->getSocket()) && strpos($buff, "\n") === false) {
+		while (is_resource($socket) && !feof($socket)) {
 			if ($this->connTimeout && (time() - $this->connStarted > $this->connTimeout))
 				return '322 Connection Timed Out: ' . $this->connTimeout;
 
 			if (time() - $time > $this->readTimeout)
 				return '322 Read Timed Out: ' . $this->readTimeout;
 
+			$info = stream_get_meta_data($socket);
+
 			if (isset($info['timed_out']) && $info['timed_out'])
 				return '322 Socket Timed Out: ' . $this->readTimeout;
 
-			$this->connCheckThrottle();
-			
-			$result = stream_get_contents($this->getConnection()->getSocket(), 1);
+			$remaining = max(1, $maxLine - strlen($buffer) + 1);
+			$chunk = fgets($socket, $remaining);
 
-			if ($result === false)
-				return false;
+			if ($chunk === false) {
+				$this->connCheckThrottle();
+				continue;
+			}
 
-			$buff .= $result;
+			if ($chunk === '') {
+				$this->connCheckThrottle();
+				continue;
+			}
+
+			$buffer .= $chunk;
+
+			if (strpos($buffer, "\n") !== false || strlen($buffer) >= $maxLine) {
+				break;
+			}
 		}
 
-		return trim($buff);
+		return rtrim($buffer, "\r\n");
 	}
 	
 	protected function connReadExact($bytes, $consumeTrailingNewline = false)
@@ -786,10 +798,22 @@ class CloudRMIClient
 			$parts = preg_split('/\s+/', trim($line));
 
 			if (count($parts) >= 4 && strtoupper($parts[1]) === 'PAYLOAD') {
-				$length = (int) $parts[3];
+				$lengthRaw = $parts[3];
+				if (!ctype_digit((string) $lengthRaw)) {
+					return ['line' => $line, 'code' => false];
+				}
+
+				$length = (int) $lengthRaw;
 				$payload = '';
 
 				if ($length < 0)
+					return ['line' => $line, 'code' => false];
+
+				$maxPayload = defined('RMI_MAX_BUFFER')
+					? (int) RMI_MAX_BUFFER
+					: ($this->getMaxLineLength() * 8);
+
+				if ($length > $maxPayload)
 					return ['line' => $line, 'code' => false];
 
 				if ($length > 0) {

@@ -613,13 +613,6 @@ int proxy_pass_call_cmd_ex(
          }
 
          payload_response[(size_t)response_len] = '\0';
-
-         // Consume trailing newline if present
-         char trailing;
-         if (read(conn->client.sock, &trailing, 1) < 0) {
-            ret = 0;
-            goto cleanup;
-         }
       }
    }
 
@@ -629,8 +622,6 @@ int proxy_pass_call_cmd_ex(
 
          if (response_len > 0)
             proxy_write_all(client_conn->sock, (const uint8_t *)payload_response, (size_t)response_len);
-
-         stream_write(client_conn->sock, "\n");
       } else {
          size_t encoded_len = (((size_t)response_len + 2) / 3) * 4 + 1;
          char *encoded = malloc(encoded_len);

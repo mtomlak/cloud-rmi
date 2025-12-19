@@ -271,12 +271,6 @@ class ProtocolSession:
             if payload_len is not None and payload_len >= 0:
                 payload_resp = self._read_exact(payload_len)
                 self.trace.extend("recv", "payload-bytes", payload_resp)
-                # Consume trailing newline if present.
-                if payload_len == len(payload_resp):
-                    try:
-                        self.sock.recv(1)
-                    except socket.timeout:
-                        pass
 
         decoded = ""
         if decode_output and status == 200:
