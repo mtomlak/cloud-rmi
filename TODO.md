@@ -10,7 +10,7 @@
   v1 clients; today the base64 fallback omits the encoding token.
 - Expand automated tests around parser overflow handling and zero-length
   payloads to lock in the documented limits (line ceiling, total buffer, and
-  PAYLOAD sequencing).
+  payload framing).
 - Move duplicated response framing logic (payload vs inline) from the server and
   proxy into a shared library utility to avoid inconsistencies in future
   changes.

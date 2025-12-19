@@ -52,10 +52,9 @@ def unix_skip_auth_payload(env: IntegrationEnvironment) -> TestResult:
         banner = _read_line(sock)
         trace.record("recv", banner)
 
-        _send_line(sock, f"CALL {iface} uppercase")
-        trace.record("send", f"CALL {iface} uppercase")
-        _send_line(sock, f"PAYLOAD JSON {len(payload)}")
-        trace.record("send", f"PAYLOAD JSON {len(payload)}")
+        header = f"CALL {iface} uppercase PAYLOAD JSON {len(payload)}"
+        _send_line(sock, header)
+        trace.record("send", header)
         sock.sendall(payload)
         trace.extend("send", "payload-bytes", payload)
 

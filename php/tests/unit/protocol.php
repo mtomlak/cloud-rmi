@@ -45,14 +45,14 @@ assert_equals('proto', $upgradeEvent['event']['cmd'], 'proto event type');
 
 // CALL + PAYLOAD parses
 $payload = "bin\0ary";
-$bytes = "CALL iface method\nPAYLOAD BLOB " . strlen($payload) . "\n" . $payload;
+$bytes = "CALL iface method PAYLOAD BLOB " . strlen($payload) . "\n" . $payload;
 $feed = cloudrmi_protocol_feed($ctx, $bytes);
 assert_equals(RMI_OK, $feed['status'], 'feed payload call');
 $eventRes = cloudrmi_protocol_next_event($ctx);
 assert_equals(RMI_OK, $eventRes['status'], 'payload event status');
 $event = $eventRes['event'];
 assert_equals(RMI_EVENT_CALL, $event['type'], 'payload event type');
-assert_equals(3, $event['argc'], 'payload argc');
+assert_equals(6, $event['argc'], 'payload argc');
 assert_equals('BLOB', $event['encoding'], 'payload encoding');
 assert_equals($payload, $event['payload'], 'payload bytes');
 assert_equals(strlen($payload), $event['payload_len'], 'payload len');
@@ -63,9 +63,9 @@ cloudrmi_protocol_reset($ctx);
 $feed = cloudrmi_protocol_feed($ctx, "PAYLOAD PLAIN 3\nabc");
 assert_equals(RMI_OK, $feed['status'], 'feed ok even when error later');
 $eventRes = cloudrmi_protocol_next_event($ctx);
-assert_equals(RMI_E_ERR, $eventRes['status'], 'payload without call status');
+assert_equals(RMI_OK, $eventRes['status'], 'payload without call status');
 assert_equals(RMI_ERROR_BAD_REQUEST, $eventRes['err_code'], 'payload without call error code');
-assert_true($eventRes['event'] === null, 'no event on error');
+assert_true($eventRes['event'] !== null && $eventRes['event']['type'] === RMI_EVENT_UNKNOWN, 'unknown event on stray payload');
 
 cloudrmi_protocol_reset($ctx);
 
@@ -75,13 +75,14 @@ assert_equals(RMI_OK, $feed['status'], 'feed mixed payload');
 $eventRes = cloudrmi_protocol_next_event($ctx);
 assert_equals(RMI_OK, $eventRes['status'], 'first event ok');
 $eventRes = cloudrmi_protocol_next_event($ctx);
-assert_equals(RMI_E_ERR, $eventRes['status'], 'payload after inline call errors');
+assert_equals(RMI_OK, $eventRes['status'], 'payload after inline call errors');
 assert_equals(RMI_ERROR_BAD_REQUEST, $eventRes['err_code'], 'payload after inline call err code');
+assert_true($eventRes['event']['type'] === RMI_EVENT_UNKNOWN, 'unknown payload command after inline call');
 
 cloudrmi_protocol_reset($ctx);
 
 // partial payload returns AGAIN
-$feed = cloudrmi_protocol_feed($ctx, "CALL iface method\nPAYLOAD RAW 5\nabc");
+$feed = cloudrmi_protocol_feed($ctx, "CALL iface method PAYLOAD RAW 5\nabc");
 assert_equals(RMI_OK, $feed['status'], 'partial feed ok');
 $eventRes = cloudrmi_protocol_next_event($ctx);
 assert_equals(RMI_E_AGAIN, $eventRes['status'], 'partial payload again');

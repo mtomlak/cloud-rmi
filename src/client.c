@@ -488,10 +488,7 @@ int client_call_remote_method_payload(
       goto done;
    }
 
-   if (stream_writeln(conn->sock, "CALL %s %s", iface, method) < 0)
-      goto done;
-
-   if (stream_writeln(conn->sock, "PAYLOAD %s %zu", encoding_value, payload_len) < 0)
+   if (stream_writeln(conn->sock, "CALL %s %s PAYLOAD %s %zu", iface, method, encoding_value, payload_len) < 0)
       goto done;
 
    if (!write_all(conn->sock, payload, payload_len))
