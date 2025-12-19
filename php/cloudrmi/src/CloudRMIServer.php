@@ -12,6 +12,8 @@ use ProfiWeb\CloudRMI\Support\ProcessFork;
  */
 class CloudRMIServer
 {
+	protected const DEFAULT_MAX_LINE = 8192;
+
 	protected $serverSocket;
 	// Configuration parameters
 	protected $port = 8000;
@@ -244,6 +246,14 @@ class CloudRMIServer
 			return (int) RMI_MAX_BUFFER;
 
 		return 65536;
+	}
+
+	protected function getMaxLineLength()
+	{
+		if (defined('RMI_MAX_LINE'))
+			return (int) RMI_MAX_LINE;
+
+		return self::DEFAULT_MAX_LINE;
 	}
 
 	protected function isAsyncCapabilityAdvertised()
@@ -488,8 +498,9 @@ class CloudRMIServer
 		}
 
 		$outcome = $this->executeCall($binding, $request);
+		$canSendPayloadResponses = ($this->protocolVersion >= 2 && $this->canHandlePayloadRequests());
 
-		if ($outcome['payload'] && $this->protocolVersion >= 2) {
+		if ($outcome['payload'] && $canSendPayloadResponses) {
 			$this->sendPayloadResponse($socket, $outcome['code'], $outcome['data'], $request['encoding']);
 			return;
 		}
@@ -499,6 +510,17 @@ class CloudRMIServer
 
 		} catch (\Throwable $e) {
 			$this->connWriteLn($socket, "500 Unable to transmit result: " . $request['iface'] . '::' . $request['method'] . ': ' . $e->getMessage());
+			return;
+		}
+
+		$inlineLength = strlen($outcome['code'] . " " . $encodedResult) + 1;
+
+		if ($inlineLength >= $this->getMaxLineLength()) {
+			if ($canSendPayloadResponses) {
+				$this->sendPayloadResponse($socket, $outcome['code'], $outcome['data'], $request['encoding']);
+			} else {
+				$this->connWriteLn($socket, "500 Unable to transmit result inline (exceeds max line length)");
+			}
 			return;
 		}
 
