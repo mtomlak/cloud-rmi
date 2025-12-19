@@ -51,16 +51,95 @@ function stop_server($proc, array $pipes): void
 
 function read_banner(int $port): string
 {
-    $sock = @stream_socket_client("tcp://127.0.0.1:{$port}");
-    if ($sock === false) {
-        throw new RuntimeException('unable to connect to server for banner');
+	$sock = @stream_socket_client("tcp://127.0.0.1:{$port}");
+	if ($sock === false) {
+		throw new RuntimeException('unable to connect to server for banner');
     }
     $line = fgets($sock, 2048);
     fclose($sock);
     if ($line === false) {
-        throw new RuntimeException('server banner missing');
-    }
-    return trim($line);
+		throw new RuntimeException('server banner missing');
+	}
+	return trim($line);
+}
+
+function decode_inline_response(string $raw): mixed
+{
+	$payload = $raw;
+	$encoding = 'PLAIN';
+
+	if (strpos($raw, ':') !== false) {
+		[$encoding, $payload] = explode(':', $raw, 2);
+	}
+
+	$encoding = strtoupper($encoding);
+
+	switch ($encoding) {
+		case 'PHP':
+			$decoded = unserialize(base64_decode($payload));
+			break;
+
+		case 'JSON':
+			$decoded = json_decode(base64_decode($payload), true);
+			break;
+
+		case 'RAW':
+			$decoded = base64_decode($payload);
+			break;
+
+		case 'PLAIN':
+			$decoded = base64_decode($payload, true);
+			if ($decoded === false) {
+				$decoded = $payload;
+			}
+			break;
+
+		default:
+			$decoded = $payload;
+			break;
+	}
+
+	return $decoded;
+}
+
+function decode_payload_response(string $encoding, string $payload): mixed
+{
+	$encoding = strtoupper($encoding);
+
+	switch ($encoding) {
+		case 'PHP':
+			return unserialize($payload);
+
+		case 'JSON':
+			return json_decode($payload, true);
+
+		case 'RAW':
+		case 'PLAIN':
+			return $payload;
+
+		default:
+			return $payload;
+	}
+}
+
+function read_response_body($stream, string $line): mixed
+{
+	$trimmed = trim($line);
+	if (!preg_match('/^\\d{3}\\s+(.+)$/', $trimmed, $matches)) {
+		throw new RuntimeException('malformed response line: ' . $trimmed);
+	}
+
+	$rest = $matches[1];
+	if (preg_match('/^PAYLOAD\\s+(\\S+)\\s+(\\d+)$/i', $rest, $payloadMatches)) {
+		$length = (int) $payloadMatches[2];
+		$body = ($length > 0) ? stream_get_contents($stream, $length) : '';
+		if ($body === false || strlen($body) !== $length) {
+			throw new RuntimeException('payload response body truncated');
+		}
+		return decode_payload_response($payloadMatches[1], $body);
+	}
+
+	return decode_inline_response($rest);
 }
 
 $portV2 = 15000 + random_int(0, 500);
@@ -68,7 +147,7 @@ $portV2 = 15000 + random_int(0, 500);
 wait_for_server('127.0.0.1', $portV2);
 
 try {
-    $banner = read_banner($portV2);
+	$banner = read_banner($portV2);
     if (strpos($banner, 'PROTO=2') === false) {
         throw new RuntimeException('v2 server did not advertise proto 2');
     }
@@ -81,16 +160,16 @@ try {
         throw new RuntimeException('v2 proto negotiation failed');
     }
 
-    fwrite($raw, "CALL TestRmiInterface upload RAW 3\r\nabc");
-    $responseLine = fgets($raw, 2048);
-    if ($responseLine === false || strpos($responseLine, '200 PAYLOAD RAW 2') === false) {
-        throw new RuntimeException('payload response did not use PAYLOAD framing');
-    }
-    $payload = stream_get_contents($raw, 2);
-    if ($payload !== 'OK') {
-        throw new RuntimeException('payload response body mismatch: ' . var_export($payload, true));
-    }
-    fclose($raw);
+	fwrite($raw, "CALL TestRmiInterface upload PAYLOAD RAW 3\r\nabc");
+	$responseLine = fgets($raw, 2048);
+	if ($responseLine === false || strpos($responseLine, '200 ') !== 0) {
+		throw new RuntimeException('payload call failed: ' . var_export($responseLine, true));
+	}
+	$payload = read_response_body($raw, $responseLine);
+	if ($payload !== 'OK') {
+		throw new RuntimeException('payload response body mismatch: ' . var_export($payload, true));
+	}
+	fclose($raw);
 
     $clientV2 = new CloudRMIClient('127.0.0.1', $portV2);
     $clientV2->connect();

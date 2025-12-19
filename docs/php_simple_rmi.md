@@ -13,7 +13,7 @@ The PHP reference client/server pair (`ProfiWeb\CloudRMI\CloudRMIClient`, `Profi
 ## Payload handling
 
 - Inline calls remain compatible with the legacy v1 framing and small payload policy.
-- Payload calls use the v2 framing (`CALL iface method <encoding> <length>` + raw bytes) and respect the `RMI_MAX_BUFFER` ceiling when defined.
+- Payload calls use the unified v2 framing (`CALL iface method PAYLOAD <encoding> <length>` + raw bytes) and respect the `RMI_MAX_BUFFER` ceiling when defined.
 - Responses for payload calls reuse the requested encoding when possible and fall back to `PLAIN`/`RAW` for string data or `PHP` for structured results.
 - The deprecated `BLOB` encoding is removed; binary transfers now rely on the v2 payload channel.
 

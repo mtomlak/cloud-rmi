@@ -157,7 +157,9 @@ The protocol is defined by a strict state machine.
 | SEND_RESPONSE | Emitting response |
 | CLOSED | Connection closed |
 
-State transitions are deterministic and protocol‑version aware.
+State transitions are deterministic and protocol‑version aware. Each request is
+announced by exactly one newline‑terminated control line; in protocol v2 the
+payload framing metadata lives on that CALL line.
 
 ---
 
@@ -195,20 +197,23 @@ CALL <iface> <method> <base64-args>
 
 ### 8.2 Protocol v2 (Extended Framing)
 
-Inline form remains valid. Payload form adds explicit framing:
+Inline form remains valid. Payload framing is carried on the CALL line itself:
 
 ```
-CALL <iface> <method> <encoding> <length>
+CALL <iface> <method> PAYLOAD <encoding> <length>
 <raw payload bytes>
 ```
 
-Where `<length>` is decimal byte count and `<encoding>` is a symbolic token
-(`RAW`, `PHP`, `JSON`, etc.).
+Where `<length>` is a decimal byte count and `<encoding>` is a symbolic token
+(`RAW`, `PHP`, `JSON`, etc.). The `PAYLOAD` keyword is never a standalone
+command; payload bytes start immediately after the newline terminating the CALL
+line and end exactly after `<length>` bytes with no trailing delimiter. This
+form is valid only after successful `PROTO 2` negotiation.
 
 ### 8.3 Disambiguation Rules
 
-- 3 arguments → inline form
-- 4 arguments → payload form (v2 only)
+- `PAYLOAD` keyword in the third CALL position → payload form (v2 only)
+- Three CALL arguments → inline form
 - Encoding tokens MUST be from a fixed identifier alphabet and MUST NOT collide
   with base64
 

@@ -59,7 +59,7 @@ static void test_payload_forwarding(void)
 {
    const uint8_t payload[] = { 'a', 'b', 'c' };
    const size_t payload_len = sizeof(payload);
-   const char expected[] = "CALL demo method\nPAYLOAD JSON 3\nabc";
+   const char expected[] = "CALL demo method PAYLOAD JSON 3\nabc";
    const size_t expected_len = sizeof(expected) - 1;
    const char upstream_response[] = "200 OK\n";
 

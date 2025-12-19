@@ -15,6 +15,7 @@ static void rmi_reset_event(rmi_event_t *event)
     memset(event->arg2, 0, sizeof(event->arg2));
     memset(event->arg3, 0, sizeof(event->arg3));
     memset(event->arg4, 0, sizeof(event->arg4));
+    memset(event->arg5, 0, sizeof(event->arg5));
     memset(event->encoding, 0, sizeof(event->encoding));
     event->argc = 0;
     event->type = RMI_EVENT_NONE;
@@ -59,19 +60,22 @@ int rmi_protocol_handle_line(
     char arg2[(RMI_BUF_SZ + 1)];
     char arg3[(RMI_BUF_SZ + 1)];
     char arg4[(RMI_BUF_SZ + 1)];
+    char arg5[(RMI_BUF_SZ + 1)];
 
     memset(cmd, 0, sizeof(cmd));
     memset(arg1, 0, sizeof(arg1));
     memset(arg2, 0, sizeof(arg2));
     memset(arg3, 0, sizeof(arg3));
     memset(arg4, 0, sizeof(arg4));
+    memset(arg5, 0, sizeof(arg5));
 
-    out_event->argc = sscanf(line, "%s %s %s %s %s", cmd, arg1, arg2, arg3, arg4);
+    out_event->argc = sscanf(line, "%s %s %s %s %s %s", cmd, arg1, arg2, arg3, arg4, arg5);
     strncpy(out_event->cmd, cmd, RMI_BUF_SZ);
     strncpy(out_event->arg1, arg1, RMI_BUF_SZ);
     strncpy(out_event->arg2, arg2, RMI_BUF_SZ);
     strncpy(out_event->arg3, arg3, RMI_BUF_SZ);
     strncpy(out_event->arg4, arg4, RMI_BUF_SZ);
+    strncpy(out_event->arg5, arg5, RMI_BUF_SZ);
 
     rmi_lowercase(out_event->cmd);
 
@@ -90,12 +94,6 @@ int rmi_protocol_handle_line(
         if (out_event->argc < 3 && err != NULL) {
             err->code = RMI_ERROR_BAD_ARGS;
             err->message = "CALL requires iface and method";
-        }
-    } else if (strcmp(out_event->cmd, "payload") == 0) {
-        out_event->type = RMI_EVENT_PAYLOAD;
-        if (out_event->argc < 3 && err != NULL) {
-            err->code = RMI_ERROR_BAD_ARGS;
-            err->message = "PAYLOAD requires encoding and length";
         }
     } else if (strcmp(out_event->cmd, "help") == 0) {
         out_event->type = RMI_EVENT_HELP;
