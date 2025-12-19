@@ -8,6 +8,8 @@ interface TestRmiInterface
     public function method($arg);
     public function upload($payload);
     public function expand($payload);
+    public function mirror($payload);
+    public function largeResult($count);
 }
 
 class TestRmiHandler implements TestRmiInterface
@@ -26,6 +28,26 @@ class TestRmiHandler implements TestRmiInterface
     {
         $body = (string) $payload;
         return str_repeat($body, 3);
+    }
+
+    public function mirror($payload)
+    {
+        return $payload;
+    }
+
+    public function largeResult($count)
+    {
+        $items = [];
+        $limit = max(0, (int) $count);
+
+        for ($i = 0; $i < $limit; $i++) {
+            $items[] = [
+                'id' => $i,
+                'value' => str_repeat('X', 16),
+            ];
+        }
+
+        return $items;
     }
 }
 
