@@ -1,5 +1,9 @@
 <?php
-namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
+namespace ProfiWeb\CloudRMI;
+
+use ProfiWeb\CloudRMI\Exception\RemoteErrorException;
+use ProfiWeb\CloudRMI\Exception\RemoteException;
+use ProfiWeb\CloudRMI\Exception\RemoteMethodInvocationException;
 
 /**
  * Remote Method Invocation client.
@@ -50,7 +54,7 @@ class CloudRMIClient
 		$this->connStarted = time();
 		$socket = self::openSocket($this->host, $this->port, $this->readTimeout, $this->unixSocketPath);
 		
-		$this->setConnection(new SimpleRMIConnection(
+		$this->setConnection(new CloudRMIConnection(
 			$this->host,
 			$this->port,
 			$socket,
@@ -830,8 +834,4 @@ class CloudRMIClient
 			cloudrmi_protocol_destroy($this->protocolCtx);
 	}
 
-}
-
-if (!class_exists(__NAMESPACE__ . '\\SimpleRMIClient', false)) {
-	class_alias(CloudRMIClient::class, __NAMESPACE__ . '\\SimpleRMIClient');
 }

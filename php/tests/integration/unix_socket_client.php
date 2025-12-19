@@ -1,12 +1,7 @@
 <?php
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/ConnectionInterface.php';
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteException.php';
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteErrorException.php';
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteMethodInvocationException.php';
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/SimpleRMIConnection.php';
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/CloudRMIClient.php';
+require_once __DIR__ . '/../bootstrap.php';
 
-use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\CloudRMIClient;
+use ProfiWeb\CloudRMI\CloudRMIClient;
 
 function wait_for_unix_server(string $path, int $retries = 40): void
 {
@@ -26,12 +21,13 @@ function wait_for_unix_server(string $path, int $retries = 40): void
 
 function start_unix_server(string $socketPath): array
 {
-    $cmd = [
-        'php',
+    $cmd = cloudrmi_test_command(
         __DIR__ . '/../support/test_server.php',
-        '--unix-socket=' . $socketPath,
-        '--proto-max=2',
-    ];
+        [
+            '--unix-socket=' . $socketPath,
+            '--proto-max=2',
+        ]
+    );
     $descriptors = [
         0 => ['pipe', 'r'],
         1 => ['pipe', 'w'],

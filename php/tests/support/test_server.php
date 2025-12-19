@@ -1,10 +1,7 @@
 <?php
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/CloudRMIServer.php';
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/CloudRMIClient.php';
-require_once __DIR__ . '/../../class/Messaging/RemoteMethodInvocation/RemoteMethodInvocationException.php';
-require_once __DIR__ . '/../../class/System/ProcessControl/ProcessFork.php';
+require_once __DIR__ . '/../bootstrap.php';
 
-use ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation\CloudRMIServer;
+use ProfiWeb\CloudRMI\CloudRMIServer;
 
 interface TestRmiInterface
 {

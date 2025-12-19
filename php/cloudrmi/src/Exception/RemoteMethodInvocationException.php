@@ -1,5 +1,5 @@
 <?php
-namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
+namespace ProfiWeb\CloudRMI\Exception;
 
 /**
  * An exception thrown by classes of PosixAccount package
