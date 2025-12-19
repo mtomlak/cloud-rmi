@@ -1,5 +1,5 @@
 <?php
-namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
+namespace ProfiWeb\CloudRMI\Exception;
 
 /**
  * Exception that has been forwarded from remote system. Copies information

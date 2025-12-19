@@ -1,5 +1,5 @@
 <?php
-namespace ProfiWeb\Cloud\Infrastructure\System\ProcessControl;
+namespace ProfiWeb\CloudRMI\Support;
 
 /**
  * Helps to fork child processes and simple management of them

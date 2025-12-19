@@ -1,6 +1,6 @@
 # ProfiWeb CloudRMI PHP bindings (v0)
 
-This directory contains the thin PHP extension that exposes the libcloudrmi protocol engine and the accompanying PHP client/server harness used for testing the CALL + PAYLOAD event model.
+This directory contains the thin PHP extension that exposes the libcloudrmi protocol engine and the accompanying Composer package (`php/cloudrmi`, namespace `ProfiWeb\CloudRMI`) with the PHP client/server harness used for testing the CALL + PAYLOAD event model.
 
 ## Building
 1. Build libcloudrmi (static library):
@@ -21,12 +21,12 @@ All commands should be executed from the repository root with the extension buil
 
 ### Unit tests (protocol engine)
 ```bash
-php -d extension=php/ext/profiweb_cloudrmi/modules/profiweb_cloudrmi.so php/tests/unit/protocol.php
+make -C php unit
 ```
 
 ### Integration tests (PHP client/server over sockets)
 ```bash
-php -d extension=php/ext/profiweb_cloudrmi/modules/profiweb_cloudrmi.so php/tests/integration/cloudrmi_integration.php
+make -C php integration
 ```
 
 ## Notes

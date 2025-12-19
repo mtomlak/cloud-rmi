@@ -1,5 +1,5 @@
 <?php
-namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
+namespace ProfiWeb\CloudRMI;
 
 /**
  * Connection objects return operating system's handle to the connection

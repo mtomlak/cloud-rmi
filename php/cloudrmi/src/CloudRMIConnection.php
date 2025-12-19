@@ -1,14 +1,14 @@
 <?php
-namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
+namespace ProfiWeb\CloudRMI;
 
 /**
- * Represents connection to Simle RMI server
+ * Represents a connection to a CloudRMI server.
  *  
  * @copyright Copyright (C) 2016 ProfiWeb sro (http://profiweb.biz/).
  * @author Marian Tomlak
  * @license BSD License
  */
-class SimpleRMIConnection implements ConnectionInterface
+class CloudRMIConnection implements ConnectionInterface
 {
 	protected $host;
 	protected $port;
