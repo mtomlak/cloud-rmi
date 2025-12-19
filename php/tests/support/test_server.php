@@ -46,20 +46,15 @@ class TestRMIServer extends CloudRMIServer
 	}
 }
 
-$options = getopt('', ['port:', 'host::', 'proto-max::', 'enable-fork::', 'unix-socket::', 'skip-auth::']);
+$options = getopt('', ['port:', 'host::', 'proto-max::', 'enable-fork::', 'unix-socket::']);
 $port = isset($options['port']) ? (int) $options['port'] : 15555;
 $host = $options['host'] ?? '127.0.0.1';
 $protoMax = isset($options['proto-max']) ? (int) $options['proto-max'] : 2;
 $enableFork = isset($options['enable-fork']) && $options['enable-fork'] !== '0';
 $unixSocketPath = $options['unix-socket'] ?? null;
-$skipAuth = isset($options['skip-auth']) && $options['skip-auth'] !== '0';
 
 $server = new TestRMIServer($host, $port, $protoMax, $enableFork, $unixSocketPath);
 
-if ($skipAuth) {
-	$server->setUnixSocketSkipAuth(true);
-	$server->setRequireAuth(false);
-}
 $handler = new TestRmiHandler();
 $server->bind(TestRmiInterface::class, $handler);
 $server->start();
