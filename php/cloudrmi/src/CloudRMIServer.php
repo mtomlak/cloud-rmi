@@ -1,9 +1,7 @@
 <?php
-namespace ProfiWeb\Cloud\Infrastructure\Messaging\RemoteMethodInvocation;
+namespace ProfiWeb\CloudRMI;
 
-use ProfiWeb\Cloud\Infrastructure\System\ProcessControl\ProcessFork;
-
-require_once __DIR__ . '/../../System/ProcessControl/ProcessFork.php';
+use ProfiWeb\CloudRMI\Support\ProcessFork;
 
 /**
  * Remote Method Invocation server.
@@ -877,14 +875,14 @@ class CloudRMIServer
 	protected function connWriteLn(&$stream, $line)
 	{
 		if (feof($stream) || feof($stream)) {
-			//syslog($errorSeverity, "SimpleRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket unavailable");
+			//syslog($errorSeverity, "CloudRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket unavailable");
 			return false;//$this->proc->join();
 		}
 
 		$info = stream_get_meta_data($stream);
 
 		if ($info['timed_out']) {
-			syslog(LOG_DEBUG, "SimpleRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket native timeout");
+			syslog(LOG_DEBUG, "CloudRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket native timeout");
 			return false;//$this->proc->join();
 		}
 
@@ -906,14 +904,14 @@ class CloudRMIServer
 			}
 
 			if (!is_resource($stream)) {
-				//syslog(LOG_DEBUG, "SimpleRMIServer::connReadLn(): Exiting worker " .  getmypid() . ": socket unavailable");
+				//syslog(LOG_DEBUG, "CloudRMIServer::connReadLn(): Exiting worker " .  getmypid() . ": socket unavailable");
 				return false;//$this->proc->join();
 			}
 
 			$info = stream_get_meta_data($stream);
 
 			if ($info['timed_out']) {
-				syslog(LOG_DEBUG, "SimpleRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket native timeout");
+				syslog(LOG_DEBUG, "CloudRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket native timeout");
 				return '__timeout';//$this->proc->join();
 			}
 
@@ -1134,7 +1132,7 @@ class CloudRMIServer
 
 		// Timed out, need to kill the child
 		$this->log("Terminating unresponsive child $pid");
-		syslog(LOG_CRIT, "SimpleRMIServer: Detected unresponsive child $pid");
+		syslog(LOG_CRIT, "CloudRMIServer: Detected unresponsive child $pid");
 		posix_kill($pid, SIGKILL);
 		$this->doShutdown = true;
 		return $this->proc->join();
@@ -1144,8 +1142,4 @@ class CloudRMIServer
 	{
 
 	}
-}
-
-if (!class_exists(__NAMESPACE__ . '\\SimpleRMIServer', false)) {
-	class_alias(CloudRMIServer::class, __NAMESPACE__ . '\\SimpleRMIServer');
 }

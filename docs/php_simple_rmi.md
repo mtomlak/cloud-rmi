@@ -1,6 +1,6 @@
 # PHP Cloud RMI classes
 
-The PHP reference client/server pair (`CloudRMIClient`, `CloudRMIServer`) mirrors the C reference implementation and the `libcloudrmi` parser semantics while preserving the legacy PHP API. The legacy names (`SimpleRMIClient`, `SimpleRMIServer`) remain available through class aliases for backward compatibility.
+The PHP reference client/server pair (`ProfiWeb\CloudRMI\CloudRMIClient`, `ProfiWeb\CloudRMI\CloudRMIServer`) is shipped as the Composer package `profiweb/cloudrmi` under `php/cloudrmi`. It mirrors the C reference implementation and the `libcloudrmi` parser semantics while preserving the legacy PHP API under the new namespace. The legacy `SimpleRMI*` aliases have been removed.
 
 ## Negotiation and capabilities
 

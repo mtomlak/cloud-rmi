@@ -35,6 +35,14 @@ assert_equals(0, $event['payload_len'], 'no payload length');
 
 cloudrmi_protocol_reset($ctx);
 
+// CALL + PAYLOAD parses (requires protocol v2)
+$upgrade = cloudrmi_protocol_feed($ctx, "PROTO 2\n");
+assert_equals(RMI_OK, $upgrade['status'], 'proto upgrade feed ok');
+$upgradeEvent = cloudrmi_protocol_next_event($ctx);
+assert_equals(RMI_OK, $upgradeEvent['status'], 'proto upgrade event status');
+assert_true($upgradeEvent['event'] !== null, 'proto upgrade event exists');
+assert_equals('proto', $upgradeEvent['event']['cmd'], 'proto event type');
+
 // CALL + PAYLOAD parses
 $payload = "bin\0ary";
 $bytes = "CALL iface method\nPAYLOAD BLOB " . strlen($payload) . "\n" . $payload;
