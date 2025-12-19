@@ -528,12 +528,7 @@ int proxy_pass_call_cmd_ex(
    if (payload != NULL) {
       const char *enc_value = (encoding != NULL && encoding[0] != '\0') ? encoding : "NONE";
 
-      if (stream_writeln(conn->client.sock, "CALL %s %s", iface, cmd) < 0) {
-         ret = 0;
-         goto cleanup;
-      }
-
-      if (stream_writeln(conn->client.sock, "PAYLOAD %s %zu", enc_value, payload_len) < 0) {
+      if (stream_writeln(conn->client.sock, "CALL %s %s PAYLOAD %s %zu", iface, cmd, enc_value, payload_len) < 0) {
          ret = 0;
          goto cleanup;
       }

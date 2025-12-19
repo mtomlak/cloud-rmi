@@ -1,6 +1,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <cloudrmi/protocol.h>
 
@@ -15,6 +16,7 @@ struct rmi_protocol_ctx {
     rmi_protocol_state_t state;
     size_t expected_payload_len;
     int protocol_version;
+    int pending_argc;
     char pending_iface[RMI_BUF_SZ + 1];
     char pending_method[RMI_BUF_SZ + 1];
     char pending_encoding[RMI_BUF_SZ + 1];
@@ -73,6 +75,7 @@ static void reset_pending_call(rmi_protocol_ctx_t *ctx)
     memset(ctx->pending_method, 0, sizeof(ctx->pending_method));
     memset(ctx->pending_encoding, 0, sizeof(ctx->pending_encoding));
     ctx->expected_payload_len = 0;
+    ctx->pending_argc = 0;
 }
 
 rmi_protocol_ctx_t *rmi_protocol_create(void)
@@ -265,7 +268,7 @@ rmi_status_t rmi_protocol_next_event(
             strncpy(out->arg1, ctx->pending_iface, RMI_BUF_SZ);
             strncpy(out->arg2, ctx->pending_method, RMI_BUF_SZ);
             strncpy(out->encoding, ctx->pending_encoding, RMI_BUF_SZ);
-            out->argc = 3;
+            out->argc = ctx->pending_argc;
             out->type = RMI_EVENT_CALL;
             out->payload = ctx->payload_buf;
             out->payload_len = ctx->expected_payload_len;
@@ -360,182 +363,115 @@ rmi_status_t rmi_protocol_next_event(
             return RMI_OK;
         }
 
-        if (ctx->state == RMI_PROTOCOL_CALL_PENDING_PAYLOAD) {
-            if (ctx->protocol_version < 2) {
-                if (err != NULL) {
-                    err->code = RMI_ERROR_BAD_REQUEST;
-                    err->message = "Protocol upgrade required";
-                }
-                rmi_protocol_reset(ctx);
-                return RMI_E_ERR;
-            }
-
-            if (parsed_event.type != RMI_EVENT_PAYLOAD) {
-                if (err != NULL) {
-                    err->code = RMI_ERROR_BAD_REQUEST;
-                    err->message = "Expected PAYLOAD after CALL";
-                }
-                rmi_protocol_reset(ctx);
-                ctx->state = RMI_PROTOCOL_IDLE;
-                return RMI_E_ERR;
-            }
-
-            if (parsed_event.arg2[0] == '\0') {
+        if (parsed_event.type == RMI_EVENT_CALL) {
+            if (parsed_event.arg1[0] == '\0' || parsed_event.arg2[0] == '\0') {
                 if (err != NULL) {
                     err->code = RMI_ERROR_BAD_ARGS;
-                    err->message = "PAYLOAD length missing";
+                    err->message = "CALL requires iface and method";
                 }
                 rmi_protocol_reset(ctx);
                 return RMI_E_ERR;
             }
 
-            char *endptr = NULL;
-            unsigned long long payload_len = strtoull(parsed_event.arg2, &endptr, 10);
-            if (endptr == parsed_event.arg2 || *endptr != '\0' || payload_len > RMI_MAX_BUFFER) {
-                if (err != NULL) {
-                    err->code = RMI_ERROR_BAD_REQUEST;
-                    err->message = "Invalid payload length";
-                }
-                rmi_protocol_reset(ctx);
-                return payload_len > RMI_MAX_BUFFER ? RMI_E_OVERFLOW : RMI_E_ERR;
-            }
-
-            if (payload_len > SIZE_MAX) {
-                // Defensive guard: RMI_MAX_BUFFER currently fits in size_t, but keep check for future changes
-                if (err != NULL) {
-                    err->code = RMI_ERROR_BAD_REQUEST;
-                    err->message = "Invalid payload length";
-                }
-                rmi_protocol_reset(ctx);
-                return RMI_E_ERR;
-            }
-
-            ctx->expected_payload_len = (size_t)payload_len;
-            strncpy(ctx->pending_encoding, parsed_event.arg1, RMI_BUF_SZ);
-            ctx->state = RMI_PROTOCOL_READING_PAYLOAD;
-
-            if (ctx->expected_payload_len == 0) {
-                if (!ensure_payload_capacity(ctx, 1)) {
+            if (parsed_event.argc >= 6 && strcasecmp(parsed_event.arg3, "payload") == 0) {
+                if (ctx->protocol_version < 2) {
                     if (err != NULL) {
                         err->code = RMI_ERROR_BAD_REQUEST;
-                        err->message = "Buffer allocation failed";
-                    }
-                    rmi_protocol_reset(ctx);
-                    return RMI_E_ERR;
-                }
-                ctx->payload_buf[0] = '\0';
-                out->payload = ctx->payload_buf;
-                out->payload_len = 0;
-                strncpy(out->cmd, "call", RMI_BUF_SZ);
-                strncpy(out->arg1, ctx->pending_iface, RMI_BUF_SZ);
-                strncpy(out->arg2, ctx->pending_method, RMI_BUF_SZ);
-                strncpy(out->encoding, ctx->pending_encoding, RMI_BUF_SZ);
-                out->type = RMI_EVENT_CALL;
-                out->argc = 3;
-                ctx->state = RMI_PROTOCOL_EXECUTE_CALL;
-                ctx->state = RMI_PROTOCOL_SEND_RESPONSE;
-                ctx->state = RMI_PROTOCOL_IDLE;
-                reset_pending_call(ctx);
-                return RMI_OK;
-            }
-
-            continue;
-        }
-
-        if (parsed_event.type == RMI_EVENT_CALL && parsed_event.argc >= 5) {
-            if (ctx->protocol_version < 2) {
-                if (err != NULL) {
-                    err->code = RMI_ERROR_BAD_REQUEST;
-                    err->message = "Protocol upgrade required";
-                }
-                rmi_protocol_reset(ctx);
-                return RMI_E_ERR;
-            }
-
-            char *endptr = NULL;
-            unsigned long long payload_len = strtoull(parsed_event.arg4, &endptr, 10);
-            if (parsed_event.arg4[0] == '\0' || endptr == parsed_event.arg4 || *endptr != '\0' || payload_len > RMI_MAX_BUFFER) {
-                if (err != NULL) {
-                    err->code = RMI_ERROR_BAD_REQUEST;
-                    err->message = "Invalid payload length";
-                }
-                rmi_protocol_reset(ctx);
-                return payload_len > RMI_MAX_BUFFER ? RMI_E_OVERFLOW : RMI_E_ERR;
-            }
-
-            if (payload_len > SIZE_MAX) {
-                if (err != NULL) {
-                    err->code = RMI_ERROR_BAD_REQUEST;
-                    err->message = "Invalid payload length";
-                }
-                rmi_protocol_reset(ctx);
-                return RMI_E_ERR;
-            }
-
-            ctx->expected_payload_len = (size_t)payload_len;
-            strncpy(ctx->pending_iface, parsed_event.arg1, RMI_BUF_SZ);
-            strncpy(ctx->pending_method, parsed_event.arg2, RMI_BUF_SZ);
-            strncpy(ctx->pending_encoding, parsed_event.arg3, RMI_BUF_SZ);
-            ctx->state = RMI_PROTOCOL_READING_PAYLOAD;
-
-            if (ctx->expected_payload_len == 0) {
-                if (!ensure_payload_capacity(ctx, 1)) {
-                    if (err != NULL) {
-                        err->code = RMI_ERROR_BAD_REQUEST;
-                        err->message = "Buffer allocation failed";
+                        err->message = "Protocol upgrade required";
                     }
                     rmi_protocol_reset(ctx);
                     return RMI_E_ERR;
                 }
 
-                ctx->payload_buf[0] = '\0';
-                out->payload = ctx->payload_buf;
-                out->payload_len = 0;
-                strncpy(out->cmd, "call", RMI_BUF_SZ);
-                strncpy(out->arg1, ctx->pending_iface, RMI_BUF_SZ);
-                strncpy(out->arg2, ctx->pending_method, RMI_BUF_SZ);
-                strncpy(out->encoding, ctx->pending_encoding, RMI_BUF_SZ);
-                out->type = RMI_EVENT_CALL;
-                out->argc = 3;
-                ctx->state = RMI_PROTOCOL_EXECUTE_CALL;
-                ctx->state = RMI_PROTOCOL_SEND_RESPONSE;
-                ctx->state = RMI_PROTOCOL_IDLE;
-                reset_pending_call(ctx);
-                return RMI_OK;
+                if (parsed_event.arg5[0] == '\0') {
+                    if (err != NULL) {
+                        err->code = RMI_ERROR_BAD_ARGS;
+                        err->message = "PAYLOAD length missing";
+                    }
+                    rmi_protocol_reset(ctx);
+                    return RMI_E_ERR;
+                }
+
+                char *endptr = NULL;
+                unsigned long long payload_len = strtoull(parsed_event.arg5, &endptr, 10);
+                if (endptr == parsed_event.arg5 || *endptr != '\0' || payload_len > RMI_MAX_BUFFER) {
+                    if (err != NULL) {
+                        err->code = RMI_ERROR_BAD_REQUEST;
+                        err->message = "Invalid payload length";
+                    }
+                    rmi_protocol_reset(ctx);
+                    return payload_len > RMI_MAX_BUFFER ? RMI_E_OVERFLOW : RMI_E_ERR;
+                }
+
+                if (payload_len > SIZE_MAX) {
+                    if (err != NULL) {
+                        err->code = RMI_ERROR_BAD_REQUEST;
+                        err->message = "Invalid payload length";
+                    }
+                    rmi_protocol_reset(ctx);
+                    return RMI_E_ERR;
+                }
+
+                ctx->expected_payload_len = (size_t)payload_len;
+                strncpy(ctx->pending_iface, parsed_event.arg1, RMI_BUF_SZ);
+                strncpy(ctx->pending_method, parsed_event.arg2, RMI_BUF_SZ);
+                strncpy(ctx->pending_encoding, parsed_event.arg4, RMI_BUF_SZ);
+                ctx->pending_argc = parsed_event.argc;
+                ctx->state = RMI_PROTOCOL_READING_PAYLOAD;
+
+                if (ctx->expected_payload_len == 0) {
+                    if (!ensure_payload_capacity(ctx, 1)) {
+                        if (err != NULL) {
+                            err->code = RMI_ERROR_BAD_REQUEST;
+                            err->message = "Buffer allocation failed";
+                        }
+                        rmi_protocol_reset(ctx);
+                        return RMI_E_ERR;
+                    }
+                    ctx->payload_buf[0] = '\0';
+                    out->payload = ctx->payload_buf;
+                    out->payload_len = 0;
+                    strncpy(out->cmd, "call", RMI_BUF_SZ);
+                    strncpy(out->arg1, ctx->pending_iface, RMI_BUF_SZ);
+                    strncpy(out->arg2, ctx->pending_method, RMI_BUF_SZ);
+                    strncpy(out->encoding, ctx->pending_encoding, RMI_BUF_SZ);
+                    out->type = RMI_EVENT_CALL;
+                    out->argc = ctx->pending_argc;
+                    ctx->state = RMI_PROTOCOL_EXECUTE_CALL;
+                    ctx->state = RMI_PROTOCOL_SEND_RESPONSE;
+                    ctx->state = RMI_PROTOCOL_IDLE;
+                    reset_pending_call(ctx);
+                    return RMI_OK;
+                }
+
+                continue;
             }
 
-            continue;
-        }
-
-        if (parsed_event.type == RMI_EVENT_CALL && parsed_event.argc == 3 && parsed_event.arg3[0] == '\0') {
-            if (ctx->protocol_version < 2) {
+            if (strcasecmp(parsed_event.arg3, "payload") == 0) {
                 if (err != NULL) {
-                    err->code = RMI_ERROR_BAD_REQUEST;
-                    err->message = "Protocol upgrade required";
+                    err->code = RMI_ERROR_BAD_ARGS;
+                    err->message = "PAYLOAD requires encoding and length";
                 }
                 rmi_protocol_reset(ctx);
                 return RMI_E_ERR;
             }
 
-            strncpy(ctx->pending_iface, parsed_event.arg1, RMI_BUF_SZ);
-            strncpy(ctx->pending_method, parsed_event.arg2, RMI_BUF_SZ);
-            ctx->state = RMI_PROTOCOL_CALL_PENDING_PAYLOAD;
-            continue;
-        }
-
-        if (parsed_event.type == RMI_EVENT_PAYLOAD) {
-            if (err != NULL) {
-                err->code = RMI_ERROR_BAD_REQUEST;
-                err->message = "PAYLOAD without CALL";
+            if (parsed_event.argc != 4 || parsed_event.arg3[0] == '\0') {
+                if (err != NULL) {
+                    err->code = RMI_ERROR_BAD_ARGS;
+                    err->message = "CALL requires arguments";
+                }
+                rmi_protocol_reset(ctx);
+                return RMI_E_ERR;
             }
-            rmi_protocol_reset(ctx);
-            return RMI_E_ERR;
         }
 
         *out = parsed_event;
         ctx->state = RMI_PROTOCOL_EXECUTE_CALL;
         ctx->state = RMI_PROTOCOL_SEND_RESPONSE;
         ctx->state = RMI_PROTOCOL_IDLE;
+        if (err != NULL && err->code != RMI_ERROR_NONE)
+            rmi_protocol_reset(ctx);
 
         return RMI_OK;
     }

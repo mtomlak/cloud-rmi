@@ -266,7 +266,7 @@ class CloudRMIClient
 		}
 
 		if ($preferPayload) {
-			$line = "$command $interface $methodName $encoding $payloadLength";
+			$line = "$command $interface $methodName PAYLOAD $encoding $payloadLength";
 			$this->validateOutboundPayload($line, null, $payloadBytes, $options);
 
 			return [

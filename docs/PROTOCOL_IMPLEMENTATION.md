@@ -21,22 +21,23 @@ Source: `libcloudrmi/src/protocol_feed.c`, `libcloudrmi/include/cloudrmi/types.h
   smaller payloads they still verify the fully framed, base64-encoded CALL line
   does not reach `RMI_MAX_LINE`, falling back to payload framing when the
   encoded line is too large.
-- **States**: `IDLE → CALL_PENDING_PAYLOAD → READING_PAYLOAD →
-  EXECUTE_CALL → SEND_RESPONSE`. Pending CALL state is used when a payload
-  header is received without inline args.
+- **States**: `IDLE → READING_PAYLOAD → EXECUTE_CALL → SEND_RESPONSE`. Each
+  request begins with a single control line; payload framing metadata lives on
+  the CALL line in protocol v2.
 - **Protocol versions**: validated `1..2`. Invalid `PROTO` lines reset the
   parser and surface `RMI_ERROR_BAD_REQUEST`.
 - **PAYLOAD handling**:
   - Zero-length payloads are legal. The parser emits a CALL event immediately
     with an empty payload buffer.
-  - Payload length must be decimal and ≤ `RMI_MAX_BUFFER`; otherwise the parser
-    resets and reports `RMI_ERROR_BAD_REQUEST` (or `RMI_E_OVERFLOW` when above
-    the ceiling).
+  - Payload CALL headers take the form `CALL <iface> <method> PAYLOAD <encoding>
+    <length>` (v2 only). Length must be decimal and ≤ `RMI_MAX_BUFFER`;
+    otherwise the parser resets and reports `RMI_ERROR_BAD_REQUEST` (or
+    `RMI_E_OVERFLOW` when above the ceiling).
   - Readers MUST consume exactly the declared payload length. Responses do not
     include a trailing delimiter byte, and any speculative read beyond
     `<length>` risks consuming the first byte of the next header.
-- **Error propagation**: `RMI_ERROR_BAD_ARGS` is used for missing CALL/PAYLOAD
-  tokens; `RMI_ERROR_BAD_REQUEST` covers malformed versions, payload lengths,
+- **Error propagation**: `RMI_ERROR_BAD_ARGS` is used for missing CALL tokens or
+  malformed payload headers; `RMI_ERROR_BAD_REQUEST` covers malformed versions,
   or unexpected command ordering.
 
 ---
@@ -118,8 +119,8 @@ Sources: `src/handle_call.c`, `src/server.c`
   - Trailing `\n`/`\r` are stripped from handler output before framing.
 - **Response framing**:
   - If payload was provided **and** client negotiated v2: `200 PAYLOAD
-    <encoding> <len>` followed by raw bytes and a terminal newline. Encoding
-    defaults to request encoding or `PLAIN` when empty.
+    <encoding> <len>` followed by raw bytes. Encoding defaults to request
+    encoding or `PLAIN` when empty.
   - Otherwise: base64-encodes stdout and responds `200 <base64>` (no encoding
     token prefix).
 - **Error responses**:
@@ -142,8 +143,8 @@ Source: `src/client.c`
 - **PAYLOAD gating**:
   - Requires negotiated PROTO 2 *and* `PAYLOAD` capability. Otherwise the call
     aborts locally with status `505` and an explanatory message.
-- **CALL PAYLOAD flow**: Sends `CALL iface method`, then `PAYLOAD <encoding>
-  <len>`, writes the payload bytes, and parses the first response line.
+- **CALL PAYLOAD flow**: Sends `CALL iface method PAYLOAD <encoding> <len>`,
+  writes the payload bytes, and parses the first response line.
 - **Multiline responses**: Any response ending with `:` triggers an additional
   `stream_readlns` read to collect trailing lines.
 - **Decoding helpers**: Inline responses may include `encoding:base64`. The
@@ -161,8 +162,8 @@ Source: `src/proxy.c`
 - Upstream connections reuse the standard client flow: connect, optional token
   authentication, banner parsing, capability discovery, and PROTO negotiation.
 - **CALL forwarding**:
-  - Payload requests: send `CALL` + `PAYLOAD <encoding> <len>` then stream
-    payload bytes.
+  - Payload requests: send unified `CALL <iface> <method> PAYLOAD <encoding>
+    <len>` headers then stream payload bytes.
   - Inline requests: send legacy `CALL iface method <base64-args>`.
 - **Response adaptation**:
   - Payload responses (`status 200/500` with `PAYLOAD <encoding> <len>`) are
@@ -188,8 +189,8 @@ Source: `src/proxy.c`
   - `RMI_E_ERR` — malformed input or invalid sequencing; parser resets.
 - **Error codes** (`rmi_error_code_t`):
   - `RMI_ERROR_BAD_REQUEST` — malformed command, invalid version/length,
-    unexpected PAYLOAD, buffer failures.
-  - `RMI_ERROR_BAD_ARGS` — missing required CALL/PAYLOAD parameters.
+    unexpected payload framing, buffer failures.
+  - `RMI_ERROR_BAD_ARGS` — missing required CALL or payload parameters.
 - **Server responses**:
   - `400 Bad Request` on BAD_REQUEST or transport overflow.
   - `400 Bad Request Arguments` on BAD_ARGS.

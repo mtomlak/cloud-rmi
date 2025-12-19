@@ -248,8 +248,7 @@ class ProtocolSession:
             iface_name = f"{self.namespace}\\{iface}"
 
         if payload is not None:
-            self._send_line(f"CALL {iface_name} {method}")
-            self._send_line(f"PAYLOAD {encoding} {len(payload)}")
+            self._send_line(f"CALL {iface_name} {method} PAYLOAD {encoding} {len(payload)}")
             self._send_raw(payload)
         else:
             encoded_arg = base64.b64encode((arg or "").encode("utf-8")).decode("ascii")

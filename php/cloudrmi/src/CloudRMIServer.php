@@ -655,15 +655,21 @@ class CloudRMIServer
 		$arg = trim((string) $arg);
 
 		if ($this->protocolVersion >= 2) {
-			$parts = preg_split('/\s+/', $arg, 4);
+			$parts = preg_split('/\s+/', $arg, 5);
 
-			if (count($parts) == 4 && is_numeric($parts[3])) {
+			if (count($parts) >= 5 && strcasecmp($parts[2], 'PAYLOAD') === 0) {
 				if (!$this->canHandlePayloadRequests()) {
 					$result['error'] = 'bad_request';
 					return $result;
 				}
 
-				list($iface, $method, $enc, $lenStr) = $parts;
+				list($iface, $method, , $enc, $lenStr) = $parts;
+
+				if (!ctype_digit((string) $lenStr)) {
+					$result['error'] = 'bad_request';
+					return $result;
+				}
+
 				$len = (int) $lenStr;
 
 				if ($len < 0 || $len > $this->getMaxPayloadLength()) {
@@ -699,6 +705,15 @@ class CloudRMIServer
 				$result['payload'] = true;
 				$result['encoding'] = $enc;
 
+				return $result;
+			} elseif (count($parts) >= 3 && strcasecmp($parts[2], 'PAYLOAD') === 0) {
+				$result['error'] = 'bad_args';
+				return $result;
+			}
+		} else {
+			$tokens = preg_split('/\s+/', $arg, 4);
+			if (count($tokens) >= 3 && strcasecmp($tokens[2], 'PAYLOAD') === 0) {
+				$result['error'] = 'bad_request';
 				return $result;
 			}
 		}

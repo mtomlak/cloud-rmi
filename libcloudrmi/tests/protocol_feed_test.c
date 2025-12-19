@@ -116,6 +116,8 @@ static int expect_overflow(rmi_protocol_ctx_t *ctx, const uint8_t *data, size_t 
 int main(void)
 {
     rmi_protocol_ctx_t *ctx = rmi_protocol_create();
+    rmi_event_t event;
+    rmi_status_t status;
     if (ctx == NULL)
         return 1;
 
@@ -138,17 +140,17 @@ int main(void)
     const char *bad_call = "CALL only_one_arg\n";
     if (rmi_protocol_feed(ctx, (const uint8_t *)bad_call, strlen(bad_call), &err) != RMI_OK)
         return 1;
-    if (!expect_event(ctx, RMI_EVENT_CALL, "call", "only_one_arg", "", RMI_ERROR_BAD_ARGS, NULL, NULL, 0))
+    status = rmi_protocol_next_event(ctx, &event, &err);
+    if (status != RMI_E_ERR || err.code != RMI_ERROR_BAD_ARGS)
         return 1;
 
     /* Framing overflow: line too long without newline */
     char long_line[RMI_BUF_SZ + 2];
     memset(long_line, 'a', sizeof(long_line));
     long_line[sizeof(long_line) - 1] = '\0';
-    rmi_status_t status = rmi_protocol_feed(ctx, (const uint8_t *)long_line, RMI_BUF_SZ + 1, &err);
+    status = rmi_protocol_feed(ctx, (const uint8_t *)long_line, RMI_BUF_SZ + 1, &err);
     if (status != RMI_E_OVERFLOW)
         return 1;
-    rmi_event_t event;
     if (rmi_protocol_next_event(ctx, &event, &err) != RMI_E_AGAIN)
         return 1;
 
@@ -162,7 +164,7 @@ int main(void)
         return 1;
 
     /* CALL with payload */
-    const char *call_with_payload = "PROTO 2\nCALL demo method\nPAYLOAD JSON 3\nabc";
+    const char *call_with_payload = "PROTO 2\nCALL demo method PAYLOAD JSON 3\nabc";
     if (rmi_protocol_feed(ctx, (const uint8_t *)call_with_payload, strlen(call_with_payload), &err) != RMI_OK)
         return 1;
     const uint8_t expected_payload[] = { 'a', 'b', 'c' };
@@ -176,7 +178,7 @@ int main(void)
     if (rmi_protocol_feed(ctx, (const uint8_t *)orphan_payload, strlen(orphan_payload), &err) != RMI_OK)
         return 1;
     status = rmi_protocol_next_event(ctx, &event, &err);
-    if (status != RMI_E_ERR || err.code != RMI_ERROR_BAD_REQUEST)
+    if (status != RMI_OK || event.type != RMI_EVENT_UNKNOWN || err.code != RMI_ERROR_BAD_REQUEST)
         return 1;
 
     /* PAYLOAD framing also requires protocol upgrade */
@@ -186,7 +188,7 @@ int main(void)
         printf("Failed to recreate protocol context\n");
         return 1;
     }
-    const char *payload_without_proto = "CALL iface method\nPAYLOAD RAW 3\nxyz";
+    const char *payload_without_proto = "CALL iface method PAYLOAD RAW 3\nxyz";
     status = rmi_protocol_feed(ctx, (const uint8_t *)payload_without_proto, strlen(payload_without_proto), &err);
     if (status == RMI_OK) {
         status = rmi_protocol_next_event(ctx, &event, &err);
@@ -196,18 +198,18 @@ int main(void)
         return 1;
     }
 
-    /* Invalid command while awaiting payload */
+    /* Missing CALL arguments should error and reset */
     const char *bad_sequence = "CALL test iface\nNOOP\n";
     if (rmi_protocol_feed(ctx, (const uint8_t *)bad_sequence, strlen(bad_sequence), &err) != RMI_OK)
         return 1;
     status = rmi_protocol_next_event(ctx, &event, &err);
-    if (status != RMI_E_ERR || err.code != RMI_ERROR_BAD_REQUEST)
+    if (status != RMI_E_ERR || err.code != RMI_ERROR_BAD_ARGS)
         return 1;
     if (rmi_protocol_next_event(ctx, &event, &err) != RMI_E_AGAIN)
         return 1;
 
     /* CALL with zero-length payload */
-    const char *empty_payload = "PROTO 2\nCALL zero method\nPAYLOAD PLAIN 0\n";
+    const char *empty_payload = "PROTO 2\nCALL zero method PAYLOAD PLAIN 0\n";
     if (rmi_protocol_feed(ctx, (const uint8_t *)empty_payload, strlen(empty_payload), &err) != RMI_OK)
         return 1;
     if (!expect_event(ctx, RMI_EVENT_PROTO, "proto", "2", "", RMI_ERROR_NONE, NULL, NULL, 0))
@@ -222,11 +224,11 @@ int main(void)
     if (!expect_event(ctx, RMI_EVENT_CALL, "call", "demo", "method", RMI_ERROR_NONE, NULL, NULL, 0))
         return 1;
     status = rmi_protocol_next_event(ctx, &event, &err);
-    if (status != RMI_E_ERR || err.code != RMI_ERROR_BAD_REQUEST)
+    if (status != RMI_OK || event.type != RMI_EVENT_UNKNOWN || err.code != RMI_ERROR_BAD_REQUEST)
         return 1;
 
     /* Multiple CALLs in sequence, mixing legacy and payload */
-    const char *mixed = "PROTO 2\nCALL first methodOne Zm9v\nCALL second methodTwo\nPAYLOAD RAW 4\nbody";
+    const char *mixed = "PROTO 2\nCALL first methodOne Zm9v\nCALL second methodTwo PAYLOAD RAW 4\nbody";
     if (rmi_protocol_feed(ctx, (const uint8_t *)mixed, strlen(mixed), &err) != RMI_OK)
         return 1;
     if (!expect_event(ctx, RMI_EVENT_PROTO, "proto", "2", "", RMI_ERROR_NONE, NULL, NULL, 0))
@@ -238,7 +240,7 @@ int main(void)
         return 1;
 
     /* Repeated payload CALLs without reconnect */
-    const char *double_payload = "PROTO 2\nCALL again method\nPAYLOAD RAW 1\na\nCALL again method\nPAYLOAD RAW 1\nb";
+    const char *double_payload = "PROTO 2\nCALL again method PAYLOAD RAW 1\na\nCALL again method PAYLOAD RAW 1\nb";
     if (rmi_protocol_feed(ctx, (const uint8_t *)double_payload, strlen(double_payload), &err) != RMI_OK)
         return 1;
     const uint8_t payload_a[] = { 'a' };
@@ -257,7 +259,7 @@ int main(void)
         printf("Failed to recreate protocol context\n");
         return 1;
     }
-    const char *bad_length = "CALL iface method\nPAYLOAD RAW notnum\n";
+    const char *bad_length = "CALL iface method PAYLOAD RAW notnum\n";
     if (rmi_protocol_feed(ctx, (const uint8_t *)bad_length, strlen(bad_length), &err) != RMI_OK)
         return 1;
     status = rmi_protocol_next_event(ctx, &event, &err);
@@ -265,7 +267,8 @@ int main(void)
         return 1;
 
     /* Partial payload should request more data */
-    const char *short_payload = "CALL iface method\nPAYLOAD RAW 4\nxy";
+    rmi_protocol_set_version(ctx, 2);
+    const char *short_payload = "CALL iface method PAYLOAD RAW 4\nxy";
     if (rmi_protocol_feed(ctx, (const uint8_t *)short_payload, strlen(short_payload), &err) != RMI_OK)
         return 1;
     if (rmi_protocol_next_event(ctx, &event, &err) != RMI_E_AGAIN)
@@ -278,7 +281,7 @@ int main(void)
     }
 
     /* Protocol negotiation is required before v2 framing */
-    const char *v2_call_without_proto = "CALL iface method RAW 3\nxyz";
+    const char *v2_call_without_proto = "CALL iface method PAYLOAD RAW 3\nxyz";
     status = rmi_protocol_feed(ctx, (const uint8_t *)v2_call_without_proto, strlen(v2_call_without_proto), &err);
     if (status == RMI_OK) {
         status = rmi_protocol_next_event(ctx, &event, &err);
@@ -298,7 +301,7 @@ int main(void)
 
     /* PROTO 2 enables single-line payload CALL */
     rmi_protocol_reset(ctx);
-    const char *proto_ok = "PROTO 2\nCALL demo method RAW 4\nbody";
+    const char *proto_ok = "PROTO 2\nCALL demo method PAYLOAD RAW 4\nbody";
     if (rmi_protocol_feed(ctx, (const uint8_t *)proto_ok, strlen(proto_ok), &err) != RMI_OK)
         return 1;
     if (!expect_event(ctx, RMI_EVENT_PROTO, "proto", "2", "", RMI_ERROR_NONE, NULL, NULL, 0))
@@ -307,15 +310,15 @@ int main(void)
     if (!expect_event(ctx, RMI_EVENT_CALL, "call", "demo", "method", RMI_ERROR_NONE, "RAW", body_v2, sizeof(body_v2)))
         return 1;
 
-    /* PROTO 2 enables multi-line payload CALL */
+    /* Legacy multi-line payload framing should be rejected */
     rmi_protocol_reset(ctx);
     const char *proto_and_payload = "PROTO 2\nCALL demo method\nPAYLOAD RAW 3\nbar";
     if (rmi_protocol_feed(ctx, (const uint8_t *)proto_and_payload, strlen(proto_and_payload), &err) != RMI_OK)
         return 1;
     if (!expect_event(ctx, RMI_EVENT_PROTO, "proto", "2", "", RMI_ERROR_NONE, NULL, NULL, 0))
         return 1;
-    const uint8_t bar_payload[] = { 'b', 'a', 'r' };
-    if (!expect_event(ctx, RMI_EVENT_CALL, "call", "demo", "method", RMI_ERROR_NONE, "RAW", bar_payload, sizeof(bar_payload)))
+    status = rmi_protocol_next_event(ctx, &event, &err);
+    if (status != RMI_E_ERR || err.code != RMI_ERROR_BAD_ARGS)
         return 1;
 
     /* Exact RMI_MAX_LINE line length should be accepted */
@@ -341,7 +344,7 @@ int main(void)
     if (!expect_event(ctx, RMI_EVENT_PROTO, "proto", "2", "", RMI_ERROR_NONE, NULL, NULL, 0))
         return 1;
     char header[128];
-    snprintf(header, sizeof(header), "CALL demo method\nPAYLOAD RAW %zu\n", (size_t)RMI_MAX_BUFFER);
+    snprintf(header, sizeof(header), "CALL demo method PAYLOAD RAW %zu\n", (size_t)RMI_MAX_BUFFER);
     if (rmi_protocol_feed(ctx, (const uint8_t *)header, strlen(header), &err) != RMI_OK)
         return 1;
     status = rmi_protocol_next_event(ctx, &event, &err);

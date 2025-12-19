@@ -54,6 +54,8 @@ static void cloudrmi_populate_event_array(zval *target, const rmi_event_t *event
     add_assoc_string(target, "arg1", event->arg1);
     add_assoc_string(target, "arg2", event->arg2);
     add_assoc_string(target, "arg3", event->arg3);
+    add_assoc_string(target, "arg4", event->arg4);
+    add_assoc_string(target, "arg5", event->arg5);
     add_assoc_string(target, "encoding", event->encoding);
 
     if (event->payload == NULL) {
@@ -216,7 +218,6 @@ static void cloudrmi_register_constants(INIT_FUNC_ARGS)
     REGISTER_LONG_CONSTANT("RMI_EVENT_NONE", RMI_EVENT_NONE, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT("RMI_EVENT_AUTH", RMI_EVENT_AUTH, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT("RMI_EVENT_CALL", RMI_EVENT_CALL, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_PAYLOAD", RMI_EVENT_PAYLOAD, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT("RMI_EVENT_HELP", RMI_EVENT_HELP, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT("RMI_EVENT_IFACES", RMI_EVENT_IFACES, CONST_CS | CONST_PERSISTENT);
     REGISTER_LONG_CONSTANT("RMI_EVENT_RELOAD", RMI_EVENT_RELOAD, CONST_CS | CONST_PERSISTENT);
