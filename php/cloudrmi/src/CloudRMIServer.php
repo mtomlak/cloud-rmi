@@ -45,18 +45,18 @@ class CloudRMIServer
 	protected $enablePayloadCapability = true;
 	protected $enableAsyncCapability = true;
 	protected $unixSocketSkipAuth = false;
-        // Protocol-related
+	// Protocol-related
 	protected $maxPlainStringBytes = 1024;
-        protected $protocolVersion = 1;
-        protected $maxProtocolVersion = 2;
+	protected $protocolVersion = 1;
+	protected $maxProtocolVersion = 2;
 
-        public function __construct()
-        {
-                $this->bindings = array();
+	public function __construct()
+	{
+		$this->bindings = array();
 
-                if (!$this->hasForkSupport())
-                        $this->readTimeout = $this->noForkReadTimeout;
-        }
+		if (!$this->hasForkSupport())
+			$this->readTimeout = $this->noForkReadTimeout;
+	}
 
 	public function setUnixSocketPath($path)
 	{
@@ -81,10 +81,10 @@ class CloudRMIServer
 		$this->maxProtocolVersion = $version;
 	}
 
-        public function setRequireAuth($requireAuth)
-        {
-                $this->requireAuth = (bool) $requireAuth;
-        }
+	public function setRequireAuth($requireAuth)
+	{
+		$this->requireAuth = (bool) $requireAuth;
+	}
 
 	public function start()
 	{
@@ -95,20 +95,20 @@ class CloudRMIServer
 		$this->serverPid = posix_getpid();
 		$this->log($this->contextName . " service ready on " . $this->describeEndpoint());
 
-                if ($this->hasForkSupport())
-                        $this->proc = new ProcessFork();
+		if ($this->hasForkSupport())
+			$this->proc = new ProcessFork();
 
-                // main program loop
-                while (!$this->doShutdown) {
-                        $this->acceptNewConnections();
+		// main program loop
+		while (!$this->doShutdown) {
+			$this->acceptNewConnections();
 
-                        if ($this->hasForkSupport() && $this->proc instanceof ProcessFork) {
-                                if (version_compare(PHP_VERSION, '7.1.0', '<'))
-                                        $this->proc->dispatchSignals();
+			if ($this->hasForkSupport() && $this->proc instanceof ProcessFork) {
+				if (version_compare(PHP_VERSION, '7.1.0', '<'))
+					$this->proc->dispatchSignals();
 
-                                $this->proc->collectChildren();
-                        }
-                }
+				$this->proc->collectChildren();
+			}
+		}
 
 		$this->closeServerSocket();
 		$this->doShutdown = false; // in case it will be started again
@@ -131,19 +131,19 @@ class CloudRMIServer
 
 	public function handleProccessShutdown()
 	{
-                if (($this->proc && $this->proc->isParent()) || !$this->hasForkSupport()) {
-                        $this->closeServerSocket();
-                }
+		if (($this->proc && $this->proc->isParent()) || !$this->hasForkSupport()) {
+			$this->closeServerSocket();
+		}
 
 		if (!$this->doShutdown)
 			$this->handleCrash();
 	}
 
-        protected function acceptNewConnections()
-        {
-                if ($conn = @stream_socket_accept($this->serverSocket))
-                        $this->handleConnection($conn, $this->isUnixSocket());
-        }
+	protected function acceptNewConnections()
+	{
+		if ($conn = @stream_socket_accept($this->serverSocket))
+			$this->handleConnection($conn, $this->isUnixSocket());
+	}
 
 	protected function isUnixSocket()
 	{
@@ -943,14 +943,14 @@ class CloudRMIServer
 		return trim($buff);
 	}
 
-        protected function encodePayload($payload)
-        {
-                // If payload is simple string, don't serialize
-                if (is_string($payload) && strlen($payload) < $this->maxPlainStringBytes)
-                        return base64_encode($payload);
+	protected function encodePayload($payload)
+	{
+		// If payload is simple string, don't serialize
+		if (is_string($payload) && strlen($payload) < $this->maxPlainStringBytes)
+			return base64_encode($payload);
 
-                return 'PHP:' . base64_encode(serialize($payload));
-        }
+		return 'PHP:' . base64_encode(serialize($payload));
+	}
 
 	protected function decodePayload($rawPayload)
 	{

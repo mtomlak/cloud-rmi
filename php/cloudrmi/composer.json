@@ -1,9 +1,9 @@
 {
-    "name": "profiweb/cloudrmi",
+    "name": "profiweb/cloud-rmi-php",
     "type": "library",
     "description": "CloudRMI client/server bindings for ProfiWeb SaaS cloud.",
     "require": {
-        "php": ">=7.1",
+        "php": ">=8.1",
         "ext-cloudrmi": "*",
         "ext-pcntl": "*",
         "ext-posix": "*"

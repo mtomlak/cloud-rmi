@@ -32,7 +32,6 @@ class CloudRMIClient
 	protected $advertisedMaxProtocol = 1;
 	protected $supportsPayloadCapability = false;
 	protected $supportsAsyncCapability = false;
-
 	protected $payloadThreshold = null;
 	protected $defaultPayloadEncoding = 'RAW';
 	protected $protocolCtx = null;
@@ -54,7 +53,7 @@ class CloudRMIClient
 		$this->connStarted = time();
 		$socket = self::openSocket($this->host, $this->port, $this->readTimeout, $this->unixSocketPath);
 		
-		$this->setConnection(new CloudRMIConnection(
+		$this->setConnection($this->makeNewConnection(
 			$this->host,
 			$this->port,
 			$socket,
@@ -179,6 +178,11 @@ class CloudRMIClient
 	public function getConnection()
 	{
 		return $this->connection;
+	}
+
+	protected function makeNewConnection($host, $port, $socket, $unixSocketPath = null)
+	{
+		return new CloudRMIConnection($host, $port, $socket, $unixSocketPath);
 	}
 
 	protected function saveLastAuth($method, $data)
@@ -735,7 +739,7 @@ class CloudRMIClient
 		return rtrim($buffer, "\r\n");
 	}
 	
-	protected function connReadExact($bytes, $consumeTrailingNewline = false)
+	protected function connReadExact($bytes)	//, $consumeTrailingNewline = false)
 	{
 		$buff = '';
 		$time = time();
@@ -767,14 +771,14 @@ class CloudRMIClient
 
 			$buff .= $chunk;
 		}
-
+/*
 		if ($consumeTrailingNewline) {
 			$next = stream_get_contents($this->getConnection()->getSocket(), 1);
 
 			if ($next !== false && $next !== '' && $next !== "\n")
 				$buff .= $next;
 		}
-
+*/
 		return $buff;
 	}
 
@@ -817,7 +821,7 @@ class CloudRMIClient
 					return ['line' => $line, 'code' => false];
 
 				if ($length > 0) {
-					$payload = $this->connReadExact($length, false);
+					$payload = $this->connReadExact($length);
 
 					if (!is_string($payload) || strlen($payload) != $length)
 						return ['line' => $line, 'code' => false];
