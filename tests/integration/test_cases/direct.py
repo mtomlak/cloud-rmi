@@ -89,6 +89,61 @@ def connection_reuse(env: IntegrationEnvironment) -> TestResult:
     return TestResult(name="connection-reuse", passed=True, traces=[first.trace])
 
 
+def inline_payload_inline(env: IntegrationEnvironment) -> TestResult:
+    with env.server_session() as session:
+        inline_before = session.call("EchoInterface", "echo", arg="before", decode_output=True)
+        _require(inline_before.status == 200, f"expected 200 got {inline_before.status}")
+        _require(
+            inline_before.decoded == "TEST_ECHO_RESPONSE:before",
+            f"unexpected inline response: {inline_before.decoded}",
+        )
+        payload = session.call(
+            "PayloadInterface",
+            "uppercase",
+            payload=b"followup",
+            encoding="RAW",
+            decode_output=True,
+        )
+        _require(payload.status == 200, f"expected 200 got {payload.status}")
+        _require(payload.message.startswith("PAYLOAD "), "payload response missing PAYLOAD keyword")
+        _require(payload.decoded == "RAW:FOLLOWUP", f"unexpected payload decoding: {payload.decoded}")
+        inline_after = session.call("EchoInterface", "echo", arg="after", decode_output=True)
+    _require(inline_after.status == 200, f"expected 200 got {inline_after.status}")
+    _require(
+        inline_after.decoded == "TEST_ECHO_RESPONSE:after",
+        f"unexpected trailing inline response: {inline_after.decoded}",
+    )
+    return TestResult(name="inline-payload-inline", passed=True, traces=[inline_after.trace])
+
+
+def inline_payload_large_inline(env: IntegrationEnvironment) -> TestResult:
+    large = b"x" * 12000
+    with env.server_session() as session:
+        first = session.call("EchoInterface", "echo", arg="start-large", decode_output=True)
+        _require(first.status == 200, f"expected 200 got {first.status}")
+        big_payload = session.call(
+            "PayloadInterface",
+            "repeat",
+            payload=large,
+            encoding="RAW",
+            decode_output=False,
+        )
+        expected = b"RAW:" + large + b":" + large
+        _require(big_payload.status == 200, f"expected 200 got {big_payload.status}")
+        _require(big_payload.message.startswith("PAYLOAD "), "payload response missing PAYLOAD keyword")
+        _require(
+            big_payload.payload == expected,
+            f"unexpected payload body length {len(big_payload.payload)} expected {len(expected)}",
+        )
+        final = session.call("EchoInterface", "echo", arg="end-large", decode_output=True)
+    _require(final.status == 200, f"expected 200 got {final.status}")
+    _require(
+        final.decoded == "TEST_ECHO_RESPONSE:end-large",
+        f"unexpected final inline response: {final.decoded}",
+    )
+    return TestResult(name="inline-payload-large-inline", passed=True, traces=[final.trace])
+
+
 DIRECT_CASES: list[TestCase] = [
     TestCase(name="direct-echo", runner=direct_echo),
     TestCase(name="exec-failure", runner=exec_failure),
@@ -97,4 +152,6 @@ DIRECT_CASES: list[TestCase] = [
     TestCase(name="payload-uppercase", runner=payload_uppercase),
     TestCase(name="payload-reject", runner=payload_reject),
     TestCase(name="connection-reuse", runner=connection_reuse),
+    TestCase(name="inline-payload-inline", runner=inline_payload_inline),
+    TestCase(name="inline-payload-large-inline", runner=inline_payload_large_inline),
 ]

@@ -7,6 +7,7 @@ interface TestRmiInterface
 {
     public function method($arg);
     public function upload($payload);
+    public function expand($payload);
 }
 
 class TestRmiHandler implements TestRmiInterface
@@ -19,6 +20,12 @@ class TestRmiHandler implements TestRmiInterface
     public function upload($payload)
     {
         return 'OK';
+    }
+
+    public function expand($payload)
+    {
+        $body = (string) $payload;
+        return str_repeat($body, 3);
     }
 }
 

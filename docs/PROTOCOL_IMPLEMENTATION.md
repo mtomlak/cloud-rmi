@@ -32,6 +32,9 @@ Source: `libcloudrmi/src/protocol_feed.c`, `libcloudrmi/include/cloudrmi/types.h
   - Payload length must be decimal and ≤ `RMI_MAX_BUFFER`; otherwise the parser
     resets and reports `RMI_ERROR_BAD_REQUEST` (or `RMI_E_OVERFLOW` when above
     the ceiling).
+  - Readers MUST consume exactly the declared payload length. Responses do not
+    include a trailing delimiter byte, and any speculative read beyond
+    `<length>` risks consuming the first byte of the next header.
 - **Error propagation**: `RMI_ERROR_BAD_ARGS` is used for missing CALL/PAYLOAD
   tokens; `RMI_ERROR_BAD_REQUEST` covers malformed versions, payload lengths,
   or unexpected command ordering.

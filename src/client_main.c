@@ -145,14 +145,34 @@ int main(int argc, char *argv[])
          iface = strdup(argv[optind]);
 
       method = strdup(argv[optind + 1]);
-      args = strdup("");
+      size_t args_len = 0;
+      int trailing_args = argc - (optind + 2);
 
       for (i = optind + 2; i < argc; i++) {
-         if (strlen(args))
-            strcat(args, " ");
-
-         strcat(args, argv[i]);
+         args_len += strlen(argv[i]);
       }
+
+      if (trailing_args > 1)
+         args_len += (size_t)(trailing_args - 1); // spaces between args
+
+      args = malloc(args_len + 1);
+
+      if (args == NULL)
+         die_err("Error: Failed to allocate argument buffer");
+
+      size_t pos = 0;
+
+      for (i = optind + 2; i < argc; i++) {
+         size_t len = strlen(argv[i]);
+
+         memcpy(args + pos, argv[i], len);
+         pos += len;
+
+         if (i + 1 < argc)
+            args[pos++] = ' ';
+      }
+
+      args[pos] = '\0';
 
    } else if (raw_cmd == NULL) {
       show_help(argv[0]);

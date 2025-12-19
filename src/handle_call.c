@@ -359,7 +359,6 @@ int handle_shell_call(
             (void)written;
          }
 
-         stream_write(state->sock, "\n");
          success = 1;
          goto cleanup;
       }
@@ -408,6 +407,7 @@ int handle_call_cmd(
    struct conn_state *state)
 {
    struct server_iface_entry *iface_entry;
+   const char *iface_name = iface;
 
    // Authentication check
    if (!state->is_authenticated) {
@@ -415,7 +415,10 @@ int handle_call_cmd(
       return 0;
    }
 
-   iface_entry = server_get_iface_entry(iface);
+   if (iface_name != NULL && iface_name[0] == '\\')
+      iface_name++;
+
+   iface_entry = server_get_iface_entry((char *)iface_name);
 
    // Check whether it's local script
    if (iface_entry != NULL) {
@@ -429,7 +432,7 @@ int handle_call_cmd(
          state);
 
    } else {
-      stream_writeln(state->sock, "400 Unsupported interface: %s", iface);
+      stream_writeln(state->sock, "400 Unsupported interface: %s", iface_name);
    }
 
    return 0;

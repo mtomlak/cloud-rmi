@@ -429,14 +429,40 @@ int stream_read(int sock, char* buf, int buf_size)
 
 int stream_readln(int sock, char* line, int max_size)
 {
-    int bytes, size = 0;
-    char chr_buf;
+    ssize_t bytes = 0;
+    size_t size = 0;
+    int found_newline = 0;
+    char buf[BUF_SZ];
 
-    memset(line, 0, max_size);
+    memset(line, 0, (size_t)max_size);
 
-    for (;;) {
+    while (!found_newline && size < (size_t)(max_size - 1)) {
+        size_t peek_len = (size_t)(max_size - 1 - size);
+
+        if (peek_len > sizeof(buf))
+            peek_len = sizeof(buf);
+
+        bytes = recv(sock, buf, peek_len, MSG_PEEK);
+
+        if (bytes < 0) {
+            if (errno == EINTR)
+                continue;
+
+            handle_error("stream_readln() -- ERROR reading from socket");
+            return -1;
+        }
+
+        if (bytes == 0)
+            break;
+
+        char *newline = memchr(buf, '\n', (size_t)bytes);
+        size_t to_consume = (size_t)bytes;
+
+        if (newline != NULL)
+            to_consume = (size_t)(newline - buf) + 1;
+
         do {
-            bytes = read(sock, &chr_buf, 1);
+            bytes = read(sock, buf, to_consume);
         } while (bytes < 0 && errno == EINTR);
 
         if (bytes < 0) {
@@ -447,20 +473,23 @@ int stream_readln(int sock, char* line, int max_size)
         if (bytes == 0)
             break;
 
-        if (chr_buf == '\n' || chr_buf == '\r') {
-            if (size) break;
-            continue;
-        }
+        for (ssize_t i = 0; i < bytes && size < (size_t)(max_size - 1); i++) {
+            if (buf[i] == '\r')
+                continue;
 
-        if (size < max_size - 1) {
-            line[size++] = chr_buf;
+            if (buf[i] == '\n') {
+                found_newline = 1;
+                break;
+            }
+
+            line[size++] = buf[i];
         }
     }
 
     if (var_debug)
         printf("IN: |%s|\n", line);
 
-    return size;
+    return (int)size;
 }
 
 int stream_readlns(int sock, char* line, int max_size)

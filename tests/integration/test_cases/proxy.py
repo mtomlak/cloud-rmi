@@ -71,10 +71,34 @@ def proxy_multi_call(env: IntegrationEnvironment) -> TestResult:
     return TestResult(name="proxy-multi-call", passed=True, traces=[first.trace])
 
 
+def proxy_inline_payload_inline(env: IntegrationEnvironment) -> TestResult:
+    with env.proxy_session() as session:
+        first = session.call("EchoInterface", "echo", arg="proxy-before", decode_output=True)
+        _require(first.status == 200, f"expected 200 got {first.status}")
+        mid = session.call(
+            "PayloadInterface",
+            "uppercase",
+            payload=b"proxypayload",
+            encoding="RAW",
+            decode_output=True,
+        )
+        _require(mid.status == 200, f"expected 200 got {mid.status}")
+        _require(mid.message.startswith("PAYLOAD "), "payload response missing PAYLOAD keyword")
+        _require(mid.decoded == "RAW:PROXYPAYLOAD", f"unexpected decoded payload: {mid.decoded}")
+        last = session.call("EchoInterface", "echo", arg="proxy-after", decode_output=True)
+    _require(last.status == 200, f"expected 200 got {last.status}")
+    _require(
+        last.decoded == "TEST_ECHO_RESPONSE:proxy-after",
+        f"unexpected trailing inline response: {last.decoded}",
+    )
+    return TestResult(name="proxy-inline-payload-inline", passed=True, traces=[last.trace])
+
+
 PROXY_CASES: list[TestCase] = [
     TestCase(name="proxy-echo", runner=proxy_echo, requires_proxy=True),
     TestCase(name="proxy-payload-raw", runner=proxy_payload_raw, requires_proxy=True),
     TestCase(name="proxy-exec-failure", runner=proxy_exec_failure, requires_proxy=True),
     TestCase(name="proxy-payload-reject", runner=proxy_payload_reject, requires_proxy=True),
     TestCase(name="proxy-multi-call", runner=proxy_multi_call, requires_proxy=True),
+    TestCase(name="proxy-inline-payload-inline", runner=proxy_inline_payload_inline, requires_proxy=True),
 ]
