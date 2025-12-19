@@ -477,7 +477,6 @@ int client_call_remote_method_payload(
    int has_payload_response = 0;
    char response_encoding[BUF_SZ + 1];
    char response_keyword[BUF_SZ + 1];
-   char trailing = '\0';
 
    bzero(response, BUF_SZ);
    bzero(response_encoding, BUF_SZ);
@@ -518,7 +517,6 @@ int client_call_remote_method_payload(
          snprintf(response_payload, BUF_SZ, "Payload response exceeds client limit");
          status_code = 505;
          discard_bytes(conn->sock, response_len);
-         read(conn->sock, &trailing, 1);
          goto done;
       }
 
@@ -536,8 +534,6 @@ int client_call_remote_method_payload(
          status_code = 505;
          goto done;
       }
-
-      read(conn->sock, &trailing, 1);
 
       size_t encoded_len;
       if (!base64_encoded_length_no_nul(response_len, &encoded_len)) {
