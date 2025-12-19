@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/../../src/client.php';
+require_once __DIR__ . '/../bootstrap.php';
 
 function assert_true($condition, string $message): void
 {
@@ -90,5 +90,7 @@ assert_equals(RMI_OK, $more['status'], 'second feed ok');
 $eventRes = cloudrmi_protocol_next_event($ctx);
 assert_equals(RMI_OK, $eventRes['status'], 'payload complete after more data');
 assert_equals('abcde', $eventRes['event']['payload'], 'payload assembled');
+
+cloudrmi_protocol_destroy($ctx);
 
 fwrite(STDOUT, "All unit protocol tests passed\n");
