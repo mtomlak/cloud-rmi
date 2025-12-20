@@ -22,6 +22,8 @@ struct rmi_protocol_ctx {
     char pending_encoding[RMI_BUF_SZ + 1];
     uint8_t *payload_buf;
     size_t payload_cap;
+    size_t max_payload;
+    size_t payload_prealloc;
 };
 
 static int ensure_capacity(rmi_protocol_ctx_t *ctx, size_t needed)
@@ -97,6 +99,23 @@ rmi_protocol_ctx_t *rmi_protocol_create(void)
     ctx->protocol_version = 1;
     ctx->payload_buf = NULL;
     ctx->payload_cap = 0;
+    ctx->max_payload = RMI_DEFAULT_MAX_PAYLOAD;
+    ctx->payload_prealloc = RMI_PAYLOAD_PREALLOC_ENABLED ? RMI_PAYLOAD_PREALLOC : 0;
+
+    if (ctx->payload_prealloc > 0) {
+        size_t initial = ctx->payload_prealloc;
+        if (initial > ctx->max_payload)
+            initial = ctx->max_payload;
+
+        ctx->payload_buf = malloc(initial);
+        if (ctx->payload_buf == NULL) {
+            free(ctx->buffer);
+            free(ctx);
+            return NULL;
+        }
+        ctx->payload_cap = initial;
+    }
+
     reset_pending_call(ctx);
     return ctx;
 }
@@ -135,14 +154,32 @@ int rmi_protocol_set_version(rmi_protocol_ctx_t *ctx, int version)
     return 1;
 }
 
+int rmi_protocol_set_max_payload(rmi_protocol_ctx_t *ctx, size_t max_payload)
+{
+    if (ctx == NULL || max_payload == 0)
+        return 0;
+
+    ctx->max_payload = max_payload;
+
+    if (ctx->payload_prealloc > 0 && ctx->payload_cap < ctx->payload_prealloc) {
+        size_t target = ctx->payload_prealloc;
+        if (target > ctx->max_payload)
+            target = ctx->max_payload;
+        if (ensure_payload_capacity(ctx, target))
+            ctx->payload_cap = target;
+    }
+
+    return 1;
+}
+
 /*
  * Overflow policy:
  *
- * - RMI_MAX_BUFFER: hard ceiling for accumulated buffered bytes. If exceeded
- *   at any point, the context is reset and RMI_E_OVERFLOW is returned.
  * - RMI_MAX_LINE: maximum allowed size for a single protocol line before a
  *   newline is seen. If no newline is present and buffered data grows past
  *   this limit, the context is reset and RMI_E_OVERFLOW is returned.
+ * - max_payload (per context): safety ceiling for framed payload lengths. This
+ *   is configurable and defaults to RMI_DEFAULT_MAX_PAYLOAD.
  */
 rmi_status_t rmi_protocol_feed(
     rmi_protocol_ctx_t *ctx,
@@ -169,15 +206,6 @@ rmi_status_t rmi_protocol_feed(
     size_t needed;
 
     if (__builtin_add_overflow(ctx->len, len, &needed)) {
-        if (err != NULL) {
-            err->code = RMI_ERROR_BAD_REQUEST;
-            err->message = "Buffer overflow";
-        }
-        rmi_protocol_reset(ctx);
-        return RMI_E_OVERFLOW;
-    }
-
-    if (needed > RMI_MAX_BUFFER) {
         if (err != NULL) {
             err->code = RMI_ERROR_BAD_REQUEST;
             err->message = "Buffer overflow";
@@ -394,13 +422,13 @@ rmi_status_t rmi_protocol_next_event(
 
                 char *endptr = NULL;
                 unsigned long long payload_len = strtoull(parsed_event.arg5, &endptr, 10);
-                if (endptr == parsed_event.arg5 || *endptr != '\0' || payload_len > RMI_MAX_BUFFER) {
+                if (endptr == parsed_event.arg5 || *endptr != '\0' || payload_len > ctx->max_payload) {
                     if (err != NULL) {
                         err->code = RMI_ERROR_BAD_REQUEST;
                         err->message = "Invalid payload length";
                     }
                     rmi_protocol_reset(ctx);
-                    return payload_len > RMI_MAX_BUFFER ? RMI_E_OVERFLOW : RMI_E_ERR;
+                    return payload_len > ctx->max_payload ? RMI_E_OVERFLOW : RMI_E_ERR;
                 }
 
                 if (payload_len > SIZE_MAX) {

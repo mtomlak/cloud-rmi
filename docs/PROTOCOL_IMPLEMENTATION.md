@@ -12,15 +12,20 @@ Source: `libcloudrmi/src/protocol_feed.c`, `libcloudrmi/include/cloudrmi/types.h
 
 - **Line length**: `MAX_LINE = RMI_BUF_SZ = 8192` bytes. Lines without a `\n`
   after 8192 bytes trigger `RMI_E_OVERFLOW` and reset the parser.
-- **Total buffer ceiling**: `RMI_MAX_BUFFER = RMI_BUF_SZ * 8` (65536 bytes).
-  Exceeding this resets the parser and reports `RMI_E_OVERFLOW` with
-  `RMI_ERROR_BAD_REQUEST`.
+- **Payload ceiling**: `max_payload` is configurable per protocol context
+  (default `RMI_DEFAULT_MAX_PAYLOAD = 10 MB`). Payload CALL headers with length
+  above this ceiling are rejected and reported as overflow.
 - **Inline payload soft limit**: `RMI_INLINE_PAYLOAD_THRESHOLD = RMI_MAX_LINE -
   floor(RMI_MAX_LINE * 0.35) - 500` (4,825 bytes with the current limits).
   Clients prefer payload framing when raw arguments exceed this threshold; for
   smaller payloads they still verify the fully framed, base64-encoded CALL line
   does not reach `RMI_MAX_LINE`, falling back to payload framing when the
   encoded line is too large.
+- **Payload buffer strategy**: Each protocol context maintains a reusable
+  payload buffer. By default it preallocates 128 KB
+  (`RMI_PAYLOAD_PREALLOC_ENABLED` / `RMI_PAYLOAD_PREALLOC`) and grows via
+  `realloc()` when payloads are larger, freeing lazily on context destroy.
+  Compile-time flags can disable preallocation for RAM-conservative builds.
 - **States**: `IDLE → READING_PAYLOAD → EXECUTE_CALL → SEND_RESPONSE`. Each
   request begins with a single control line; payload framing metadata lives on
   the CALL line in protocol v2.
@@ -30,7 +35,7 @@ Source: `libcloudrmi/src/protocol_feed.c`, `libcloudrmi/include/cloudrmi/types.h
   - Zero-length payloads are legal. The parser emits a CALL event immediately
     with an empty payload buffer.
   - Payload CALL headers take the form `CALL <iface> <method> PAYLOAD <encoding>
-    <length>` (v2 only). Length must be decimal and ≤ `RMI_MAX_BUFFER`;
+    <length>` (v2 only). Length must be decimal and ≤ `max_payload`;
     otherwise the parser resets and reports `RMI_ERROR_BAD_REQUEST` (or
     `RMI_E_OVERFLOW` when above the ceiling).
   - Readers MUST consume exactly the declared payload length. Responses do not

@@ -9,11 +9,12 @@ The PHP reference client/server pair (`ProfiWeb\CloudRMI\CloudRMIClient`, `Profi
 - `CAPS` is supported to fetch a normalized capability list when the banner omits it.
 - Payload framing is gated by two conditions: the negotiated protocol version must be `2` **and** the `PAYLOAD` capability must be advertised. The client will fall back to inline calls when either gate is missing.
 - Trusted unix socket listeners can skip authentication by calling `setUnixSocketSkipAuth(true)`, mirroring the `unix_socket_skip_auth` behavior in the C server.
+- The PHP client keeps a **defensive 256 KB cap** for inline protocol v1 responses; larger replies require payload framing (protocol v2).
 
 ## Payload handling
 
 - Inline calls remain compatible with the legacy v1 framing and small payload policy.
-- Payload calls use the unified v2 framing (`CALL iface method PAYLOAD <encoding> <length>` + raw bytes) and respect the `RMI_MAX_BUFFER` ceiling when defined.
+- Payload calls use the unified v2 framing (`CALL iface method PAYLOAD <encoding> <length>` + raw bytes) and respect the configurable `RMI_MAX_PAYLOAD` ceiling (default 10 MB) on both client and server.
 - Responses for payload calls reuse the requested encoding when possible and fall back to `PLAIN`/`RAW` for string data or `PHP` for structured results.
 - The deprecated `BLOB` encoding is removed; binary transfers now rely on the v2 payload channel.
 

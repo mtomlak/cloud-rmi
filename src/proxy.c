@@ -64,6 +64,30 @@ static int proxy_write_all(int fd, const uint8_t *buf, size_t len)
    return 1;
 }
 
+static int proxy_discard_bytes(int fd, size_t len)
+{
+   size_t consumed = 0;
+   uint8_t buf[BUF_SZ];
+
+   while (consumed < len) {
+      size_t chunk = len - consumed;
+      if (chunk > sizeof(buf))
+         chunk = sizeof(buf);
+
+      ssize_t n = read(fd, buf, chunk);
+      if (n < 0) {
+         if (errno == EINTR)
+            continue;
+         return 0;
+      }
+      if (n == 0)
+         break;
+      consumed += (size_t)n;
+   }
+
+   return 1;
+}
+
 static int parse_proxy_address(
    const char *address,
    char *hostname,
@@ -507,6 +531,13 @@ int proxy_pass_call_cmd_ex(
       return 0;
    }
 
+   if (payload != NULL && payload_len > var_max_payload) {
+      stream_writeln(client_conn->sock, "505 Payload exceeds proxy limit");
+      free(response);
+      free(message);
+      return 0;
+   }
+
    iface_entry = proxy_get_iface_entry((char *)iface);
 
    if (iface_entry == NULL) {
@@ -579,35 +610,41 @@ int proxy_pass_call_cmd_ex(
       if (sscanf(message, "%s %s %llu", response_keyword, response_enc, &response_len) == 3 &&
           strcmp(response_keyword, "PAYLOAD") == 0 &&
           response_len <= SIZE_MAX) {
-         is_payload_response = 1;
-         payload_response = malloc((size_t)response_len + 1);
+         if ((size_t)response_len > var_max_payload) {
+            snprintf(message, BUF_SZ, "Payload response exceeds proxy limit");
+            status_code = 505;
+            proxy_discard_bytes(conn->client.sock, (size_t)response_len);
+         } else {
+            is_payload_response = 1;
+            payload_response = malloc((size_t)response_len + 1);
 
-         if (payload_response == NULL) {
-            ret = 0;
-            goto cleanup;
-         }
-
-         size_t received = 0;
-         while (received < (size_t)response_len) {
-            ssize_t n = read(conn->client.sock, payload_response + received, (size_t)response_len - received);
-
-            if (n < 0) {
+            if (payload_response == NULL) {
                ret = 0;
                goto cleanup;
             }
 
-            if (n == 0)
-               break;
+            size_t received = 0;
+            while (received < (size_t)response_len) {
+               ssize_t n = read(conn->client.sock, payload_response + received, (size_t)response_len - received);
 
-            received += (size_t)n;
+               if (n < 0) {
+                  ret = 0;
+                  goto cleanup;
+               }
+
+               if (n == 0)
+                  break;
+
+               received += (size_t)n;
+            }
+
+            if (received < (size_t)response_len) {
+               ret = 0;
+               goto cleanup;
+            }
+
+            payload_response[(size_t)response_len] = '\0';
          }
-
-         if (received < (size_t)response_len) {
-            ret = 0;
-            goto cleanup;
-         }
-
-         payload_response[(size_t)response_len] = '\0';
       }
    }
 

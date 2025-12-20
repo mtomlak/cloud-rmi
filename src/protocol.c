@@ -316,6 +316,7 @@ void handle_connection (int sock, int is_unix_socket)
    rmi_protocol_ctx_t *protocol_ctx = rmi_protocol_create();
    if (protocol_ctx == NULL)
       return;
+   rmi_protocol_set_max_payload(protocol_ctx, var_max_payload);
 
    memset(&state, 0, sizeof(state));
    state.sock = sock;
@@ -356,6 +357,7 @@ void handle_connection (int sock, int is_unix_socket)
 
       if (status == RMI_E_OVERFLOW || status == RMI_E_ERR) {
          stream_writeln(state.sock, "400 Bad Request");
+         loop = 0;
          continue;
       }
 

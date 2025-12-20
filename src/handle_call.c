@@ -352,6 +352,11 @@ int handle_shell_call(
       if (payload != NULL && state->protocol_version >= 2) {
          const char *response_enc = (encoding != NULL && encoding[0] != '\0') ? encoding : "PLAIN";
 
+         if ((size_t)output_len > var_max_payload) {
+            stream_writeln(state->sock, "500 Error: payload exceeds max payload (%zu > %zu)", (size_t)output_len, var_max_payload);
+            goto cleanup;
+         }
+
          stream_writeln(state->sock, "200 PAYLOAD %s %zu", response_enc, output_len);
 
          if (output_len > 0) {

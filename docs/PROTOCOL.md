@@ -120,10 +120,13 @@ Rules:
 400 Bad Request
 ```
 
-### 5.2 Buffer Ceilings
+### 5.2 Payload ceilings (v2 framing)
 
-- Total buffered data MUST NOT exceed `RMI_MAX_BUFFER = RMI_BUF_SZ * 8` (65536 bytes)
-- Overflow resets protocol state and produces `400 Bad Request`
+- **MAX_LINE** applies only to command lines and headers.
+- **MAX_PAYLOAD** is a configurable safety limit (default 10 MB, per endpoint).
+- Servers and clients **MUST** reject framed payloads exceeding their configured
+  `MAX_PAYLOAD` and either drain the bytes or close cleanly to avoid
+  desynchronization.
 
 ### 5.3 Payload Policy Thresholds (Non-normative)
 
@@ -140,6 +143,12 @@ Default policy:
 
 This is a **policy decision**, not a protocol rule. See the implementation
 companion for exact buffering and overflow behaviors enforced by the parser.
+
+#### Legacy v1 compatibility (PHP client)
+
+- Protocol v1 has no strict `MAX_LINE` guarantee on responses; the PHP client
+  accepts inline responses up to a **defensive 256 KB cap**. Larger responses
+  MUST use payload framing via protocol v2.
 
 ---
 

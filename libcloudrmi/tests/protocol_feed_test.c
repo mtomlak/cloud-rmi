@@ -8,8 +8,8 @@
 #define RMI_MAX_LINE RMI_BUF_SZ
 #endif
 
-#ifndef RMI_MAX_BUFFER
-#define RMI_MAX_BUFFER (RMI_BUF_SZ * 8)
+#ifndef RMI_MAX_PAYLOAD
+#define RMI_MAX_PAYLOAD (10 * 1024 * 1024)
 #endif
 
 static int expect_event(
@@ -336,42 +336,43 @@ int main(void)
     if (!expect_event(ctx, RMI_EVENT_UNKNOWN, NULL, NULL, NULL, RMI_ERROR_BAD_REQUEST, NULL, NULL, 0))
         return 1;
 
-    /* Boundary: allow payload exactly RMI_MAX_BUFFER bytes */
+    /* Boundary: allow payload exactly RMI_MAX_PAYLOAD bytes */
     rmi_protocol_reset(ctx);
+    rmi_protocol_set_max_payload(ctx, RMI_MAX_PAYLOAD);
     const char *proto_payload_header = "PROTO 2\n";
     if (rmi_protocol_feed(ctx, (const uint8_t *)proto_payload_header, strlen(proto_payload_header), &err) != RMI_OK)
         return 1;
     if (!expect_event(ctx, RMI_EVENT_PROTO, "proto", "2", "", RMI_ERROR_NONE, NULL, NULL, 0))
         return 1;
     char header[128];
-    snprintf(header, sizeof(header), "CALL demo method PAYLOAD RAW %zu\n", (size_t)RMI_MAX_BUFFER);
+    snprintf(header, sizeof(header), "CALL demo method PAYLOAD RAW %zu\n", (size_t)RMI_MAX_PAYLOAD);
     if (rmi_protocol_feed(ctx, (const uint8_t *)header, strlen(header), &err) != RMI_OK)
         return 1;
     status = rmi_protocol_next_event(ctx, &event, &err);
     if (status != RMI_E_AGAIN)
         return 1;
-    uint8_t *large_payload = malloc(RMI_MAX_BUFFER);
+    uint8_t *large_payload = malloc(RMI_MAX_PAYLOAD);
     if (large_payload == NULL)
         return 1;
-    memset(large_payload, 'x', RMI_MAX_BUFFER);
-    if (rmi_protocol_feed(ctx, large_payload, RMI_MAX_BUFFER, &err) != RMI_OK) {
+    memset(large_payload, 'x', RMI_MAX_PAYLOAD);
+    if (rmi_protocol_feed(ctx, large_payload, RMI_MAX_PAYLOAD, &err) != RMI_OK) {
         free(large_payload);
         return 1;
     }
-    if (!expect_event(ctx, RMI_EVENT_CALL, "call", "demo", "method", RMI_ERROR_NONE, "RAW", large_payload, RMI_MAX_BUFFER)) {
+    if (!expect_event(ctx, RMI_EVENT_CALL, "call", "demo", "method", RMI_ERROR_NONE, "RAW", large_payload, RMI_MAX_PAYLOAD)) {
         free(large_payload);
         return 1;
     }
     free(large_payload);
 
-    /* Boundary: reject growth beyond RMI_MAX_BUFFER */
+    /* Boundary: reject growth beyond RMI_MAX_PAYLOAD */
     rmi_protocol_reset(ctx);
     const char *proto_again = "PROTO 2\n";
     if (rmi_protocol_feed(ctx, (const uint8_t *)proto_again, strlen(proto_again), &err) != RMI_OK)
         return 1;
     if (!expect_event(ctx, RMI_EVENT_PROTO, "proto", "2", "", RMI_ERROR_NONE, NULL, NULL, 0))
         return 1;
-    size_t over_limit = (size_t)RMI_MAX_BUFFER + 1;
+    size_t over_limit = (size_t)RMI_MAX_PAYLOAD + 1;
     uint8_t *too_large = malloc(over_limit);
     if (too_large == NULL)
         return 1;
