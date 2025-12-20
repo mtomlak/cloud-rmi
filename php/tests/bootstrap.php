@@ -8,9 +8,13 @@ if (!file_exists($autoload)) {
 
 require_once $autoload;
 
-if (!extension_loaded('cloudrmi')) {
-	fwrite(STDERR, "cloudrmi extension is required; build it via make -C php build-ext.\n");
-	exit(1);
+// Prefer the native extension but allow the polyfill.
+if (!extension_loaded('profiweb_cloudrmi') && !extension_loaded('cloudrmi')) {
+	$extension = getenv('PROFIWEB_CLOUDRMI_EXT');
+	if (!empty($extension) && file_exists($extension)) {
+		// Attempt to load the extension dynamically for the current process.
+		@dl($extension);
+	}
 }
 
 function cloudrmi_test_command(string $script, array $args = []): array
