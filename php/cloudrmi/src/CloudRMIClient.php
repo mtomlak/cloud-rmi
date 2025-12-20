@@ -15,6 +15,7 @@ use ProfiWeb\CloudRMI\Exception\RemoteMethodInvocationException;
 class CloudRMIClient
 {
 	protected const DEFAULT_MAX_LINE = 8192;
+	protected const PROTO_V1_MAX_LINE = 65536;
 	protected const INLINE_PAYLOAD_OVERHEAD_PERCENT = 35;
 	protected const INLINE_PAYLOAD_HEADROOM = 500;
 
@@ -332,6 +333,11 @@ class CloudRMIClient
 
 	protected function getMaxLineLength()
 	{
+		// In protocol V1 ther MIGHT be lines longer than MAAX_LINE (8k),
+		// but we enforce fefensive limit (64k)
+		if ($this->protocolVersion < 2)
+			return self::PROTOCOL_V1_MAX_LINE;
+
 		if (defined('RMI_MAX_LINE'))
 			return (int) RMI_MAX_LINE;
 
