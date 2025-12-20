@@ -15,7 +15,7 @@ use ProfiWeb\CloudRMI\Exception\RemoteMethodInvocationException;
 class CloudRMIClient
 {
 	protected const DEFAULT_MAX_LINE = 8192;
-	protected const PROTO_V1_MAX_LINE = 65536;
+	protected const PROTOCOL_V1_MAX_LINE = 65536;
 	protected const INLINE_PAYLOAD_OVERHEAD_PERCENT = 35;
 	protected const INLINE_PAYLOAD_HEADROOM = 500;
 
