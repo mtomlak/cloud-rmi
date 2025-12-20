@@ -51,6 +51,7 @@ class CloudRMIServer
 	protected $maxPlainStringBytes = 1024;
 	protected $protocolVersion = 1;
 	protected $maxProtocolVersion = 2;
+	protected $maxPayload = 10485760;
 
 	public function __construct()
 	{
@@ -242,10 +243,21 @@ class CloudRMIServer
 
 	protected function getMaxPayloadLength()
 	{
+		if (!is_null($this->maxPayload))
+			return (int) $this->maxPayload;
+
+		if (defined('RMI_MAX_PAYLOAD'))
+			return (int) RMI_MAX_PAYLOAD;
+
 		if (defined('RMI_MAX_BUFFER'))
 			return (int) RMI_MAX_BUFFER;
 
-		return 65536;
+		return 10 * 1024 * 1024;
+	}
+
+	public function setMaxPayloadLength($bytes)
+	{
+		$this->maxPayload = (int) $bytes;
 	}
 
 	protected function getMaxLineLength()
@@ -695,6 +707,7 @@ class CloudRMIServer
 				$len = (int) $lenStr;
 
 				if ($len < 0 || $len > $this->getMaxPayloadLength()) {
+					$this->discardBytes($socket, $len);
 					$result['error'] = 'bad_request';
 					return $result;
 				}
@@ -817,6 +830,11 @@ class CloudRMIServer
 		$response = $this->resolvePayloadResponse($data, $requestEncoding);
 		$len = strlen($response['bytes']);
 
+		if ($len > $this->getMaxPayloadLength()) {
+			$this->connWriteLn($socket, "500 Error: payload exceeds max payload");
+			return;
+		}
+
 		$this->connWriteLn($socket, $code . " PAYLOAD " . $response['encoding'] . " " . $len);
 
 		if ($len) {
@@ -906,6 +924,23 @@ class CloudRMIServer
 		}
 
 		return $buff;
+	}
+
+	protected function discardBytes(&$stream, $bytes)
+	{
+		$bytesLeft = (int) $bytes;
+
+		while ($bytesLeft > 0) {
+			$chunk = ($bytesLeft > 65536) ? 65536 : $bytesLeft;
+			$data = stream_get_contents($stream, $chunk);
+
+			if ($data === false || $data === '') {
+				$this->connCheckThrottle();
+				break;
+			}
+
+			$bytesLeft -= strlen($data);
+		}
 	}
 
 

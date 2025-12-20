@@ -15,7 +15,7 @@ use ProfiWeb\CloudRMI\Exception\RemoteMethodInvocationException;
 class CloudRMIClient
 {
 	protected const DEFAULT_MAX_LINE = 8192;
-	protected const PROTOCOL_V1_MAX_LINE = 65536;
+	protected const PROTOCOL_V1_MAX_LINE = 262144;
 	protected const INLINE_PAYLOAD_OVERHEAD_PERCENT = 35;
 	protected const INLINE_PAYLOAD_HEADROOM = 500;
 
@@ -37,6 +37,7 @@ class CloudRMIClient
 	protected $defaultPayloadEncoding = 'RAW';
 	protected $protocolCtx = null;
 	protected $protocolVersion = 1;
+	protected $maxPayload = null;
 
 	public function __construct($host = 'localhost', $port = 8000, $connTimeout = false, $readTimeout = 600, $throttleTimeout = false, $unixSocketPath = null)
 	{
@@ -289,6 +290,11 @@ class CloudRMIClient
 		$encoding = ($options['encoding']) ? $options['encoding'] : $this->defaultPayloadEncoding;
 		$payloadBytes = $this->normalizePayloadBytes($parameters, $encoding);
 		$payloadLength = strlen($payloadBytes);
+		$maxPayload = $this->getMaxPayloadLength();
+
+		if ($payloadLength > $maxPayload)
+			throw new RemoteMethodInvocationException('Payload exceeds configured max payload');
+
 		$preferPayload = $this->shouldUsePayloadChannel($parameters, $options, $payloadLength);
 
 		if (!empty($options['require_payload']))
@@ -334,7 +340,7 @@ class CloudRMIClient
 	protected function getMaxLineLength()
 	{
 		// In protocol V1 ther MIGHT be lines longer than MAAX_LINE (8k),
-		// but we enforce fefensive limit (64k)
+		// but we enforce fefensive limit (256k)
 		if ($this->protocolVersion < 2)
 			return self::PROTOCOL_V1_MAX_LINE;
 
@@ -342,6 +348,25 @@ class CloudRMIClient
 			return (int) RMI_MAX_LINE;
 
 		return self::DEFAULT_MAX_LINE;
+	}
+
+	protected function getMaxPayloadLength()
+	{
+		if (!is_null($this->maxPayload))
+			return (int) $this->maxPayload;
+
+		if (defined('RMI_MAX_PAYLOAD'))
+			return (int) RMI_MAX_PAYLOAD;
+
+		if (defined('RMI_MAX_BUFFER'))
+			return (int) RMI_MAX_BUFFER;
+
+		return 10 * 1024 * 1024;
+	}
+
+	public function setMaxPayloadLength($bytes)
+	{
+		$this->maxPayload = (int) $bytes;
 	}
 
 	protected function getMinProtocolVersion()
@@ -861,12 +886,19 @@ class CloudRMIClient
 				if ($length < 0)
 					return ['line' => $line, 'code' => false];
 
-				$maxPayload = defined('RMI_MAX_BUFFER')
-					? (int) RMI_MAX_BUFFER
-					: ($this->getMaxLineLength() * 8);
+				$maxPayload = $this->getMaxPayloadLength();
 
-				if ($length > $maxPayload)
-					return ['line' => $line, 'code' => false];
+				if ($length > $maxPayload) {
+					$this->connReadExact($length);	// drain to keep connection in sync
+					return [
+						'line' => '505 Payload exceeds client limit',
+						'code' => 505,
+						'payload' => null,
+						'payload_len' => null,
+						'encoding' => null,
+						'is_payload' => false,
+					];
+				}
 
 				if ($length > 0) {
 					$payload = $this->connReadExact($length);

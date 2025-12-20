@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 
 #define CONFIGURATION_FILE "/etc/cloud/rmi-server.conf"
 #define INTERFACE_MAP_FILE "/etc/cloud/rmi-server.interfaces.map"
@@ -32,6 +33,7 @@ extern char *var_script_base_namespace;
 extern char *var_unix_socket_path;
 extern int var_unix_socket_skip_auth;
 extern char *var_interface_map_file;
+extern size_t var_max_payload;
 #ifdef PROXY_SUPPORT
 extern char *var_proxy;
 #endif

@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <stdint.h>
 #include <ctype.h>
+#include "config.h"
 #include "cloud-rmi.h"
 #include "capabilities.h"
 #include "client.h"
@@ -488,6 +489,12 @@ int client_call_remote_method_payload(
       goto done;
    }
 
+    if (payload_len > var_max_payload) {
+      snprintf(response_payload, BUF_SZ, "Payload exceeds client limit");
+      status_code = 505;
+      goto done;
+    }
+
    if (stream_writeln(conn->sock, "CALL %s %s PAYLOAD %s %zu", iface, method, encoding_value, payload_len) < 0)
       goto done;
 
@@ -510,7 +517,7 @@ int client_call_remote_method_payload(
    }
 
    if (has_payload_response) {
-      if (response_len > RMI_MAX_BUFFER) {
+      if (response_len > var_max_payload) {
          snprintf(response_payload, BUF_SZ, "Payload response exceeds client limit");
          status_code = 505;
          discard_bytes(conn->sock, response_len);
