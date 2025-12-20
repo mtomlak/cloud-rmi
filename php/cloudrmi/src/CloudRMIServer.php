@@ -13,6 +13,7 @@ use ProfiWeb\CloudRMI\Support\ProcessFork;
 class CloudRMIServer
 {
 	protected const DEFAULT_MAX_LINE = 8192;
+	protected const PROTOCOL_V1_MAX_LINE = 262144;
 
 	protected $serverSocket;
 	// Configuration parameters
@@ -262,6 +263,11 @@ class CloudRMIServer
 
 	protected function getMaxLineLength()
 	{
+		// In protocol V1 ther MIGHT be lines longer than MAAX_LINE (8k),
+		// but we enforce fefensive limit (256k)
+		if ($this->protocolVersion < 2)
+			return self::PROTOCOL_V1_MAX_LINE;
+
 		if (defined('RMI_MAX_LINE'))
 			return (int) RMI_MAX_LINE;
 
