@@ -245,6 +245,8 @@ PHP_MINFO_FUNCTION(cloudrmi)
 {
     php_info_print_table_start();
     php_info_print_table_row(2, "profiweb_cloudrmi support", "enabled");
+    php_info_print_table_row(2, "libcloudrmi protocol", CLOUDRMI_PROTOCOL_VERSION_STRING);
+    php_info_print_table_row(2, "libcloudrmi version", CLOUDRMI_LIBRARY_VERSION);
     php_info_print_table_row(2, "Version", PHP_PROFIWEB_CLOUDRMI_VERSION);
     php_info_print_table_end();
 }

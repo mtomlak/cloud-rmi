@@ -7,8 +7,6 @@
 
 #include "protocol_line.h"
 
-#define RMI_MAX_PROTOCOL_VERSION 2
-
 struct rmi_protocol_ctx {
     uint8_t *buffer;
     size_t len;
