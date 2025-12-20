@@ -173,6 +173,44 @@ PHP_FUNCTION(cloudrmi_protocol_next_event)
     add_assoc_zval(return_value, "event", &event_arr);
 }
 
+PHP_FUNCTION(cloudrmi_protocol_set_version)
+{
+    zval *zctx;
+    zend_long version;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_RESOURCE(zctx)
+        Z_PARAM_LONG(version)
+    ZEND_PARSE_PARAMETERS_END();
+
+    cloudrmi_context_wrapper *wrapper = cloudrmi_fetch_ctx(zctx);
+    if (wrapper == NULL || wrapper->ctx == NULL) {
+        RETURN_FALSE;
+    }
+
+    int ok = rmi_protocol_set_version(wrapper->ctx, (int)version);
+    RETURN_BOOL(ok != 0);
+}
+
+PHP_FUNCTION(cloudrmi_protocol_set_max_payload)
+{
+    zval *zctx;
+    zend_long max_payload;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_RESOURCE(zctx)
+        Z_PARAM_LONG(max_payload)
+    ZEND_PARSE_PARAMETERS_END();
+
+    cloudrmi_context_wrapper *wrapper = cloudrmi_fetch_ctx(zctx);
+    if (wrapper == NULL || wrapper->ctx == NULL) {
+        RETURN_FALSE;
+    }
+
+    int ok = rmi_protocol_set_max_payload(wrapper->ctx, (size_t)max_payload);
+    RETURN_BOOL(ok != 0);
+}
+
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_protocol_create, 0, 0, IS_MIXED, 0)
 ZEND_END_ARG_INFO()
 
@@ -193,12 +231,24 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_protocol_next_event, 0,
     ZEND_ARG_INFO(0, ctx)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_protocol_set_version, 0, 2, _IS_BOOL, 0)
+    ZEND_ARG_INFO(0, ctx)
+    ZEND_ARG_TYPE_INFO(0, version, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_protocol_set_max_payload, 0, 2, _IS_BOOL, 0)
+    ZEND_ARG_INFO(0, ctx)
+    ZEND_ARG_TYPE_INFO(0, max_payload, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
 static const zend_function_entry cloudrmi_functions[] = {
     PHP_FE(cloudrmi_protocol_create, arginfo_cloudrmi_protocol_create)
     PHP_FE(cloudrmi_protocol_destroy, arginfo_cloudrmi_protocol_destroy)
     PHP_FE(cloudrmi_protocol_reset, arginfo_cloudrmi_protocol_reset)
     PHP_FE(cloudrmi_protocol_feed, arginfo_cloudrmi_protocol_feed)
     PHP_FE(cloudrmi_protocol_next_event, arginfo_cloudrmi_protocol_next_event)
+    PHP_FE(cloudrmi_protocol_set_version, arginfo_cloudrmi_protocol_set_version)
+    PHP_FE(cloudrmi_protocol_set_max_payload, arginfo_cloudrmi_protocol_set_max_payload)
     PHP_FE_END
 };
 
@@ -234,7 +284,9 @@ static const cloudrmi_constant_entry cloudrmi_constant_entries[] = {
     {"RMI_EVENT_PROXY", (zend_long)RMI_EVENT_PROXY},
     {"RMI_EVENT_CAPS", (zend_long)RMI_EVENT_CAPS},
     {"RMI_EVENT_SERVER", (zend_long)RMI_EVENT_SERVER},
+    {"RMI_EVENT_PROTO", (zend_long)RMI_EVENT_PROTO},
     {"RMI_EVENT_UNKNOWN", (zend_long)RMI_EVENT_UNKNOWN},
+    {"RMI_MAX_PROTOCOL_VERSION", (zend_long)RMI_MAX_PROTOCOL_VERSION},
 };
 
 static const size_t cloudrmi_constant_entries_count = sizeof(cloudrmi_constant_entries) / sizeof(cloudrmi_constant_entries[0]);

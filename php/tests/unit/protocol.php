@@ -19,6 +19,8 @@ function assert_equals($expected, $actual, string $message): void
 
 $ctx = cloudrmi_protocol_create();
 assert_true($ctx !== false, 'create context');
+assert_true(cloudrmi_protocol_set_max_payload($ctx, 1024 * 1024), 'set max payload');
+assert_true(cloudrmi_protocol_set_version($ctx, 2), 'set protocol version');
 
 // legacy CALL parses
 $feed = cloudrmi_protocol_feed($ctx, "CALL iface method args\n");

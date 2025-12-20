@@ -7,7 +7,7 @@ The PHP reference client/server pair (`ProfiWeb\CloudRMI\CloudRMIClient`, `Profi
 - TCP connections always start on protocol v1 and upgrade only after an explicit `PROTO 2` exchange. Unix socket transports require protocol v2, refuse downgrades, and are created via `setUnixSocketPath()` on the server and the `$unixSocketPath` constructor argument on the client.
 - The server banner follows the canonical format `220 <context> Server Ready EXT PROTO=<max>[,<capabilities>]`.
 - `CAPS` is supported to fetch a normalized capability list when the banner omits it.
-- Payload framing is gated by two conditions: the negotiated protocol version must be `2` **and** the `PAYLOAD` capability must be advertised. The client will fall back to inline calls when either gate is missing.
+- Payload framing is gated by protocol negotiation. The server always advertises `PAYLOAD` when its maximum protocol version is at least `2`, and payload framing is accepted only after a `PROTO 2` upgrade. The client falls back to inline calls when protocol v2 is unavailable.
 - Trusted unix socket listeners can skip authentication by calling `setUnixSocketSkipAuth(true)`, mirroring the `unix_socket_skip_auth` behavior in the C server.
 - The PHP client keeps a **defensive 256 KB cap** for inline protocol v1 responses; larger replies require payload framing (protocol v2).
 
@@ -27,7 +27,6 @@ The PHP reference client/server pair (`ProfiWeb\CloudRMI\CloudRMIClient`, `Profi
 
 ## Configuration knobs
 
-- `$enablePayloadCapability` controls whether the server advertises and accepts v2 payload calls.
 - `$enableAsyncCapability` controls the `ACALL` capability as described above.
 - `setMaxProtocolVersion()` clamps to the supported range (v1–v2) and drives banner negotiation.
 
