@@ -31,6 +31,7 @@ char *var_server_name = "127.0.0.1";   // = malloc(sizeof(char) * (BUF_SZ + 1));
 void show_help(char *this_cmd)
 {
    printf("ProfiWeb Cloud SimpleRMI Client (version %s)\n", APP_VERSION);
+   printf(" - libcloudrmi version %s (protocol %d)\n", LIBCLOUDRMI_VERSION, CLOUDRMI_PROTOCOL_VERSION);
    printf("\nUsage: \n");
    printf("\t%s < options > [ interface ] [ method ] < arguments >\n", basename(this_cmd));
    printf("\t%s < options > -r [ command ]\n", basename(this_cmd));
