@@ -10,6 +10,9 @@
     "autoload": {
         "psr-4": {
             "ProfiWeb\\CloudRMI\\": "src/"
-        }
+        },
+        "files": [
+            "src/ProtocolPolyfill.php"
+        ]
     }
 }
