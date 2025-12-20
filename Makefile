@@ -7,8 +7,9 @@ BIN_PROXY = rmi-proxy
 LIBCLOUDRMI = libcloudrmi/libcloudrmi.a
 LIBCLOUDRMI_INC = -Ilibcloudrmi/include
 LIBCLOUDRMI_LDFLAGS = -Llibcloudrmi -lcloudrmi
+APP_VERSION_HEADER = src/app_version.h
 
-all: $(LIBCLOUDRMI) src/*
+all: app_version $(LIBCLOUDRMI) src/*
 	#@echo -n "Updating source code ..."
 	#@make update
 	@echo -n "Building RMI server ..."
@@ -21,18 +22,40 @@ all: $(LIBCLOUDRMI) src/*
 $(LIBCLOUDRMI):
 	$(MAKE) -C libcloudrmi
 
+.PHONY: app_version
+app_version:
+	@if command -v git > /dev/null 2>&1 && git rev-parse --git-dir > /dev/null 2>&1; then \
+	  version=$$(git tag --list | sed 's/^v//' | grep -E '^[0-9]+(\\.[0-9]+)*$$' | sort -V | tail -n 1); \
+	else \
+	  version=""; \
+	fi; \
+	if [ -z "$$version" ]; then version="0.0.0.0"; fi; \
+	tmp="$(APP_VERSION_HEADER).tmp"; \
+	{ echo "#ifndef APP_VERSION_H"; \
+	  echo "#define APP_VERSION_H"; \
+	  echo ""; \
+	  echo "#define APP_NAME \"CloudRMI\""; \
+	  echo "#define APP_VERSION \"$$version\""; \
+	  echo ""; \
+	  echo "#endif /* APP_VERSION_H */"; } > "$$tmp"; \
+	if [ ! -f "$(APP_VERSION_HEADER)" ] || ! cmp -s "$$tmp" "$(APP_VERSION_HEADER)"; then \
+	  mv "$$tmp" "$(APP_VERSION_HEADER)"; \
+	else \
+	  rm "$$tmp"; \
+	fi
+
 update:
 	git pull
 
-server: $(LIBCLOUDRMI) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/capabilities.c src/cloud-rmi.h src/config.h
+server: app_version $(LIBCLOUDRMI) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/capabilities.c src/cloud-rmi.h src/config.h
 	@echo " * Building rmi-server binary ..."
 	$(CC) -g $(LIBCLOUDRMI_INC) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/capabilities.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_SERVER) -D ENABLE_LINUX_FEATURES
 
-client: $(LIBCLOUDRMI) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/capabilities.c src/cloud-rmi.h src/config.h src/client.h
+client: app_version $(LIBCLOUDRMI) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/capabilities.c src/cloud-rmi.h src/config.h src/client.h
 	@echo " * Building rmi-client binary ..."
 	$(CC) -g $(LIBCLOUDRMI_INC) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/capabilities.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_CLIENT) -D ENABLE_LINUX_FEATURES
 
-proxy: $(LIBCLOUDRMI) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/server.c src/client.c src/capabilities.c src/cloud-rmi.h src/config.h src/client.h
+proxy: app_version $(LIBCLOUDRMI) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/server.c src/client.c src/capabilities.c src/cloud-rmi.h src/config.h src/client.h
 	@echo " * Building rmi-client binary ..."
 	$(CC) -g $(LIBCLOUDRMI_INC) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/client.c src/protocol.c src/server.c src/proxy.c src/capabilities.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_PROXY) -D PROXY_SUPPORT -D ENABLE_LINUX_FEATURES
 
@@ -85,6 +108,7 @@ test: all
 
 clean:
 	$(MAKE) -C libcloudrmi clean
+	rm -f $(APP_VERSION_HEADER)
 	rm -f $(BIN_SERVER) $(BIN_CLIENT) $(BIN_PROXY)
 
-.PHONY: all update server client proxy server_install client_install proxy_install config_install install clean test
+.PHONY: all update server client proxy server_install client_install proxy_install config_install install clean test app_version

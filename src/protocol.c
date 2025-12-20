@@ -16,7 +16,7 @@
    #include "proxy.h"
 #endif
 
-#define SERVER_MAX_PROTOCOL_VERSION 2
+#define SERVER_MAX_PROTOCOL_VERSION CLOUDRMI_PROTOCOL_VERSION
 
 /**
  * Handles Cloud Simple RMI protocol and server side communication.
