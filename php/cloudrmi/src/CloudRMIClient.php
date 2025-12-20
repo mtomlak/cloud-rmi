@@ -172,7 +172,10 @@ class CloudRMIClient
 
 	public function setConnection(ConnectionInterface $connection)
 	{
-		return $this->connection = $connection;
+		$this->connection = $connection;
+		$this->restoreConnectionState($connection);
+
+		return $this->connection;
 	}
 
 	public function getConnection()
@@ -183,6 +186,44 @@ class CloudRMIClient
 	protected function makeNewConnection($host, $port, $socket, $unixSocketPath = null)
 	{
 		return new CloudRMIConnection($host, $port, $socket, $unixSocketPath);
+	}
+
+	protected function restoreConnectionState(ConnectionInterface $connection)
+	{
+		if (!($connection instanceof CloudRMIConnection))
+			return;
+
+		if (!is_null($connection->getProtocolVersion()))
+			$this->protocolVersion = (int) $connection->getProtocolVersion();
+
+		if (!is_null($connection->getAdvertisedMaxProtocol()))
+			$this->advertisedMaxProtocol = (int) $connection->getAdvertisedMaxProtocol();
+
+		$capabilities = $connection->getCapabilities();
+		if (!empty($capabilities))
+			$this->capabilities = $capabilities;
+
+		if (!is_null($connection->supportsPayloadCapability()))
+			$this->supportsPayloadCapability = (bool) $connection->supportsPayloadCapability();
+
+		if (!is_null($connection->supportsAsyncCapability()))
+			$this->supportsAsyncCapability = (bool) $connection->supportsAsyncCapability();
+
+		if (!empty($this->capabilities)
+			&& ($connection->supportsPayloadCapability() === null || $connection->supportsAsyncCapability() === null))
+			$this->updateCapabilityFlags();
+	}
+
+	protected function persistConnectionState()
+	{
+		if (!($this->connection instanceof CloudRMIConnection))
+			return;
+
+		$this->connection->setProtocolVersion($this->protocolVersion);
+		$this->connection->setAdvertisedMaxProtocol($this->advertisedMaxProtocol);
+		$this->connection->setCapabilities($this->capabilities);
+		$this->connection->setSupportsPayloadCapability($this->supportsPayloadCapability);
+		$this->connection->setSupportsAsyncCapability($this->supportsAsyncCapability);
 	}
 
 	protected function saveLastAuth($method, $data)
@@ -657,6 +698,7 @@ class CloudRMIClient
 	{
 		$this->supportsPayloadCapability = ($this->protocolVersion >= 2 && in_array('PAYLOAD', $this->capabilities));
 		$this->supportsAsyncCapability = in_array('ACALL', $this->capabilities);
+		$this->persistConnectionState();
 	}
 
 	protected function connWriteLn($line)
