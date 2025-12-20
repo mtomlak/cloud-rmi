@@ -97,7 +97,8 @@ class CloudRMIServer
 		$this->openServerSocket();
 		$this->startedAt = time();
 		$this->serverPid = posix_getpid();
-		$this->log($this->contextName . " service ready on " . $this->describeEndpoint());
+		$this->log($this->contextName . " service ready on " . $this->describeEndpoint() . 
+			. " [ composer cloudrmi | libcloudrmi " . RMI_LIBRARY_VERSION . "]");
 
 		if ($this->hasForkSupport())
 			$this->proc = new ProcessFork();

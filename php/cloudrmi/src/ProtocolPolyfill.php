@@ -7,6 +7,7 @@
  *
  * Protocol version: 2.0.0 (proto v2, lib v2.0.0)
  */
+if (!defined('RMI_LIBRARY_VERSION')) define('RMI_LIBRARY_VERSION', '2.0.0-polyfill');
 
 // Status codes
 if (!defined('RMI_OK')) define('RMI_OK', 0);
@@ -354,6 +355,8 @@ if (!class_exists('CloudRMIProtocolContext', false)) {
  * Userland replacements for the native extension functions.
  */
 if (!function_exists('cloudrmi_protocol_create')) {
+	if (!defined('RMI_USES_POLYFILL')) define('RMI_USES_POLYFILL', true);
+
 	function cloudrmi_protocol_create()
 	{
 		return new CloudRMIProtocolContext();

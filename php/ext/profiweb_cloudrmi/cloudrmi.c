@@ -287,6 +287,7 @@ static const cloudrmi_constant_entry cloudrmi_constant_entries[] = {
     {"RMI_EVENT_PROTO", (zend_long)RMI_EVENT_PROTO},
     {"RMI_EVENT_UNKNOWN", (zend_long)RMI_EVENT_UNKNOWN},
     {"RMI_MAX_PROTOCOL_VERSION", (zend_long)RMI_MAX_PROTOCOL_VERSION},
+    {"RMI_LIBRARY_VERSION", (zend_long)CLOUDRMI_LIBRARY_VERSION},
 };
 
 static const size_t cloudrmi_constant_entries_count = sizeof(cloudrmi_constant_entries) / sizeof(cloudrmi_constant_entries[0]);
