@@ -14,6 +14,12 @@ class CloudRMIConnection implements ConnectionInterface
 	protected $port;
 	protected $socket;
 	protected $unixSocketPath;
+	protected $protocolVersion = null;
+	protected $advertisedMaxProtocol = null;
+	protected $capabilities = [];
+	protected $supportsPayloadCapability = null;
+	protected $supportsAsyncCapability = null;
+	protected $connectedAt = null;
 	
 	public function __construct($host, $port, $socket, $unixSocketPath = null)
 	{
@@ -21,6 +27,7 @@ class CloudRMIConnection implements ConnectionInterface
 		$this->port = $port;
 		$this->socket = $socket;
 		$this->unixSocketPath = $unixSocketPath;
+		$this->connectedAt = time();
 	}
 	
 	public function getSocket()
@@ -36,6 +43,76 @@ class CloudRMIConnection implements ConnectionInterface
 	public function getPort()
 	{
 		return $this->port;
+	}
+
+	public function getProtocolVersion()
+	{
+		return $this->protocolVersion;
+	}
+
+	public function setProtocolVersion($protocolVersion)
+	{
+		$this->protocolVersion = is_null($protocolVersion)
+			? null
+			: (int) $protocolVersion;
+	}
+
+	public function getAdvertisedMaxProtocol()
+	{
+		return $this->advertisedMaxProtocol;
+	}
+
+	public function setAdvertisedMaxProtocol($advertisedMaxProtocol)
+	{
+		$this->advertisedMaxProtocol = is_null($advertisedMaxProtocol)
+			? null
+			: (int) $advertisedMaxProtocol;
+	}
+
+	public function getCapabilities()
+	{
+		return $this->capabilities;
+	}
+
+	public function setCapabilities(array $capabilities)
+	{
+		$this->capabilities = $capabilities;
+	}
+
+	public function supportsPayloadCapability()
+	{
+		return $this->supportsPayloadCapability;
+	}
+
+	public function setSupportsPayloadCapability($supportsPayloadCapability)
+	{
+		$this->supportsPayloadCapability = is_null($supportsPayloadCapability)
+			? null
+			: (bool) $supportsPayloadCapability;
+	}
+
+	public function supportsAsyncCapability()
+	{
+		return $this->supportsAsyncCapability;
+	}
+
+	public function setSupportsAsyncCapability($supportsAsyncCapability)
+	{
+		$this->supportsAsyncCapability = is_null($supportsAsyncCapability)
+			? null
+			: (bool) $supportsAsyncCapability;
+	}
+
+	public function getConnectedAt()
+	{
+		return $this->connectedAt;
+	}
+
+	public function setConnectedAt($connectedAt)
+	{
+		$this->connectedAt = is_null($connectedAt)
+			? null
+			: (int) $connectedAt;
 	}
 
 	public function isUnixSocket()
