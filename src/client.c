@@ -69,14 +69,6 @@ static void normalize_capability_tokens(const char *ext, char *buffer, size_t bu
    buffer[len] = '\0';
 }
 
-static int payload_supported(const struct rmi_client_conn *conn)
-{
-   if (conn == NULL)
-      return 0;
-
-   return conn->protocol_version >= 2 && conn->capabilities_known && (conn->capabilities & RMI_CAP_PAYLOAD);
-}
-
 static int base64_encoded_length_no_nul(size_t input_len, size_t *out_len)
 {
    size_t rounded = 0;
@@ -198,7 +190,6 @@ int client_connect(char *hostname, int port_num, const char *unix_socket_path, s
 
    conn->sock = -1;
    conn->capabilities = 0;
-   conn->capabilities_known = 0;
    conn->protocol_version = 1;
 
    bzero(response, BUF_SZ);
@@ -312,30 +303,9 @@ int client_connect(char *hostname, int port_num, const char *unix_socket_path, s
       if (caps_tokens != NULL) {
          normalize_capability_tokens(ext, caps_tokens, BUF_SZ + 1);
          conn->capabilities = rmi_parse_capabilities(caps_tokens);
-         conn->capabilities_known = 1;
       }
 
       free(caps_tokens);
-   }
-
-   if (!conn->capabilities_known) {
-      char *caps_response = malloc(sizeof(char) * (BUF_SZ + 1));
-      char *caps_message = malloc(sizeof(char) * (BUF_SZ + 1));
-
-      if (caps_response != NULL && caps_message != NULL) {
-         bzero(caps_response, BUF_SZ);
-         bzero(caps_message, BUF_SZ);
-
-         if (stream_writeln(sock, "CAPS") >= 0 && stream_readln(sock, caps_response, BUF_SZ) >= 0) {
-            if (client_parse_status_code(caps_response, &status_code, caps_message) && status_code == 200) {
-               conn->capabilities = rmi_parse_capabilities(caps_message);
-               conn->capabilities_known = 1;
-            }
-         }
-      }
-
-      free(caps_response);
-      free(caps_message);
    }
 
    if (server_max_proto >= 2) {
@@ -482,8 +452,8 @@ int client_call_remote_method_payload(
    bzero(response_encoding, BUF_SZ);
    bzero(response_keyword, BUF_SZ);
 
-   if (!payload_supported(conn)) {
-      snprintf(response_payload, BUF_SZ, "PAYLOAD requires PROTO 2 negotiation with PAYLOAD capability");
+   if (conn == NULL || conn->protocol_version < 2) {
+      snprintf(response_payload, BUF_SZ, "PAYLOAD requires PROTO 2 negotiation");
       status_code = 505;
       goto done;
    }
@@ -607,7 +577,7 @@ int client_call_remote_method(struct rmi_client_conn *conn, char *iface, char *m
    size_t encoded_len = 0;
    size_t inline_line_len = 0;
    int use_payload = 0;
-   int payload_available = payload_supported(conn);
+   int payload_available = (conn != NULL && conn->protocol_version >= 2);
 
    if (payload == NULL) {
       return 0;

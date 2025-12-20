@@ -47,9 +47,9 @@ Source: `libcloudrmi/src/protocol_feed.c`, `libcloudrmi/include/cloudrmi/types.h
 Sources: `src/protocol.c`, `src/capabilities.c`
 
 - Banner format: `220 <context> Server Ready EXT PROTO=2[,<caps>]`.
-- Built-in capability tokens: `PAYLOAD`, `PROXY`, `STATS`.
-- Compiled set: `PAYLOAD` and `STATS` are always emitted; `PROXY` is present
-  only when built with `PROXY_SUPPORT`.
+- Built-in capability tokens: `PROXY`, `STATS`.
+- Compiled set: `STATS` is always emitted; `PROXY` is present only when built
+  with `PROXY_SUPPORT`.
 - Tokens are comma-separated in the banner, then normalized to spaces by
   clients before parsing.
 
@@ -141,8 +141,8 @@ Source: `src/client.c`
 - When the server advertises `PROTO >= 2`, the client attempts `PROTO 2` and
   updates `conn->protocol_version` on `200 OK`.
 - **PAYLOAD gating**:
-  - Requires negotiated PROTO 2 *and* `PAYLOAD` capability. Otherwise the call
-    aborts locally with status `505` and an explanatory message.
+  - Requires negotiated PROTO 2. Otherwise the call aborts locally with status
+    `505` and an explanatory message.
 - **CALL PAYLOAD flow**: Sends `CALL iface method PAYLOAD <encoding> <len>`,
   writes the payload bytes, and parses the first response line.
 - **Multiline responses**: Any response ending with `:` triggers an additional

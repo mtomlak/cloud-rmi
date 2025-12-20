@@ -17,7 +17,6 @@ class CloudRMIConnection implements ConnectionInterface
 	protected $protocolVersion = null;
 	protected $advertisedMaxProtocol = null;
 	protected $capabilities = [];
-	protected $supportsPayloadCapability = null;
 	protected $supportsAsyncCapability = null;
 	protected $connectedAt = null;
 	
@@ -77,18 +76,6 @@ class CloudRMIConnection implements ConnectionInterface
 	public function setCapabilities(array $capabilities)
 	{
 		$this->capabilities = $capabilities;
-	}
-
-	public function supportsPayloadCapability()
-	{
-		return $this->supportsPayloadCapability;
-	}
-
-	public function setSupportsPayloadCapability($supportsPayloadCapability)
-	{
-		$this->supportsPayloadCapability = is_null($supportsPayloadCapability)
-			? null
-			: (bool) $supportsPayloadCapability;
 	}
 
 	public function supportsAsyncCapability()

@@ -44,7 +44,6 @@ class CloudRMIServer
 	protected $proc;
 	protected $serverPid;
 	protected $requireAuth = true;
-	protected $enablePayloadCapability = true;
 	protected $enableAsyncCapability = true;
 	protected $unixSocketSkipAuth = false;
 	// Protocol-related
@@ -226,9 +225,6 @@ class CloudRMIServer
 	{
 		$caps = [];
 
-		if ($this->canHandlePayloadRequests() && $this->getMaxProtocolVersion() >= 2)
-			$caps[] = 'PAYLOAD';
-
 		if ($this->isAsyncCapabilityAdvertised())
 			$caps[] = 'ACALL';
 
@@ -237,7 +233,7 @@ class CloudRMIServer
 
 	protected function canHandlePayloadRequests()
 	{
-		return ($this->enablePayloadCapability && $this->getMaxProtocolVersion() >= 2);
+		return ($this->getMaxProtocolVersion() >= 2);
 	}
 
 	protected function getMaxPayloadLength()

@@ -8,7 +8,6 @@
 struct rmi_client_conn {
    int sock;
    uint32_t capabilities;
-   int capabilities_known;
    int protocol_version;
 };
 

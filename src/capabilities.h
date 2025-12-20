@@ -4,9 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define RMI_CAP_PAYLOAD (1u << 0)
-#define RMI_CAP_PROXY   (1u << 1)
-#define RMI_CAP_STATS   (1u << 2)
+#define RMI_CAP_PROXY   (1u << 0)
+#define RMI_CAP_STATS   (1u << 1)
 
 uint32_t rmi_get_compiled_capabilities(void);
 uint32_t rmi_capability_from_token(const char *token);
