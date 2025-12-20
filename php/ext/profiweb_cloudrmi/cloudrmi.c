@@ -6,6 +6,7 @@
 #include "ext/standard/info.h"
 #include "php_profiweb_cloudrmi.h"
 
+#include <stdio.h>
 #include <cloudrmi/protocol.h>
 
 static int le_cloudrmi_ctx;
@@ -201,65 +202,85 @@ static const zend_function_entry cloudrmi_functions[] = {
     PHP_FE_END
 };
 
+typedef struct {
+    const char *name;
+    zend_long value;
+} cloudrmi_constant_entry;
+
+static const cloudrmi_constant_entry cloudrmi_constant_entries[] = {
+    {"RMI_OK", (zend_long)RMI_OK},
+    {"RMI_E_AGAIN", (zend_long)RMI_E_AGAIN},
+    {"RMI_E_OVERFLOW", (zend_long)RMI_E_OVERFLOW},
+    {"RMI_E_ERR", (zend_long)RMI_E_ERR},
+    {"RMI_ERROR_NONE", (zend_long)RMI_ERROR_NONE},
+    {"RMI_ERROR_BAD_REQUEST", (zend_long)RMI_ERROR_BAD_REQUEST},
+    {"RMI_ERROR_BAD_ARGS", (zend_long)RMI_ERROR_BAD_ARGS},
+    {"RMI_MAX_LINE", (zend_long)RMI_MAX_LINE},
+    {"RMI_MAX_PAYLOAD", (zend_long)RMI_MAX_PAYLOAD},
+    {"RMI_MAX_BUFFER", (zend_long)RMI_MAX_BUFFER},
+    {"RMI_INLINE_PAYLOAD_THRESHOLD", (zend_long)RMI_INLINE_PAYLOAD_THRESHOLD},
+    {"RMI_EVENT_NONE", (zend_long)RMI_EVENT_NONE},
+    {"RMI_EVENT_AUTH", (zend_long)RMI_EVENT_AUTH},
+    {"RMI_EVENT_CALL", (zend_long)RMI_EVENT_CALL},
+    {"RMI_EVENT_HELP", (zend_long)RMI_EVENT_HELP},
+    {"RMI_EVENT_IFACES", (zend_long)RMI_EVENT_IFACES},
+    {"RMI_EVENT_RELOAD", (zend_long)RMI_EVENT_RELOAD},
+    {"RMI_EVENT_SHUTDOWN", (zend_long)RMI_EVENT_SHUTDOWN},
+    {"RMI_EVENT_TIME", (zend_long)RMI_EVENT_TIME},
+    {"RMI_EVENT_UPTIME", (zend_long)RMI_EVENT_UPTIME},
+    {"RMI_EVENT_NOOP", (zend_long)RMI_EVENT_NOOP},
+    {"RMI_EVENT_DEBUG", (zend_long)RMI_EVENT_DEBUG},
+    {"RMI_EVENT_QUIT", (zend_long)RMI_EVENT_QUIT},
+    {"RMI_EVENT_PROXY", (zend_long)RMI_EVENT_PROXY},
+    {"RMI_EVENT_CAPS", (zend_long)RMI_EVENT_CAPS},
+    {"RMI_EVENT_SERVER", (zend_long)RMI_EVENT_SERVER},
+    {"RMI_EVENT_UNKNOWN", (zend_long)RMI_EVENT_UNKNOWN},
+};
+
+static const size_t cloudrmi_constant_entries_count = sizeof(cloudrmi_constant_entries) / sizeof(cloudrmi_constant_entries[0]);
+
 static void cloudrmi_register_constants(INIT_FUNC_ARGS)
 {
-    REGISTER_LONG_CONSTANT("RMI_OK", RMI_OK, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_E_AGAIN", RMI_E_AGAIN, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_E_OVERFLOW", RMI_E_OVERFLOW, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_E_ERR", RMI_E_ERR, CONST_CS | CONST_PERSISTENT);
-
-    REGISTER_LONG_CONSTANT("RMI_ERROR_NONE", RMI_ERROR_NONE, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_ERROR_BAD_REQUEST", RMI_ERROR_BAD_REQUEST, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_ERROR_BAD_ARGS", RMI_ERROR_BAD_ARGS, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_MAX_LINE", RMI_MAX_LINE, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_MAX_PAYLOAD", RMI_MAX_PAYLOAD, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_MAX_BUFFER", RMI_MAX_BUFFER, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_INLINE_PAYLOAD_THRESHOLD", RMI_INLINE_PAYLOAD_THRESHOLD, CONST_CS | CONST_PERSISTENT);
-
-    REGISTER_LONG_CONSTANT("RMI_EVENT_NONE", RMI_EVENT_NONE, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_AUTH", RMI_EVENT_AUTH, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_CALL", RMI_EVENT_CALL, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_HELP", RMI_EVENT_HELP, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_IFACES", RMI_EVENT_IFACES, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_RELOAD", RMI_EVENT_RELOAD, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_SHUTDOWN", RMI_EVENT_SHUTDOWN, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_TIME", RMI_EVENT_TIME, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_UPTIME", RMI_EVENT_UPTIME, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_NOOP", RMI_EVENT_NOOP, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_DEBUG", RMI_EVENT_DEBUG, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_QUIT", RMI_EVENT_QUIT, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_PROXY", RMI_EVENT_PROXY, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_CAPS", RMI_EVENT_CAPS, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_SERVER", RMI_EVENT_SERVER, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("RMI_EVENT_UNKNOWN", RMI_EVENT_UNKNOWN, CONST_CS | CONST_PERSISTENT);
+    for (size_t i = 0; i < cloudrmi_constant_entries_count; i++) {
+        const cloudrmi_constant_entry *entry = &cloudrmi_constant_entries[i];
+        REGISTER_LONG_CONSTANT(entry->name, entry->value, CONST_CS | CONST_PERSISTENT);
+    }
 }
 
-PHP_MINIT_FUNCTION(cloudrmi)
+PHP_MINIT_FUNCTION(profiweb_cloudrmi)
 {
-    le_cloudrmi_ctx = zend_register_list_destructors_ex(cloudrmi_ctx_dtor, NULL, "cloudrmi_protocol_ctx", module_number);
+    le_cloudrmi_ctx = zend_register_list_destructors_ex(cloudrmi_ctx_dtor, NULL, "profiweb_cloudrmi_protocol_ctx", module_number);
     cloudrmi_register_constants(INIT_FUNC_ARGS_PASSTHRU);
     return SUCCESS;
 }
 
-PHP_MINFO_FUNCTION(cloudrmi)
+PHP_MINFO_FUNCTION(profiweb_cloudrmi)
 {
     php_info_print_table_start();
     php_info_print_table_row(2, "profiweb_cloudrmi support", "enabled");
+    php_info_print_table_row(2, "profiweb_cloudrmi version", PHP_PROFIWEB_CLOUDRMI_VERSION);
     php_info_print_table_row(2, "libcloudrmi protocol", CLOUDRMI_PROTOCOL_VERSION_STRING);
     php_info_print_table_row(2, "libcloudrmi version", CLOUDRMI_LIBRARY_VERSION);
-    php_info_print_table_row(2, "Version", PHP_PROFIWEB_CLOUDRMI_VERSION);
+    php_info_print_table_colspan_header(2, "exported constants");
+    php_info_print_table_header(2, "Name", "Value");
+    for (size_t i = 0; i < cloudrmi_constant_entries_count; i++) {
+        const cloudrmi_constant_entry *entry = &cloudrmi_constant_entries[i];
+        char value_buf[32];
+        snprintf(value_buf, sizeof(value_buf), ZEND_LONG_FMT, entry->value);
+        php_info_print_table_row(2, entry->name, value_buf);
+    }
     php_info_print_table_end();
 }
 
-zend_module_entry cloudrmi_module_entry = {
+zend_module_entry profiweb_cloudrmi_module_entry = {
     STANDARD_MODULE_HEADER,
-    "cloudrmi",
+    "profiweb_cloudrmi",
     cloudrmi_functions,
-    PHP_MINIT(cloudrmi),
+    PHP_MINIT(profiweb_cloudrmi),
     NULL,
     NULL,
     NULL,
-    PHP_MINFO(cloudrmi),
+    PHP_MINFO(profiweb_cloudrmi),
     PHP_PROFIWEB_CLOUDRMI_VERSION,
     STANDARD_MODULE_PROPERTIES
 };
@@ -268,5 +289,5 @@ zend_module_entry cloudrmi_module_entry = {
 # ifdef ZTS
 ZEND_TSRMLS_CACHE_DEFINE()
 # endif
-ZEND_GET_MODULE(cloudrmi)
+ZEND_GET_MODULE(profiweb_cloudrmi)
 #endif
