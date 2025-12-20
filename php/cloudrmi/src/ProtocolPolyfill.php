@@ -409,3 +409,31 @@ if (!function_exists('cloudrmi_protocol_next_event')) {
 		return $ctx->nextEvent();
 	}
 }
+
+if (!function_exists('cloudrmi_protocol_set_version')) {
+	function cloudrmi_protocol_set_version($ctx, int $version): bool
+	{
+		if (!($ctx instanceof CloudRMIProtocolContext)) {
+			return false;
+		}
+
+		if ($version < 1 || $version > RMI_MAX_PROTOCOL_VERSION) {
+			return false;
+		}
+
+		$ctx->protocolVersion = $version;
+		return true;
+	}
+}
+
+if (!function_exists('cloudrmi_protocol_set_max_payload')) {
+	function cloudrmi_protocol_set_max_payload($ctx, int $maxPayload): bool
+	{
+		if (!($ctx instanceof CloudRMIProtocolContext) || $maxPayload <= 0) {
+			return false;
+		}
+
+		$ctx->maxPayload = $maxPayload;
+		return true;
+	}
+}
