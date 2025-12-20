@@ -313,8 +313,10 @@ PHP_MINFO_FUNCTION(profiweb_cloudrmi)
     php_info_print_table_row(2, "profiweb_cloudrmi version", PHP_PROFIWEB_CLOUDRMI_VERSION);
     php_info_print_table_row(2, "libcloudrmi protocol", CLOUDRMI_PROTOCOL_VERSION_STRING);
     php_info_print_table_row(2, "libcloudrmi version", CLOUDRMI_LIBRARY_VERSION);
-    php_info_print_table_colspan_header(2, "exported constants");
-    php_info_print_table_header(2, "Name", "Value");
+    php_info_print_table_end();
+
+    php_info_print_table_start();
+    php_info_print_table_header(2, "Constant", "Value");
     for (size_t i = 0; i < cloudrmi_constant_entries_count; i++) {
         const cloudrmi_constant_entry *entry = &cloudrmi_constant_entries[i];
         char value_buf[32];
