@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <syslog.h>
+#include <inttypes.h>
 #include "config.h"
 #include "cloud-rmi.h"
 
@@ -36,6 +37,7 @@ char *var_config_file = CONFIGURATION_FILE;
 char *var_unix_socket_path = NULL;
 int var_unix_socket_skip_auth = 0;
 char *var_interface_map_file = INTERFACE_MAP_FILE;
+size_t var_max_payload = RMI_DEFAULT_MAX_PAYLOAD;
 
 #ifdef PROXY_SUPPORT
 char *var_proxy = NULL;
@@ -161,6 +163,15 @@ int read_config(char *config_file)
             if(log_level > 0) {
                log_event(LOG_INFO, "Set interface_map_file=\"%s\"\n", var_interface_map_file);
             } //var_min_spare_workers
+         }
+         else if(strcasecmp(conf_name, "max_payload") == 0) {
+            uintmax_t parsed = strtoumax(conf_value, NULL, 10);
+            if(parsed > 0 && parsed < SIZE_MAX) {
+               var_max_payload = (size_t)parsed;
+               if(log_level > 0) {
+                  log_event(LOG_INFO, "Set max_payload=\"%zu\"\n", var_max_payload);
+               }
+            }
          }
 #ifdef REUSE_WORKER_PROC
          else if(strcasecmp(conf_name, "min_spare_workers") == 0) {
