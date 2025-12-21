@@ -78,6 +78,18 @@ class CloudRMIConnection implements ConnectionInterface
 		$this->capabilities = $capabilities;
 	}
 
+	public function supportsAsyncCapability()
+	{
+		return $this->supportsAsyncCapability;
+	}
+
+	public function setSupportsAsyncCapability($supportsAsyncCapability)
+	{
+		$this->supportsAsyncCapability = is_null($supportsAsyncCapability)
+			? null
+			: (bool) $supportsAsyncCapability;
+	}
+
 	public function getConnectedAt()
 	{
 		return $this->connectedAt;

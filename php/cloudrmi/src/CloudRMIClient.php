@@ -372,10 +372,8 @@ class CloudRMIClient
 			return (int) RMI_INLINE_PAYLOAD_THRESHOLD;
 
 		$maxLine = $this->getMaxLineLength();
-		$percentOverhead = 35;
-		$headroom = 500;
 
-		return (int) max(0, $maxLine - floor(($maxLine * $percentOverhead) / 100) - $headroom;
+		return (int) max(0, $maxLine - floor(($maxLine * 35) / 100) - 500);	// 35% base64 overhead for smaller strings + 500 bytes headspace
 	}
 
 	protected function isUnixSocket()
