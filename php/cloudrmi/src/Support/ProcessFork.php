@@ -67,7 +67,9 @@ class ProcessFork
      */
     public function collectChildren()
     {
-        pcntl_wait($status, WNOHANG|WUNTRACED);
+        while (pcntl_wait($status, WNOHANG|WUNTRACED) > 0) {
+            // keep reaping until no child is waiting
+        }
     }
 
     /**
