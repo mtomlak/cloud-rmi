@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from harness import IntegrationEnvironment, TestCase, TestResult
+from harness import IntegrationEnvironment, TestCase, TestResult, parse_status
 
 
 def _require(condition: bool, message: str) -> None:
@@ -143,6 +143,22 @@ def inline_payload_large_inline(env: IntegrationEnvironment) -> TestResult:
     )
     return TestResult(name="inline-payload-large-inline", passed=True, traces=[final.trace])
 
+def control_commands(env: IntegrationEnvironment) -> TestResult:
+    with env.server_session() as session:
+        session._send_line("TIME")
+        time_status, time_message = parse_status(session._read_line())
+        _require(time_status == 200, f"expected 200 got {time_status}")
+        _require(len(time_message) > 0, "TIME response should include a timestamp payload")
+
+        session._send_line("NOOP")
+        noop_status, noop_message = parse_status(session._read_line())
+        _require(noop_status == 200, f"expected 200 got {noop_status}")
+        _require(noop_message == "OK", f"unexpected NOOP response: {noop_message}")
+
+        trace = session.trace
+
+    return TestResult(name="control-commands", passed=True, traces=[trace])
+
 
 DIRECT_CASES: list[TestCase] = [
     TestCase(name="direct-echo", runner=direct_echo),
@@ -154,4 +170,5 @@ DIRECT_CASES: list[TestCase] = [
     TestCase(name="connection-reuse", runner=connection_reuse),
     TestCase(name="inline-payload-inline", runner=inline_payload_inline),
     TestCase(name="inline-payload-large-inline", runner=inline_payload_large_inline),
+    TestCase(name="control-commands", runner=control_commands),
 ]
