@@ -72,17 +72,47 @@ static int proxy_write_all(int fd, const uint8_t *buf, size_t len)
    return 1;
 }
 
-static int proxy_discard_bytes(int fd, size_t len)
+static size_t proxy_stream_buf_drain(struct stream_buf *stream, uint8_t *dest, size_t len)
+{
+   size_t available;
+   size_t to_copy;
+
+   if (stream == NULL || len == 0)
+      return 0;
+
+   if (stream->pos >= stream->used)
+      return 0;
+
+   available = stream->used - stream->pos;
+   to_copy = len < available ? len : available;
+
+   if (dest != NULL)
+      memcpy(dest, stream->buf + stream->pos, to_copy);
+
+   stream->pos += to_copy;
+   return to_copy;
+}
+
+static int proxy_discard_bytes(struct stream_buf *stream, size_t len)
 {
    size_t consumed = 0;
    uint8_t buf[BUF_SZ];
 
+   if (stream == NULL)
+      return 0;
+
    while (consumed < len) {
+      size_t drained = proxy_stream_buf_drain(stream, NULL, len - consumed);
+      if (drained > 0) {
+         consumed += drained;
+         continue;
+      }
+
       size_t chunk = len - consumed;
       if (chunk > sizeof(buf))
          chunk = sizeof(buf);
 
-      ssize_t n = read(fd, buf, chunk);
+      ssize_t n = read(stream->fd, buf, chunk);
       if (n < 0) {
          if (errno == EINTR)
             continue;
@@ -91,6 +121,38 @@ static int proxy_discard_bytes(int fd, size_t len)
       if (n == 0)
          break;
       consumed += (size_t)n;
+   }
+
+   return 1;
+}
+
+static int proxy_read_all(struct stream_buf *stream, uint8_t *buf, size_t len)
+{
+   size_t received = 0;
+
+   if (stream == NULL || buf == NULL)
+      return 0;
+
+   while (received < len) {
+      size_t drained = proxy_stream_buf_drain(stream, buf + received, len - received);
+
+      if (drained > 0) {
+         received += drained;
+         continue;
+      }
+
+      ssize_t n = read(stream->fd, buf + received, len - received);
+
+      if (n < 0) {
+         if (errno == EINTR)
+            continue;
+         return 0;
+      }
+
+      if (n == 0)
+         return 0;
+
+      received += (size_t)n;
    }
 
    return 1;
@@ -587,7 +649,7 @@ int proxy_pass_call_cmd_ex(
       }
    }
 
-   if (stream_readln(conn->client.sock, response, BUF_SZ) < 0) {
+   if (stream_readln(&conn->client.stream, response, BUF_SZ) < 0) {
       ret = 0;
       goto cleanup;
    }
@@ -599,7 +661,7 @@ int proxy_pass_call_cmd_ex(
    }
 
    if (response[strlen(response) - 1] == ':') {
-      if (stream_readlns(conn->client.sock, response, BUF_SZ) < 0) {
+      if (stream_readlns(&conn->client.stream, response, BUF_SZ) < 0) {
          ret = 0;
          goto cleanup;
       }
@@ -625,7 +687,7 @@ int proxy_pass_call_cmd_ex(
          if ((size_t)response_len > var_max_payload) {
             snprintf(message, BUF_SZ, "Payload response exceeds proxy limit");
             status_code = 505;
-            proxy_discard_bytes(conn->client.sock, (size_t)response_len);
+            proxy_discard_bytes(&conn->client.stream, (size_t)response_len);
          } else {
             is_payload_response = 1;
             payload_response = malloc((size_t)response_len + 1);
@@ -635,22 +697,7 @@ int proxy_pass_call_cmd_ex(
                goto cleanup;
             }
 
-            size_t received = 0;
-            while (received < (size_t)response_len) {
-               ssize_t n = read(conn->client.sock, payload_response + received, (size_t)response_len - received);
-
-               if (n < 0) {
-                  ret = 0;
-                  goto cleanup;
-               }
-
-               if (n == 0)
-                  break;
-
-               received += (size_t)n;
-            }
-
-            if (received < (size_t)response_len) {
+            if (!proxy_read_all(&conn->client.stream, (uint8_t *)payload_response, (size_t)response_len)) {
                ret = 0;
                goto cleanup;
             }

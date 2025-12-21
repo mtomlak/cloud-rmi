@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
 #include <cloudrmi/version.h>
 #include <cloudrmi/types.h>
@@ -19,6 +20,14 @@
 #define LIBCLOUDRMI_VERSION_MINOR CLOUDRMI_LIBRARY_VERSION_MINOR
 #define LIBCLOUDRMI_VERSION_PATCH CLOUDRMI_LIBRARY_VERSION_PATCH
 #define BUF_SZ RMI_BUF_SZ
+#define STREAM_BUF_SZ BUF_SZ
+
+struct stream_buf {
+   int fd;
+   char buf[STREAM_BUF_SZ];
+   size_t used;
+   size_t pos;
+};
 
 #ifdef ENABLE_LINUX_FEATURES
         #define CHILD_STACK_SZ          BUF_SZ * 24   // seems safe above BUF_SZ * 10 up to version 0.91
@@ -91,8 +100,9 @@ void die_err(char *errstr);
 int stream_write(int sock, char *format, ...);
 int stream_writeln(int sock, char *format, ...);        // TODO: now some code still uses write instead writeln
 int stream_read(int sock, char* buf, int buf_size);
-int stream_readln(int sock, char* line, int max_size);
-int stream_readlns(int sock, char* line, int max_size);
+void stream_buf_init(struct stream_buf *s, int fd);
+ssize_t stream_readln(struct stream_buf *s, char *line, size_t max_size);
+ssize_t stream_readlns(struct stream_buf *s, char *line, size_t max_size);
 void log_event(int priority, char *format, ...);
 void substring(char *string, char *sub, int start, int len);
 void split_host_addr(char *host, char *ip, int *port);

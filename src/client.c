@@ -123,15 +123,46 @@ static int compute_inline_call_length(const char *iface, const char *method, siz
    return 1;
 }
 
-static int read_all(int sock, char *buf, size_t len)
+static size_t stream_buf_drain(struct stream_buf *stream, uint8_t *dest, size_t len)
+{
+   size_t available;
+   size_t to_copy;
+
+   if (stream == NULL || len == 0)
+      return 0;
+
+   if (stream->pos >= stream->used)
+      return 0;
+
+   available = stream->used - stream->pos;
+   to_copy = len < available ? len : available;
+
+   if (dest != NULL)
+      memcpy(dest, stream->buf + stream->pos, to_copy);
+
+   stream->pos += to_copy;
+   return to_copy;
+}
+
+static int read_all(struct stream_buf *stream, char *buf, size_t len)
 {
    size_t offset = 0;
+
+   if (stream == NULL || buf == NULL)
+      return 0;
 
    if (len == 0)
       return 1;
 
    while (offset < len) {
-      ssize_t n = read(sock, buf + offset, len - offset);
+      size_t consumed = stream_buf_drain(stream, (uint8_t *)buf + offset, len - offset);
+
+      if (consumed > 0) {
+         offset += consumed;
+         continue;
+      }
+
+      ssize_t n = read(stream->fd, buf + offset, len - offset);
 
       if (n <= 0)
          return 0;
@@ -161,14 +192,23 @@ static int write_all(int sock, const uint8_t *buf, size_t len)
    return 1;
 }
 
-static int discard_bytes(int sock, size_t len)
+static int discard_bytes(struct stream_buf *stream, size_t len)
 {
    char buf[256];
    size_t remaining = len;
 
+   if (stream == NULL)
+      return 0;
+
    while (remaining > 0) {
+      size_t consumed = stream_buf_drain(stream, NULL, remaining);
+      if (consumed > 0) {
+         remaining -= consumed;
+         continue;
+      }
+
       size_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
-      ssize_t n = read(sock, buf, chunk);
+      ssize_t n = read(stream->fd, buf, chunk);
 
       if (n <= 0)
          return 0;
@@ -198,6 +238,7 @@ int client_connect(char *hostname, int port_num, const char *unix_socket_path, s
       return -1;
 
    conn->sock = -1;
+   stream_buf_init(&conn->stream, -1);
    conn->capabilities = 0;
    conn->capabilities_known = 0;
    conn->protocol_version = 1;
@@ -274,8 +315,10 @@ int client_connect(char *hostname, int port_num, const char *unix_socket_path, s
 
    free(ip_addr);
 
+   stream_buf_init(&conn->stream, sock);
+
    /* And read the banner */
-   if (stream_readln(sock, response, BUF_SZ) < 0) {
+   if (stream_readln(&conn->stream, response, BUF_SZ) < 0) {
       free(response);
       free(message);
       close(sock);
@@ -327,7 +370,7 @@ int client_connect(char *hostname, int port_num, const char *unix_socket_path, s
          bzero(caps_response, BUF_SZ);
          bzero(caps_message, BUF_SZ);
 
-         if (stream_writeln(sock, "CAPS") >= 0 && stream_readln(sock, caps_response, BUF_SZ) >= 0) {
+         if (stream_writeln(sock, "CAPS") >= 0 && stream_readln(&conn->stream, caps_response, BUF_SZ) >= 0) {
             if (client_parse_status_code(caps_response, &status_code, caps_message) && status_code == 200) {
                conn->capabilities = rmi_parse_capabilities(caps_message);
                conn->capabilities_known = 1;
@@ -343,7 +386,7 @@ int client_connect(char *hostname, int port_num, const char *unix_socket_path, s
       bzero(response, BUF_SZ);
       bzero(message, BUF_SZ);
 
-      if (stream_writeln(sock, "PROTO 2") >= 0 && stream_readln(sock, response, BUF_SZ) >= 0) {
+      if (stream_writeln(sock, "PROTO 2") >= 0 && stream_readln(&conn->stream, response, BUF_SZ) >= 0) {
          if (client_parse_status_code(response, &status_code, message) && status_code == 200)
             conn->protocol_version = 2;
       }
@@ -367,6 +410,7 @@ void client_disconnect(struct rmi_client_conn *conn)
 
    close(conn->sock);
    conn->sock = -1;
+   stream_buf_init(&conn->stream, -1);
 }
 
 
@@ -385,7 +429,7 @@ int client_auth_by_token(struct rmi_client_conn *conn, char *token)
    bzero(message, BUF_SZ);
 
    stream_writeln(conn->sock, "AUTH TOKEN %s", token);
-   stream_readln(conn->sock, response, BUF_SZ);
+   stream_readln(&conn->stream, response, BUF_SZ);
 
    if (!client_parse_status_code(response, &status_code, message)) {
       printf("Error: Cannot parse authentication response: %s\n", response);
@@ -420,7 +464,7 @@ int client_raw_cmd(struct rmi_client_conn *conn, char *command, char *response_p
       return 0;
    }
 
-   if (stream_readln(conn->sock, response, BUF_SZ) < 0) {
+   if (stream_readln(&conn->stream, response, BUF_SZ) < 0) {
       return 0;
    }
 
@@ -431,7 +475,7 @@ int client_raw_cmd(struct rmi_client_conn *conn, char *command, char *response_p
 
    // Read the rest if command has multiline output
    if (response[strlen(response) - 1] == ':') {
-      stream_readlns(conn->sock, response, BUF_SZ);
+      stream_readlns(&conn->stream, response, BUF_SZ);
       sprintf(response_payload, "%s\n%s", response_payload, response);
    }
 
@@ -451,7 +495,7 @@ int client_call_remote_method_raw(struct rmi_client_conn *conn, char *iface, cha
 
    bzero(response, BUF_SZ);
    stream_writeln(conn->sock, "CALL %s %s %s", iface, method, enc_args);
-   stream_readln(conn->sock, response, BUF_SZ);
+   stream_readln(&conn->stream, response, BUF_SZ);
 
    if (!client_parse_status_code(response, &status_code, response_payload)) {
       printf("Error: Cannot parse command response: %s\n", response);
@@ -501,7 +545,7 @@ int client_call_remote_method_payload(
    if (!write_all(conn->sock, payload, payload_len))
       goto done;
 
-   if (stream_readln(conn->sock, response, BUF_SZ) < 0)
+   if (stream_readln(&conn->stream, response, BUF_SZ) < 0)
       goto done;
 
    if (!client_parse_status_code(response, &status_code, response_payload)) {
@@ -520,7 +564,7 @@ int client_call_remote_method_payload(
       if (response_len > var_max_payload) {
          snprintf(response_payload, BUF_SZ, "Payload response exceeds client limit");
          status_code = 505;
-         discard_bytes(conn->sock, response_len);
+         discard_bytes(&conn->stream, response_len);
          goto done;
       }
 
@@ -532,7 +576,7 @@ int client_call_remote_method_payload(
          goto done;
       }
 
-      if (!read_all(conn->sock, payload_buf, response_len)) {
+      if (!read_all(&conn->stream, payload_buf, response_len)) {
          snprintf(response_payload, BUF_SZ, "Error reading payload response");
          free(payload_buf);
          status_code = 505;

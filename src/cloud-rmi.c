@@ -144,92 +144,6 @@ int stream_read(int sock, char* buf, int buf_size)
  * Reads next non-empty line from stream to the given buffer of specified size
  * 
  */
-int stream_readln(int sock, char* line, int max_size)
-{
-   int bytes, size = 0;
-   char chr_buf;
-
-   bzero(line, max_size - 1);
-
-   while((bytes = read(sock, &chr_buf, 1)) > 0)  {
-      if (bytes < 0) {
-         printf("stream_read() -- ERROR reading from socket");
-         return -1;
-      }
-
-      // Exit on null character
-      if (chr_buf == 0)
-         break;
-
-      // Skipt first empty lines
-      if (chr_buf == 13 || chr_buf == 10) {
-         if (size)
-            break;
-
-         continue;
-      }
-
-      line[size] = chr_buf;
-      size++;
-   }
-
-   if (var_debug)
-      printf("IN: |%s|\n", line);
-
-   return size;
-}
-
-/**
- * Reads next non-empty lines until first empty line occours
- * 
- */
-int stream_readlns(int sock, char* line, int max_size)
-{
-   int bytes, size = 0;
-   int lnbr_count = 0;
-   char chr_buf;
-
-   bzero(line, max_size - 1);
-
-   do  {
-      bytes = read(sock, &chr_buf, 1);
-
-      if (bytes < 0) {
-         printf("stream_read() -- ERROR reading from socket");
-         return -1;
-      }
-
-      // Exit on null character
-      if (chr_buf == 0)
-         break;
-
-      // Filter carridge return
-      if (chr_buf == 13)
-         continue;      
-       
-      // Stop on empty line
-      if (chr_buf == 10) {
-         lnbr_count++;
-
-         if (lnbr_count > 1) {
-            line[size - 1] = '\0';  // remove last linefeed
-            break;
-         }
-
-      } else
-         lnbr_count = 0;
-   
-
-      line[size] = chr_buf;
-      size++;
-   } while(bytes > 0);
-
-   if (var_debug)
-      printf("IN: |%s|\n", line);
-
-   return size;
-}
-
 #else
 
 void handle_error(const char *message) {
@@ -427,123 +341,147 @@ int stream_read(int sock, char* buf, int buf_size)
     return bytes;
 }
 
-int stream_readln(int sock, char* line, int max_size)
-{
-    ssize_t bytes = 0;
-    size_t size = 0;
-    int found_newline = 0;
-    char buf[BUF_SZ];
-
-    memset(line, 0, (size_t)max_size);
-
-    while (!found_newline && size < (size_t)(max_size - 1)) {
-        size_t peek_len = (size_t)(max_size - 1 - size);
-
-        if (peek_len > sizeof(buf))
-            peek_len = sizeof(buf);
-
-        bytes = recv(sock, buf, peek_len, MSG_PEEK);
-
-        if (bytes < 0) {
-            if (errno == EINTR)
-                continue;
-
-            handle_error("stream_readln() -- ERROR reading from socket");
-            return -1;
-        }
-
-        if (bytes == 0)
-            break;
-
-        char *newline = memchr(buf, '\n', (size_t)bytes);
-        size_t to_consume = (size_t)bytes;
-
-        if (newline != NULL)
-            to_consume = (size_t)(newline - buf) + 1;
-
-        do {
-            bytes = read(sock, buf, to_consume);
-        } while (bytes < 0 && errno == EINTR);
-
-        if (bytes < 0) {
-            handle_error("stream_readln() -- ERROR reading from socket");
-            return -1;
-        }
-
-        if (bytes == 0)
-            break;
-
-        for (ssize_t i = 0; i < bytes && size < (size_t)(max_size - 1); i++) {
-            if (buf[i] == '\r')
-                continue;
-
-            if (buf[i] == '\n') {
-                found_newline = 1;
-                break;
-            }
-
-            line[size++] = buf[i];
-        }
-    }
-
-    if (var_debug)
-        printf("IN: |%s|\n", line);
-
-    return (int)size;
-}
-
-int stream_readlns(int sock, char* line, int max_size)
-{
-    int bytes, size = 0;
-    int lnbr_count = 0;
-    char chr_buf;
-
-    memset(line, 0, max_size);
-
-    do {
-        do {
-            bytes = read(sock, &chr_buf, 1);
-        } while (bytes < 0 && errno == EINTR);
-
-        if (bytes < 0) {
-            handle_error("stream_readlns() -- ERROR reading from socket");
-            return -1;
-        }
-
-        // Exit on null character
-        if (chr_buf == '\0')
-            break;
-
-        // Filter carriage return
-        if (chr_buf == '\r')
-            continue;
-
-        // Stop on empty line
-        if (chr_buf == '\n') {
-            lnbr_count++;
-
-            if (lnbr_count > 1) {
-                line[size - 1] = '\0';  // remove last linefeed
-                break;
-            }
-        } else {
-            lnbr_count = 0;
-        }
-
-        if (size < max_size - 1) {
-            line[size++] = chr_buf;
-        }
-
-    } while (bytes > 0);
-
-    if (var_debug)
-        printf("IN: |%s|\n", line);
-
-    return size;
-}
-
 
 #endif
+
+void stream_buf_init(struct stream_buf *s, int fd)
+{
+   if (s == NULL)
+      return;
+
+   s->fd = fd;
+   s->used = 0;
+   s->pos = 0;
+}
+
+static ssize_t stream_buf_fill(struct stream_buf *s)
+{
+   ssize_t bytes;
+
+   do {
+      bytes = read(s->fd, s->buf, sizeof(s->buf));
+   } while (bytes < 0 && errno == EINTR);
+
+   if (bytes >= 0) {
+      s->used = (size_t)bytes;
+      s->pos = 0;
+   }
+
+   return bytes;
+}
+
+ssize_t stream_readln(struct stream_buf *s, char *line, size_t max_size)
+{
+   size_t size = 0;
+   int found_newline = 0;
+
+   if (line != NULL && max_size > 0)
+      line[0] = '\0';
+
+   if (s == NULL || line == NULL || max_size == 0) {
+      errno = EINVAL;
+      return -1;
+   }
+
+   while (!found_newline) {
+      if (s->pos >= s->used) {
+         ssize_t bytes = stream_buf_fill(s);
+
+         if (bytes < 0) {
+            perror("stream_readln() -- ERROR reading from socket");
+            return -1;
+         }
+
+         if (bytes == 0)
+            break;
+      }
+
+      size_t remaining = s->used - s->pos;
+      const char *chunk = s->buf + s->pos;
+
+      for (size_t i = 0; i < remaining; i++) {
+         char chr_buf = chunk[i];
+         s->pos++;
+
+         if (chr_buf == '\r')
+            continue;
+
+         // Skip first empty lines
+         if (chr_buf == '\n') {
+            if (size == 0)
+               continue;
+
+            found_newline = 1;
+            break;
+         }
+
+         if (size + 1 < max_size)
+            line[size++] = chr_buf;
+      }
+   }
+
+   if (size < max_size)
+      line[size] = '\0';
+
+   if (var_debug)
+      printf("IN: |%s|\n", line);
+
+   return (ssize_t)size;
+}
+
+ssize_t stream_readlns(struct stream_buf *s, char *line, size_t max_size)
+{
+   size_t size = 0;
+
+   if (line != NULL && max_size > 0)
+      line[0] = '\0';
+
+   if (s == NULL || line == NULL || max_size == 0) {
+      errno = EINVAL;
+      return -1;
+   }
+
+   while (1) {
+      char ln_buf[STREAM_BUF_SZ + 1];
+      size_t remaining = max_size - size;
+
+      if (remaining == 0)
+         break;
+
+      size_t ln_cap = remaining;
+
+      if (ln_cap > sizeof(ln_buf))
+         ln_cap = sizeof(ln_buf);
+
+      ssize_t ln_size = stream_readln(s, ln_buf, ln_cap);
+
+      if (ln_size < 0)
+         return -1;
+
+      if (ln_size == 0)
+         break;
+
+      if (size + (size_t)ln_size >= max_size)
+         ln_size = (ssize_t)(max_size - size - 1);
+
+      memcpy(line + size, ln_buf, (size_t)ln_size);
+      size += (size_t)ln_size;
+
+      if (size + 1 < max_size)
+         line[size++] = '\n';
+   }
+
+   if (size > 0 && line[size - 1] == '\n')
+      size--;
+
+   if (size < max_size)
+      line[size] = '\0';
+
+   if (var_debug)
+      printf("IN: |%s|\n", line);
+
+   return (ssize_t)size;
+}
 
 
 /**

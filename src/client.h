@@ -4,12 +4,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include "cloud-rmi.h"
 
 struct rmi_client_conn {
    int sock;
    uint32_t capabilities;
    int capabilities_known;
    int protocol_version;
+   struct stream_buf stream;
 };
 
 int client_connect(char *ip_addr, int port_num, const char *unix_socket_path, struct rmi_client_conn *conn);
