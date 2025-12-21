@@ -95,6 +95,176 @@ static void trim_trailing_newlines(char *buf, size_t *len)
    }
 }
 
+static void free_arg_list(char **args, size_t count)
+{
+   if (args == NULL)
+      return;
+
+   for (size_t i = 0; i < count; i++) {
+      free(args[i]);
+   }
+
+   free(args);
+}
+
+static int append_arg(char ***args, size_t *count, size_t *cap, const char *buf, size_t len)
+{
+   if (args == NULL || count == NULL || cap == NULL || buf == NULL)
+      return 0;
+
+   if (*count + 1 >= *cap) {
+      size_t new_cap = (*cap == 0) ? 4 : (*cap * 2);
+
+      char **tmp = realloc(*args, new_cap * sizeof(char *));
+      if (tmp == NULL)
+         return 0;
+
+      *args = tmp;
+      *cap = new_cap;
+   }
+
+   char *copy = malloc(len + 1);
+   if (copy == NULL)
+      return 0;
+
+   if (len > 0 && buf != NULL)
+      memcpy(copy, buf, len);
+   copy[len] = '\0';
+
+   (*args)[*count] = copy;
+   (*count)++;
+   (*args)[*count] = NULL;
+
+   return 1;
+}
+
+static int append_char_dyn(char **buf, size_t *len, size_t *cap, char ch)
+{
+   if (buf == NULL || len == NULL || cap == NULL)
+      return 0;
+
+   if (*len + 1 >= *cap) {
+      size_t new_cap = (*cap == 0) ? 16 : (*cap * 2);
+
+      char *tmp = realloc(*buf, new_cap);
+      if (tmp == NULL)
+         return 0;
+
+      *buf = tmp;
+      *cap = new_cap;
+   }
+
+   (*buf)[*len] = ch;
+   (*len)++;
+   return 1;
+}
+
+static int split_shell_args(const char *decoded, char ***out_args, size_t *out_count)
+{
+   enum parse_state { NORMAL, SINGLE_QUOTE, DOUBLE_QUOTE };
+   enum parse_state state = NORMAL;
+   char **args = NULL;
+   size_t args_count = 0;
+   size_t args_cap = 0;
+   char *token = NULL;
+   size_t token_len = 0;
+   size_t token_cap = 0;
+   int token_open = 0;
+   const char *p = decoded;
+
+   if (out_args == NULL || out_count == NULL)
+      return 0;
+
+   *out_args = NULL;
+   *out_count = 0;
+
+   if (decoded == NULL)
+      return 1;
+
+   while (1) {
+      char ch = *p;
+      int end = (ch == '\0');
+
+      if (state == NORMAL) {
+         if (end || isspace((unsigned char)ch)) {
+            if (token_open) {
+               if (!append_arg(&args, &args_count, &args_cap, token ? token : "", token_len)) {
+                  free(token);
+                  free_arg_list(args, args_count);
+                  return 0;
+               }
+               token_len = 0;
+               token_open = 0;
+            }
+
+            if (end)
+               break;
+
+            p++;
+            continue;
+         }
+
+         if (ch == '\'') {
+            token_open = 1;
+            state = SINGLE_QUOTE;
+            p++;
+            continue;
+         } else if (ch == '\"') {
+            token_open = 1;
+            state = DOUBLE_QUOTE;
+            p++;
+            continue;
+         } else if (ch == '\\') {
+            p++;
+            ch = *p;
+            if (ch == '\0') {
+               ch = '\\';
+               p--;
+            }
+         }
+
+      } else if (state == SINGLE_QUOTE) {
+         if (ch == '\'') {
+            state = NORMAL;
+            p++;
+            continue;
+         }
+      } else if (state == DOUBLE_QUOTE) {
+         if (ch == '\"') {
+            state = NORMAL;
+            p++;
+            continue;
+         }
+
+         if (ch == '\\' && (p[1] == '\"' || p[1] == '\\')) {
+            p++;
+            ch = *p;
+         }
+      }
+
+      if (!append_char_dyn(&token, &token_len, &token_cap, ch)) {
+         free(token);
+         free_arg_list(args, args_count);
+         return 0;
+      }
+
+      token_open = 1;
+      p++;
+   }
+
+   if (state != NORMAL) {
+      free(token);
+      free_arg_list(args, args_count);
+      return 0;
+   }
+
+   free(token);
+
+   *out_args = args;
+   *out_count = args_count;
+   return 1;
+}
+
 static int stream_child_io(
    int stdout_fd,
    int stdin_fd,
@@ -238,6 +408,9 @@ int handle_shell_call(
    size_t output_len = 0;
    char *response_output = NULL;
    int success = 0;
+   char **argv = NULL;
+   char **inline_args = NULL;
+   size_t inline_argc = 0;
 
    if (payload == NULL && payload_len > 0) {
       stream_writeln(state->sock, "500 Error preparing payload buffer");
@@ -257,6 +430,39 @@ int handle_shell_call(
          stream_writeln(state->sock, "500 Error decoding call arguments");
          goto cleanup;
       }
+
+      if (!split_shell_args(decoded_arg, &inline_args, &inline_argc)) {
+         stream_writeln(state->sock, "500 Error parsing call arguments");
+         goto cleanup;
+      }
+
+      argv = calloc(inline_argc + 3, sizeof(char *));
+      if (argv == NULL) {
+         stream_writeln(state->sock, "500 Error preparing argv buffer");
+         goto cleanup;
+      }
+
+      argv[0] = file;
+      argv[1] = method;
+
+      for (size_t i = 0; i < inline_argc; i++) {
+         argv[2 + i] = inline_args[i];
+      }
+
+      argv[inline_argc + 2] = NULL;
+   } else {
+      const char *encoding_arg = encoding != NULL ? encoding : "";
+
+      argv = calloc(4, sizeof(char *));
+      if (argv == NULL) {
+         stream_writeln(state->sock, "500 Error preparing argv buffer");
+         goto cleanup;
+      }
+
+      argv[0] = file;
+      argv[1] = method;
+      argv[2] = (char *)encoding_arg;
+      argv[3] = NULL;
    }
 
    if (pipe(stdout_pipe) == -1) {
@@ -298,12 +504,7 @@ int handle_shell_call(
          close(stdin_pipe[0]);
       }
 
-      if (payload != NULL) {
-         const char *encoding_arg = encoding != NULL ? encoding : "";
-         execl(file, file, method, encoding_arg, (char *)NULL);
-      } else {
-         execl(file, file, method, decoded_arg, (char *)NULL);
-      }
+      execv(file, argv);
 
       _exit(127);
    }
@@ -395,6 +596,8 @@ cleanup:
    free(decoded_arg);
    free(output);
    free(response_output);
+   free(argv);
+   free_arg_list(inline_args, inline_argc);
 
    return success;
 }

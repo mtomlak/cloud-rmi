@@ -111,14 +111,16 @@ Sources: `src/handle_call.c`, `src/server.c`
   `401 Unauthorized` and no handler execution.
 - Interface resolution uses the configured map (`server_get_iface_entry`).
   Missing interfaces yield `400 Unsupported interface: <iface>`.
-- **Inline CALL (v1/v2)**: Arguments are base64-decoded before invocation.
+- **Inline CALL (v1/v2)**: Arguments are base64-decoded and split with
+  POSIX-style shell quoting rules into `argv[2+]`. Empty quoted tokens are
+  preserved.
 - **PAYLOAD CALL (v2)**:
   - Handler stdin receives the exact payload bytes. Zero-length payloads close
     stdin immediately.
-  - `argv[2]` carries the encoding token (empty string allowed); `argv[3]` is
-    `"-"` for payload calls.
+  - `argv[2]` carries the encoding token (empty string allowed); no synthetic
+    argument is appended for payload calls.
 - **Process management**:
-  - Handler executed via `fork()` + `execl(file, file, method, ...)`.
+  - Handler executed via `fork()` + `execv(file, argv)`.
   - Stdout/stderr are multiplexed back to the client; polling keeps stdout and
     stdin streaming without blocking.
   - Trailing `\n`/`\r` are stripped from handler output before framing.

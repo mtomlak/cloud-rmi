@@ -145,6 +145,7 @@ int main(int argc, char *argv[])
          switch(opt) {
          	case 'b':
                var_script_base_namespace = strdup(optarg);
+               normalize_script_base_namespace();
                read_iface_config(var_interface_map_file);
                break;
 
