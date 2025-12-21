@@ -27,8 +27,8 @@
 
 void show_help(char *this_cmd)
 {
-	printf("ProfiWeb Cloud SimpleRMI Server (version %s)\n", APP_VERSION);
-   printf(" - libcloudrmi version %s (protocol %d)\n", LIBCLOUDRMI_VERSION, CLOUDRMI_PROTOCOL_VERSION);
+	printf("ProfiWeb Cloud SimpleRMI Server\n\n");
+   printf(" - version %s, libcloudrmi version %s, protocol version %d\n", APP_VERSION, LIBCLOUDRMI_VERSION, CLOUDRMI_PROTOCOL_VERSION);
 #ifdef ENABLE_LINUX_FEATURES
    printf(" - compiled with Linux glibc features \n");
    #ifdef REUSE_WORKER_PROC

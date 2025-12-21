@@ -25,7 +25,7 @@ $(LIBCLOUDRMI):
 .PHONY: app_version
 app_version:
 	@if command -v git > /dev/null 2>&1 && git rev-parse --git-dir > /dev/null 2>&1; then \
-	  version=$$(git tag --list | sed 's/^v//' | grep -E '^[0-9]+(\\.[0-9]+)*$$' | sort -V | tail -n 1); \
+	  version=$$(git tag --sort=-v:refname | head -n 1 | sed 's/v//g'); \
 	else \
 	  version=""; \
 	fi; \
