@@ -7,6 +7,8 @@
 #include "php_profiweb_cloudrmi.h"
 
 #include <stdio.h>
+#include <stdbool.h>
+#include <string.h>
 #include <cloudrmi/protocol.h>
 
 static int le_cloudrmi_ctx;
@@ -257,6 +259,15 @@ typedef struct {
     zend_long value;
 } cloudrmi_constant_entry;
 
+static bool cloudrmi_constant_defined(const char *name)
+{
+    if (name == NULL) {
+        return false;
+    }
+
+    return zend_get_constant_str(name, strlen(name)) != NULL;
+}
+
 static const cloudrmi_constant_entry cloudrmi_constant_entries[] = {
     {"RMI_OK", (zend_long)RMI_OK},
     {"RMI_E_AGAIN", (zend_long)RMI_E_AGAIN},
@@ -295,13 +306,27 @@ static void cloudrmi_register_constants(INIT_FUNC_ARGS)
 {
     for (size_t i = 0; i < cloudrmi_constant_entries_count; i++) {
         const cloudrmi_constant_entry *entry = &cloudrmi_constant_entries[i];
-        REGISTER_LONG_CONSTANT(entry->name, entry->value, CONST_CS | CONST_PERSISTENT);
+        if (cloudrmi_constant_defined(entry->name)) {
+            continue;
+        }
+        zend_register_long_constant(
+            entry->name,
+            strlen(entry->name),
+            entry->value,
+            CONST_CS | CONST_PERSISTENT,
+            module_number
+        );
     }
-    REGISTER_STRING_CONSTANT(
-        "RMI_LIBRARY_VERSION",
-        CLOUDRMI_LIBRARY_VERSION,
-        CONST_CS | CONST_PERSISTENT
-    );
+    if (!cloudrmi_constant_defined("RMI_LIBRARY_VERSION")) {
+        zend_register_stringl_constant(
+            "RMI_LIBRARY_VERSION",
+            strlen("RMI_LIBRARY_VERSION"),
+            CLOUDRMI_LIBRARY_VERSION,
+            strlen(CLOUDRMI_LIBRARY_VERSION),
+            CONST_CS | CONST_PERSISTENT,
+            module_number
+        );
+    }
 }
 
 PHP_MINIT_FUNCTION(profiweb_cloudrmi)
