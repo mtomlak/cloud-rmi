@@ -4,7 +4,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define RMI_CAP_PAYLOAD (1u << 0)
 #define RMI_CAP_PROXY   (1u << 1)
 #define RMI_CAP_STATS   (1u << 2)
 

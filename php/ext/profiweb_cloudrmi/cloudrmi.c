@@ -287,7 +287,6 @@ static const cloudrmi_constant_entry cloudrmi_constant_entries[] = {
     {"RMI_EVENT_PROTO", (zend_long)RMI_EVENT_PROTO},
     {"RMI_EVENT_UNKNOWN", (zend_long)RMI_EVENT_UNKNOWN},
     {"RMI_MAX_PROTOCOL_VERSION", (zend_long)RMI_MAX_PROTOCOL_VERSION},
-    {"RMI_LIBRARY_VERSION", (zend_long)CLOUDRMI_LIBRARY_VERSION},
 };
 
 static const size_t cloudrmi_constant_entries_count = sizeof(cloudrmi_constant_entries) / sizeof(cloudrmi_constant_entries[0]);
@@ -298,6 +297,11 @@ static void cloudrmi_register_constants(INIT_FUNC_ARGS)
         const cloudrmi_constant_entry *entry = &cloudrmi_constant_entries[i];
         REGISTER_LONG_CONSTANT(entry->name, entry->value, CONST_CS | CONST_PERSISTENT);
     }
+    REGISTER_STRING_CONSTANT(
+        "RMI_LIBRARY_VERSION",
+        CLOUDRMI_LIBRARY_VERSION,
+        CONST_CS | CONST_PERSISTENT
+    );
 }
 
 PHP_MINIT_FUNCTION(profiweb_cloudrmi)
@@ -324,6 +328,11 @@ PHP_MINFO_FUNCTION(profiweb_cloudrmi)
         snprintf(value_buf, sizeof(value_buf), ZEND_LONG_FMT, entry->value);
         php_info_print_table_row(2, entry->name, value_buf);
     }
+    php_info_print_table_row(
+        2,
+        "RMI_LIBRARY_VERSION",
+        CLOUDRMI_LIBRARY_VERSION
+    );
     php_info_print_table_end();
 }
 

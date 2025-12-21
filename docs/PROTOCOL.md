@@ -81,7 +81,7 @@ Server sends a banner:
 
 - `PROTO=2` announces the maximum version; client remains on v1 until it sends
   `PROTO <version>`.
-- Capability tokens are uppercase words (`PAYLOAD`, `PROXY`, `STATS`, vendor
+- Capability tokens are uppercase words (`PROXY`, `STATS`, vendor
   extensions) separated by commas in the banner and normalized to spaces in
   responses.
 - Servers MUST advertise any non‑standard command or behavior as a capability.

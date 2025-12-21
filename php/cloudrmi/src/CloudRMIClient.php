@@ -16,8 +16,6 @@ class CloudRMIClient
 {
 	protected const DEFAULT_MAX_LINE = 8192;
 	protected const PROTOCOL_V1_MAX_LINE = 262144;
-	protected const INLINE_PAYLOAD_OVERHEAD_PERCENT = 35;
-	protected const INLINE_PAYLOAD_HEADROOM = 500;
 
 	protected $port = 8000;
 	protected $host = 'localhost';
@@ -31,7 +29,6 @@ class CloudRMIClient
 	protected $auth = [];
 	protected $capabilities = [];
 	protected $advertisedMaxProtocol = 1;
-	protected $supportsPayloadCapability = false;
 	protected $supportsAsyncCapability = false;
 	protected $payloadThreshold = null;
 	protected $defaultPayloadEncoding = 'RAW';
@@ -205,15 +202,8 @@ class CloudRMIClient
 		if (!empty($capabilities))
 			$this->capabilities = $capabilities;
 
-		if (!is_null($connection->supportsPayloadCapability()))
-			$this->supportsPayloadCapability = (bool) $connection->supportsPayloadCapability();
-
 		if (!is_null($connection->supportsAsyncCapability()))
 			$this->supportsAsyncCapability = (bool) $connection->supportsAsyncCapability();
-
-		if (!empty($this->capabilities)
-			&& ($connection->supportsPayloadCapability() === null || $connection->supportsAsyncCapability() === null))
-			$this->updateCapabilityFlags();
 	}
 
 	protected function persistConnectionState()
@@ -224,7 +214,6 @@ class CloudRMIClient
 		$this->connection->setProtocolVersion($this->protocolVersion);
 		$this->connection->setAdvertisedMaxProtocol($this->advertisedMaxProtocol);
 		$this->connection->setCapabilities($this->capabilities);
-		$this->connection->setSupportsPayloadCapability($this->supportsPayloadCapability);
 		$this->connection->setSupportsAsyncCapability($this->supportsAsyncCapability);
 	}
 
@@ -300,7 +289,7 @@ class CloudRMIClient
 		if (!empty($options['require_payload']))
 			$preferPayload = true;
 
-		$canUsePayload = $this->canUsePayloadChannel();
+		$canUsePayload = ($this->protocolVersion >= 2);
 		$inlinePayload = $this->encodePayload($parameters);
 		$inlineLength = strlen("$command $interface $methodName " . $inlinePayload);
 
@@ -383,17 +372,15 @@ class CloudRMIClient
 			return (int) RMI_INLINE_PAYLOAD_THRESHOLD;
 
 		$maxLine = $this->getMaxLineLength();
-		return (int) max(0, $maxLine - floor(($maxLine * self::INLINE_PAYLOAD_OVERHEAD_PERCENT) / 100) - self::INLINE_PAYLOAD_HEADROOM);
+		$percentOverhead = 35;
+		$headroom = 500;
+
+		return (int) max(0, $maxLine - floor(($maxLine * $percentOverhead) / 100) - $headroom;
 	}
 
 	protected function isUnixSocket()
 	{
 		return (!is_null($this->unixSocketPath) && $this->unixSocketPath !== '');
-	}
-
-	protected function canUsePayloadChannel()
-	{
-		return ($this->protocolVersion >= 2 && $this->supportsPayloadCapability);
 	}
 
 	protected function shouldUsePayloadChannel($parameters, array $options, $payloadLength = null)
@@ -416,7 +403,7 @@ class CloudRMIClient
 
 	protected function sendPayloadCall(array $request)
 	{
-		if ($this->protocolVersion < 2 || !$this->supportsPayloadCapability)
+		if ($this->protocolVersion < 2)
 			throw new RemoteMethodInvocationException('Payload required but not supported by negotiated protocol version');
 
 		if ($this->connWriteLn($request['line']) === false)
@@ -727,7 +714,6 @@ class CloudRMIClient
 
 	protected function updateCapabilityFlags()
 	{
-		$this->supportsPayloadCapability = ($this->protocolVersion >= 2 && in_array('PAYLOAD', $this->capabilities));
 		$this->supportsAsyncCapability = in_array('ACALL', $this->capabilities);
 		$this->persistConnectionState();
 	}

@@ -75,7 +75,7 @@ static int payload_supported(const struct rmi_client_conn *conn)
    if (conn == NULL)
       return 0;
 
-   return conn->protocol_version >= 2 && conn->capabilities_known && (conn->capabilities & RMI_CAP_PAYLOAD);
+   return conn->protocol_version >= 2;
 }
 
 static int base64_encoded_length_no_nul(size_t input_len, size_t *out_len)
@@ -484,7 +484,7 @@ int client_call_remote_method_payload(
    bzero(response_keyword, BUF_SZ);
 
    if (!payload_supported(conn)) {
-      snprintf(response_payload, BUF_SZ, "PAYLOAD requires PROTO 2 negotiation with PAYLOAD capability");
+      snprintf(response_payload, BUF_SZ, "PAYLOAD requires PROTO 2 negotiation");
       status_code = 505;
       goto done;
    }

@@ -11,13 +11,11 @@ struct capability_def {
 };
 
 static const struct capability_def capability_definitions[] = {
-   { RMI_CAP_PAYLOAD, "PAYLOAD" },
    { RMI_CAP_PROXY,   "PROXY"   },
    { RMI_CAP_STATS,   "STATS"   },
 };
 
 static const uint32_t RMI_COMPILED_CAPS =
-   RMI_CAP_PAYLOAD |
 #ifdef PROXY_SUPPORT
    RMI_CAP_PROXY |
 #endif

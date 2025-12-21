@@ -51,7 +51,7 @@ class CloudRMIServer
 	protected $maxPlainStringBytes = 1024;
 	protected $protocolVersion = 1;
 	protected $maxProtocolVersion = 2;
-	protected $maxPayload = 10485760;
+	protected $maxPayload = null;
 
 	public function __construct()
 	{
@@ -97,8 +97,8 @@ class CloudRMIServer
 		$this->openServerSocket();
 		$this->startedAt = time();
 		$this->serverPid = posix_getpid();
-		$this->log($this->contextName . " service ready on " . $this->describeEndpoint() . 
-			. " [ composer cloudrmi | libcloudrmi " . RMI_LIBRARY_VERSION . "]");
+		$this->log($this->contextName . " service ready on " . $this->describeEndpoint() 
+			. " [ composer cloudrmi | libcloudrmi " . RMI_LIBRARY_VERSION . " ]");
 
 		if ($this->hasForkSupport())
 			$this->proc = new ProcessFork();
@@ -228,9 +228,6 @@ class CloudRMIServer
 	protected function getAdvertisedCapabilities()
 	{
 		$caps = [];
-
-		if ($this->getMaxProtocolVersion() >= 2)
-			$caps[] = 'PAYLOAD';
 
 		if ($this->isAsyncCapabilityAdvertised())
 			$caps[] = 'ACALL';
