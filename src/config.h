@@ -42,3 +42,4 @@ extern char *var_proxy;
 char *firsttok(char **s, const char *delim);
 int read_config(char *config_file);
 int read_iface_config(char *config_file);
+void normalize_script_base_namespace();

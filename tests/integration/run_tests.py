@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--server-port", type=int, default=19950, help="Port for the RMI server.")
     parser.add_argument("--proxy-port", type=int, default=19951, help="Port for the RMI proxy.")
     parser.add_argument("--token", default="testtoken", help="Auth token for test calls.")
-    parser.add_argument("--namespace", default="Test\\Integration", help="Base namespace for test interfaces.")
+    parser.add_argument("--namespace", default="\\Test\\Integration", help="Base namespace for test interfaces.")
     parser.add_argument("--skip-unix", action="store_true", help="Skip unix socket coverage.")
     parser.add_argument(
         "--unix-server-socket",

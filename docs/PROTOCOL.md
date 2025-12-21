@@ -303,12 +303,14 @@ Handlers MUST receive stable argv layout:
 ```
 argv[0] = file
 argv[1] = method
-argv[2] = encoding (PLAIN for inline)
-argv[3] = args (decoded inline args, empty or "-" for payload)
+argv[2...] = inline args parsed with POSIX shell-style quoting
 ```
 
-Payload bytes are always read from stdin. See the companion document for the
-exact lifecycle of payload pipes, exit-code handling, and newline trimming.
+For payload calls, `argv[2]` carries the encoding token (empty string allowed)
+and the raw payload bytes are always read from stdin; no synthetic argument is
+inserted. Inline calls preserve empty quoted tokens when splitting the decoded
+argument string. See the companion document for the exact lifecycle of payload
+pipes, exit-code handling, and newline trimming.
 
 ---
 

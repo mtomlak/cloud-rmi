@@ -40,6 +40,24 @@ def exec_large(env: IntegrationEnvironment) -> TestResult:
     return TestResult(name="exec-large", passed=True, traces=[result.trace])
 
 
+def posix_acl_args(env: IntegrationEnvironment) -> TestResult:
+    path = "/tmp/rmi-arg-test"
+    args = "'www' 'x' '" + path + "' ''"
+    with env.server_session() as session:
+        result = session.call(
+            "PosixAccessServiceInterface",
+            "setPosixGroupAccessMode",
+            arg=args,
+            decode_output=True,
+        )
+    _require(result.status == 200, f"expected 200 got {result.status}")
+    _require(
+        result.decoded == f"GROUP:www:x:{path}:",
+        f"unexpected argument mapping: {result.decoded}",
+    )
+    return TestResult(name="posix-acl-args", passed=True, traces=[result.trace])
+
+
 def payload_uppercase(env: IntegrationEnvironment) -> TestResult:
     payload = b"mixedCase"
     with env.server_session() as session:
@@ -165,6 +183,7 @@ DIRECT_CASES: list[TestCase] = [
     TestCase(name="exec-failure", runner=exec_failure),
     TestCase(name="exec-stderr", runner=exec_stderr),
     TestCase(name="exec-large", runner=exec_large),
+    TestCase(name="posix-acl-args", runner=posix_acl_args),
     TestCase(name="payload-uppercase", runner=payload_uppercase),
     TestCase(name="payload-reject", runner=payload_reject),
     TestCase(name="connection-reuse", runner=connection_reuse),

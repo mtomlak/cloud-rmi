@@ -39,6 +39,15 @@ int var_unix_socket_skip_auth = 0;
 char *var_interface_map_file = INTERFACE_MAP_FILE;
 size_t var_max_payload = RMI_DEFAULT_MAX_PAYLOAD;
 
+static void sanitize_script_base_namespace()
+{
+   if (var_script_base_namespace != NULL && var_script_base_namespace[0] == '\\') {
+      size_t len = strlen(var_script_base_namespace);
+      if (len > 0)
+         memmove(var_script_base_namespace, var_script_base_namespace + 1, len);
+   }
+}
+
 #ifdef PROXY_SUPPORT
 char *var_proxy = NULL;
 #endif
@@ -130,6 +139,8 @@ int read_config(char *config_file)
             if((var_script_base_namespace = strdup(conf_value)) == (char *)NULL) {
                die_err("parse_config() -- strdup() failed");
             }
+
+            sanitize_script_base_namespace();
 
             if(log_level > 0) {
                log_event(LOG_INFO, "Set script_base_namespace=\"%s\"\n", var_script_base_namespace);
@@ -240,4 +251,9 @@ int read_config(char *config_file)
    free(conf_value);
 
    return 1;
+}
+
+void normalize_script_base_namespace()
+{
+   sanitize_script_base_namespace();
 }

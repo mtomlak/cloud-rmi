@@ -34,6 +34,14 @@ int proxy_manager_pipe[2];
 int var_proxy_min_spare_conns = 3;
 struct proxy_iface_entry *proxy_iface_map;
 
+static const char *normalize_iface_name(const char *iface)
+{
+   if (iface != NULL && iface[0] == '\\' && iface[1] != '\0')
+      return iface + 1;
+
+   return iface;
+}
+
 // refered from inside
 int proxy_get_spare_conn_count(int proxy_id);
 
@@ -401,7 +409,7 @@ int proxy_fetch_interfaces(int proxy_num)
 
       if (response[byte] == '\n' || response[byte] == '\0') {
          if (size > 0) {
-            proxy_add_iface_entry(proxy_num, iface);
+            proxy_add_iface_entry(proxy_num, (char *)normalize_iface_name(iface));
          }
          bzero(iface, BUF_SZ);
          size = 0;
@@ -524,6 +532,10 @@ int proxy_pass_call_cmd_ex(
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
    char *message = malloc(sizeof(char) * (BUF_SZ + 1));
    char *payload_response = NULL;
+   const char *iface_lookup = normalize_iface_name(iface);
+
+   if (iface_lookup == NULL)
+      iface_lookup = "";
 
    if (response == NULL || message == NULL) {
       free(response);
@@ -538,10 +550,10 @@ int proxy_pass_call_cmd_ex(
       return 0;
    }
 
-   iface_entry = proxy_get_iface_entry((char *)iface);
+   iface_entry = proxy_get_iface_entry((char *)iface_lookup);
 
    if (iface_entry == NULL) {
-      stream_writeln(client_conn->sock, "400 Unsupported interface: %s", iface);
+      stream_writeln(client_conn->sock, "400 Unsupported interface: %s", iface_lookup ? iface_lookup : "");
       free(response);
       free(message);
       return ret;
@@ -559,7 +571,7 @@ int proxy_pass_call_cmd_ex(
    if (payload != NULL) {
       const char *enc_value = (encoding != NULL && encoding[0] != '\0') ? encoding : "NONE";
 
-      if (stream_writeln(conn->client.sock, "CALL %s %s PAYLOAD %s %zu", iface, cmd, enc_value, payload_len) < 0) {
+      if (stream_writeln(conn->client.sock, "CALL %s %s PAYLOAD %s %zu", iface_lookup, cmd, enc_value, payload_len) < 0) {
          ret = 0;
          goto cleanup;
       }
@@ -569,7 +581,7 @@ int proxy_pass_call_cmd_ex(
          goto cleanup;
       }
    } else {
-      if (stream_writeln(conn->client.sock, "CALL %s %s %s", iface, cmd, arg) < 0) {
+      if (stream_writeln(conn->client.sock, "CALL %s %s %s", iface_lookup, cmd, arg) < 0) {
          ret = 0;
          goto cleanup;
       }
