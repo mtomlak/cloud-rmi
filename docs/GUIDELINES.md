@@ -122,7 +122,7 @@ They apply equally to:
 ### 3.1 Versions vs Capabilities
 
 - **Protocol versions** define framing rules
-- **Capabilities** define optional features (stats, proxy, payload support)
+- **Capabilities** define optional features (stats, proxy) negotiated on top
 
 Rules:
 - Legacy clients default to legacy protocol
