@@ -2,6 +2,8 @@
 namespace ProfiWeb\CloudRMI;
 
 use ProfiWeb\CloudRMI\Support\ProcessFork;
+use ProfiWeb\CloudRMI\Exception\RemoteException;
+use ProfiWeb\CloudRMI\Exception\RemoteMethodInvocationException;
 
 /**
  * Remote Method Invocation server.

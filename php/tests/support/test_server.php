@@ -10,6 +10,8 @@ interface TestRmiInterface
     public function expand($payload);
     public function mirror($payload);
     public function largeResult($count);
+    public function fail($arg);
+    public function failPayload($payload);
 }
 
 class TestRmiHandler implements TestRmiInterface
@@ -48,6 +50,17 @@ class TestRmiHandler implements TestRmiInterface
         }
 
         return $items;
+    }
+
+    public function fail($arg)
+    {
+        throw new \RuntimeException('fail-inline:' . $arg);
+    }
+
+    public function failPayload($payload)
+    {
+        $label = is_scalar($payload) ? (string) $payload : gettype($payload);
+        throw new \RuntimeException('fail-payload:' . $label);
     }
 }
 
