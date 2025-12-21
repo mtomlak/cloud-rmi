@@ -22,6 +22,8 @@ class CloudRMIClient
 	protected $connection = null;
 	protected $connTimeout = false;
 	protected $readTimeout = 600;
+	protected $handshakeReadTimeout = 10;
+	protected $callReadTimeout = 30;
 	protected $throttleTimeout = false;	//10;
 	protected $throttleDuration = 0.01;
 	protected $connStarted = null;
@@ -50,7 +52,8 @@ class CloudRMIClient
 	public function connect()
 	{
 		$this->connStarted = time();
-		$socket = self::openSocket($this->host, $this->port, $this->readTimeout, $this->unixSocketPath);
+		$connectTimeout = ($this->connTimeout === false) ? $this->handshakeReadTimeout : $this->connTimeout;
+		$socket = self::openSocket($this->host, $this->port, $connectTimeout, $this->unixSocketPath);
 		
 		$this->setConnection($this->makeNewConnection(
 			$this->host,
@@ -59,18 +62,31 @@ class CloudRMIClient
 			$this->unixSocketPath
 			));
 
-		$banner = $this->connReadLn();
+		$previousTimeout = $this->readTimeout;
+		$this->readTimeout = $this->handshakeReadTimeout;
 
-		if (!is_string($banner) || $banner === '')
-			throw new RemoteMethodInvocationException("Cannot connect to RMI server: " . $this->describeEndpoint());
+		if (is_resource($socket))
+			stream_set_timeout($socket, $this->handshakeReadTimeout);
 
-		if (($statusCode = $this->parseStatusCode($banner)) === false || $statusCode != 220)
-			throw new RemoteMethodInvocationException("Error connecting to RMI server: $banner");
+		try {
+			$banner = $this->connReadLn();
 
-		$this->parseBanner($banner);
-		$this->negotiateProtocol();
-		$this->discoverCapabilities($banner);
-		$this->updateCapabilityFlags();
+			if (!is_string($banner) || $banner === '')
+				throw new RemoteMethodInvocationException("Cannot connect to RMI server: " . $this->describeEndpoint());
+
+			if (($statusCode = $this->parseStatusCode($banner)) === false || $statusCode != 220)
+				throw new RemoteMethodInvocationException("Error connecting to RMI server: $banner");
+
+			$this->parseBanner($banner);
+			$this->negotiateProtocol();
+			$this->discoverCapabilities($banner);
+			$this->updateCapabilityFlags();
+		} finally {
+			$this->readTimeout = $previousTimeout;
+
+			if (is_resource($socket))
+				stream_set_timeout($socket, $this->readTimeout);
+		}
 
 		return $this->getConnection();
 	}
@@ -124,7 +140,24 @@ class CloudRMIClient
 				return false;
 		}
 
-		$result = $this->readResponse();
+		$socket = $this->getConnection()->getSocket();
+		$previousTimeout = $this->readTimeout;
+
+		if (!is_null($this->callReadTimeout)) {
+			$this->readTimeout = $this->callReadTimeout;
+
+			if (is_resource($socket))
+				stream_set_timeout($socket, $this->callReadTimeout);
+		}
+
+		try {
+			$result = $this->readResponse();
+		} finally {
+			$this->readTimeout = $previousTimeout;
+
+			if (is_resource($socket))
+				stream_set_timeout($socket, $this->readTimeout);
+		}
 
 		if (!is_array($result) || !array_key_exists('line', $result))
 			throw new RemoteMethodInvocationException('Invalid response from server');
@@ -356,6 +389,16 @@ class CloudRMIClient
 	public function setMaxPayloadLength($bytes)
 	{
 		$this->maxPayload = (int) $bytes;
+	}
+
+	public function setHandshakeReadTimeout($seconds)
+	{
+		$this->handshakeReadTimeout = max(1, (int) $seconds);
+	}
+
+	public function setCallReadTimeout($seconds)
+	{
+		$this->callReadTimeout = is_null($seconds) ? null : max(1, (int) $seconds);
 	}
 
 	protected function getMinProtocolVersion()
