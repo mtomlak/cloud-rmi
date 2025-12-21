@@ -95,17 +95,16 @@ void handle_print_ifaces(struct conn_state *state)
 static int handle_command_event(rmi_event_t *event, struct conn_state *state, rmi_protocol_ctx_t *protocol_ctx)
 {
    int time_diff;
-   char *output = malloc(sizeof(char) * (BUF_SZ + 1));
+   char output[BUF_SZ + 1];
    time_t t;
    struct tm *tmp;
 
-   bzero(output, BUF_SZ);
+   memset(output, 0, sizeof(output));
 
    switch (event->type) {
    case RMI_EVENT_AUTH:
       if (!handle_auth_cmd(event->arg1, event->arg2, state)) {
          stream_writeln(state->sock, "401 Unauthorized");
-         free(output);
          return 0;
       }
       break;
@@ -115,7 +114,6 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
 
       if (requested < 1 || requested > SERVER_MAX_PROTOCOL_VERSION) {
          stream_writeln(state->sock, "400 Bad Request");
-         free(output);
          return 0;
       }
 
@@ -123,7 +121,6 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
          stream_writeln(state->sock, "400 Bad Request");
          if (protocol_ctx != NULL)
             rmi_protocol_set_version(protocol_ctx, state->protocol_version);
-         free(output);
          return 0;
       }
 
@@ -269,7 +266,6 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
 
    case RMI_EVENT_QUIT:
       stream_writeln(state->sock, "221 Bye");
-      free(output);
       return 0;
 
 #ifdef PROXY_SUPPORT
@@ -297,8 +293,6 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
    default:
       stream_writeln(state->sock, "400 Bad Request");
    }
-
-   free(output);
 
    return 1;
 }
