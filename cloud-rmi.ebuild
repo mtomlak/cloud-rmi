@@ -11,7 +11,10 @@ SLOT="0"
 KEYWORDS="amd64"
 IUSE="+server +client proxy php linux debug"
 
-DEPEND="sys-libs/glibc"
+DEPEND="
+    sys-libs/glibc
+    php? ( >=dev-lang/php-8.3:* )
+"
 RDEPEND="${DEPEND}"
 
 src_compile() {
@@ -31,5 +34,7 @@ src_install() {
 	use client && emake DESTDIR="${D}" client_install
 	use proxy  && emake DESTDIR="${D}" proxy_install
 
-	use php && emake DESTDIR="${D}" php_install
+	use php && emake -C php/ext/profiweb_cloudrmi \
+            INSTALL_ROOT="${D}" \
+            install
 }
