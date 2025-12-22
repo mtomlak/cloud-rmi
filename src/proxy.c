@@ -10,6 +10,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
+#include <stdarg.h>
 #include "cloud-rmi.h"
 #include "config.h"
 #include "proxy.h"
@@ -33,6 +35,10 @@ int proxy_count;
 int proxy_manager_pipe[2];
 int var_proxy_min_spare_conns = 3;
 struct proxy_iface_entry *proxy_iface_map;
+#define PROXY_STATS_CLIENT_LIMIT 50
+#define PROXY_CONNECT_MAX_ATTEMPTS 3
+#define PROXY_CONNECT_RETRY_DELAY_US 100000
+#define PROXY_STATS_CLIENT_LIMIT 50
 
 static const char *normalize_iface_name(const char *iface)
 {
@@ -138,6 +144,128 @@ static int parse_proxy_address(
    return 1;
 }
 
+static int proxy_in_cooldown(const struct proxy_server *proxy)
+{
+   if (proxy == NULL)
+      return 1;
+
+   if (proxy->next_retry_at == 0)
+      return 0;
+
+   return time(NULL) < proxy->next_retry_at;
+}
+
+static void proxy_mark_failure(struct proxy_server *proxy, const char *reason)
+{
+   time_t now = time(NULL);
+
+   if (proxy == NULL)
+      return;
+
+   proxy->is_available = 0;
+   proxy->last_failure_at = now;
+   proxy->next_retry_at = now + 60;
+
+   log_unexpected_event(
+      LOG_WARNING,
+      "proxy-backend-unavailable proxy_id=%i reason=%s retry_at=%ld",
+      proxy->proxy_id,
+      reason != NULL ? reason : "unknown",
+      (long)proxy->next_retry_at);
+}
+
+static void proxy_mark_success(struct proxy_server *proxy)
+{
+   if (proxy == NULL)
+      return;
+
+   proxy->is_available = 1;
+   proxy->last_failure_at = 0;
+   proxy->next_retry_at = 0;
+}
+
+static int proxy_append_format(char *buf, size_t buf_sz, size_t *offset, const char *fmt, ...)
+{
+   va_list args;
+   int written;
+
+   if (buf == NULL || offset == NULL || *offset >= buf_sz)
+      return 0;
+
+   va_start(args, fmt);
+   written = vsnprintf(buf + *offset, buf_sz - *offset, fmt, args);
+   va_end(args);
+
+   if (written < 0 || (size_t)written >= buf_sz - *offset) {
+      *offset = buf_sz;
+      return 0;
+   }
+
+   *offset += (size_t)written;
+   return 1;
+}
+
+static size_t proxy_json_escape_into(char *dst, size_t dst_size, const char *src)
+{
+   size_t written = 0;
+
+   if (dst_size == 0)
+      return 0;
+
+   if (src == NULL)
+      src = "";
+
+   while (src[0] != '\0' && written + 1 < dst_size) {
+      char c = *src;
+      const char *escape = NULL;
+
+      switch (c) {
+      case '\"':
+         escape = "\\\"";
+         break;
+      case '\\':
+         escape = "\\\\";
+         break;
+      case '\n':
+         escape = "\\n";
+         break;
+      case '\r':
+         escape = "\\r";
+         break;
+      case '\t':
+         escape = "\\t";
+         break;
+      default:
+         break;
+      }
+
+      if (escape != NULL) {
+         size_t elen = strlen(escape);
+
+         if (written + elen >= dst_size)
+            break;
+
+         memcpy(dst + written, escape, elen);
+         written += elen;
+      } else {
+         dst[written++] = c;
+      }
+
+      src++;
+   }
+
+   dst[written] = '\0';
+   return written;
+}
+
+static void proxy_json_array_append(char *buf, size_t buf_sz, size_t *offset, const char *value, int is_first)
+{
+   char escaped[BUF_SZ + 1];
+
+   proxy_json_escape_into(escaped, sizeof(escaped), value);
+   proxy_append_format(buf, buf_sz, offset, "%s\"%s\"", is_first ? "" : ",", escaped);
+}
+
 
 //
 // Proxy list management
@@ -183,6 +311,9 @@ struct proxy_server new_proxy_struct(const char *hostname, int port, const char 
    proxy.proxy_id = 0;      // will be set when it gets ID assigned
    proxy.conn_count = 0;
    proxy.port = port;
+   proxy.last_failure_at = 0;
+   proxy.next_retry_at = 0;
+   proxy.is_available = 1;
    if (hostname != NULL) {
       strncpy(proxy.hostname, hostname, sizeof(proxy.hostname) - 1);
    }
@@ -234,20 +365,40 @@ int proxy_start_new_conn(int proxy_id)
 {
    struct rmi_client_conn client;
    struct proxy_server *proxy = proxy_list_get(proxy_id);
+   int attempt = 0;
+
+   if (proxy_in_cooldown(proxy))
+      return -1;
 
    // Connect
-   if (client_connect(
-      proxy->hostname,
-      proxy->port,
-      proxy->use_unix_socket ? proxy->unix_socket_path : NULL,
-      &client
-      ) < 0)
-      die_err("Error: Failed to connect to the server as a proxy");
+   while (attempt < PROXY_CONNECT_MAX_ATTEMPTS) {
+      if (client_connect(
+         proxy->hostname,
+         proxy->port,
+         proxy->use_unix_socket ? proxy->unix_socket_path : NULL,
+         &client
+         ) >= 0)
+         break;
+
+      attempt++;
+      usleep(PROXY_CONNECT_RETRY_DELAY_US);
+   }
+
+   if (attempt >= PROXY_CONNECT_MAX_ATTEMPTS) {
+      proxy_mark_failure(proxy, "connect-failed");
+      return -1;
+   }
 
    // Authenticate
-   if (var_recovery_token != NULL)
-      if (!client_auth_by_token(&client, var_recovery_token))
-         die_err("Error: Token authentication failed");
+   if (var_recovery_token != NULL) {
+      if (!client_auth_by_token(&client, var_recovery_token)) {
+         client_disconnect(&client);
+         proxy_mark_failure(proxy, "auth-failed");
+         return -1;
+      }
+   }
+
+   proxy_mark_success(proxy);
 
    // Add socket to the list
    return proxy_add_conn(proxy_id, client);
@@ -257,23 +408,43 @@ int proxy_restart_conn(struct proxy_conn *conn)
 {
    int proxy_id;
    struct proxy_server *proxy;
+   int attempt = 0;
 
    DEBUG_LOG("Proxy: Restarting connection to proxy #%i", conn->proxy_id);
 
    proxy_id = conn->proxy_id;
    proxy = proxy_list_get(proxy_id);
    client_disconnect(&conn->client);
-   if (client_connect(
-      proxy->hostname,
-      proxy->port,
-      proxy->use_unix_socket ? proxy->unix_socket_path : NULL,
-      &conn->client
-      ) < 0)
-      die_err("Error: Failed to connect to the server as a proxy");
+
+   if (proxy_in_cooldown(proxy))
+      return 0;
+
+   while (attempt < PROXY_CONNECT_MAX_ATTEMPTS) {
+      if (client_connect(
+         proxy->hostname,
+         proxy->port,
+         proxy->use_unix_socket ? proxy->unix_socket_path : NULL,
+         &conn->client
+         ) >= 0)
+         break;
+
+      attempt++;
+      usleep(PROXY_CONNECT_RETRY_DELAY_US);
+   }
+
+   if (attempt >= PROXY_CONNECT_MAX_ATTEMPTS) {
+      proxy_mark_failure(proxy, "reconnect-failed");
+      return 0;
+   }
 
    if (var_recovery_token != NULL)
-      if (!client_auth_by_token(&conn->client, var_recovery_token))
-         die_err("Error: Token authentication failed");
+      if (!client_auth_by_token(&conn->client, var_recovery_token)) {
+         client_disconnect(&conn->client);
+         proxy_mark_failure(proxy, "auth-failed");
+         return 0;
+      }
+
+   proxy_mark_success(proxy);
 
    return 1;
 }
@@ -284,9 +455,12 @@ int proxy_restart_conn(struct proxy_conn *conn)
 struct proxy_conn *proxy_get_free_conn(int proxy_id)
 {
    int i;
+   struct proxy_server *proxy;
 
    if (proxy_id > proxy_count)
       die_err("Error: Cannot load proxy connection from memory");
+
+   proxy = proxy_list_get(proxy_id);
 
    for (i = 0; i < proxy_list[proxy_id].conn_count; i++) {
       if (!proxy_list[proxy_id].conns[i].is_busy)
@@ -296,7 +470,10 @@ struct proxy_conn *proxy_get_free_conn(int proxy_id)
    // If we got here, all connections are busy, need to create new one
    i = proxy_start_new_conn(proxy_id);
 
-   return &proxy_list[proxy_id].conns[i];
+   if (i < 0)
+      return NULL;
+
+   return &proxy->conns[i];
 }
 
 void proxy_set_conn_busy(struct proxy_conn *conn)
@@ -360,6 +537,30 @@ struct proxy_iface_entry *proxy_get_iface_entry(char *iface_name)
    return NULL;
 }
 
+static void proxy_clear_iface_entries(int proxy_id)
+{
+   struct proxy_iface_entry *cur = proxy_iface_map;
+   struct proxy_iface_entry *prev = NULL;
+
+   while (cur != NULL) {
+      struct proxy_iface_entry *next = cur->next;
+
+      if (cur->proxy_id == proxy_id) {
+         if (prev == NULL)
+            proxy_iface_map = next;
+         else
+            prev->next = next;
+
+         free(cur->iface);
+         free(cur);
+      } else {
+         prev = cur;
+      }
+
+      cur = next;
+   }
+}
+
 void proxy_add_iface_entry(int proxy_id, char *iface_name)
 {
    DEBUG_LOG("Proxy: Adding interface %s for proxy #%i", iface_name, proxy_id);
@@ -372,53 +573,143 @@ void proxy_add_iface_entry(int proxy_id, char *iface_name)
 
 int proxy_fetch_interfaces(int proxy_num)
 {
-   int status_code, byte; 
-   int size = 0;
-   int ln = 0;
+   int status_code;
    struct proxy_conn *conn;
+   struct proxy_server *proxy;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
-   char *iface = malloc(sizeof(char) * (BUF_SZ + 1));
+   char **parsed = NULL;
+   size_t parsed_count = 0;
+   int ret = 0;
+
+   if (response == NULL)
+      return 0;
 
    bzero(response, BUF_SZ);
-   bzero(iface, BUF_SZ);
 
    if (proxy_num > proxy_count)
-      die_err("Error: Cannot load interfaces from non-existend proxy");
+      goto cleanup;
 
-   // Get interfaces
+   proxy = proxy_list_get(proxy_num);
+
    conn = proxy_get_free_conn(proxy_num);
+   if (conn == NULL) {
+      proxy_mark_failure(proxy, "iface-conn-unavailable");
+      goto cleanup;
+   }
+
    proxy_set_conn_busy(conn);
    status_code = client_raw_cmd(&conn->client, "IFACES", response);
    proxy_set_conn_free(conn);
 
-   if (status_code != 200)
-      die_err("Error: Cannot load interfaces from non-existend proxy");
-
-   // Load each line of data into array
-   for(byte = 0; byte <= strlen(response); byte++) {
-      if (response[byte] == '\r')
-         continue;
-
-      if (response[byte] == '\n' || response[byte] == '\0') {
-         if (size > 0) {
-            proxy_add_iface_entry(proxy_num, (char *)normalize_iface_name(iface));
-         }
-         bzero(iface, BUF_SZ);
-         size = 0;
-         ln++;
-         continue;
-      }
-
-      if (ln > 0) {
-         iface[size] = response[byte];
-         size++;
-      }
+   if (status_code != 200) {
+      proxy_mark_failure(proxy, "iface-status");
+      goto cleanup;
    }
 
-   free(iface);
-   free(response);
+   char *payload = response;
+   while (*payload == ' ')
+      payload++;
 
-   return 1;
+   if (strncmp(payload, "JSON", 4) != 0) {
+      proxy_mark_failure(proxy, "iface-format");
+      goto cleanup;
+   }
+
+   payload += 4;
+   while (*payload == ' ')
+      payload++;
+
+   if (*payload != '[') {
+      proxy_mark_failure(proxy, "iface-array-missing");
+      goto cleanup;
+   }
+
+   const char *cursor = payload + 1;
+   while (*cursor != '\0') {
+      while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n')
+         cursor++;
+
+      if (*cursor == ']') {
+         ret = 1;
+         break;
+      }
+
+      if (*cursor != '\"') {
+         proxy_mark_failure(proxy, "iface-entry-missing");
+         goto cleanup;
+      }
+
+      cursor++;
+      char iface[PROXY_IFACE_MAX_SZ + 1];
+      size_t len = 0;
+
+      while (*cursor != '\0' && *cursor != '\"' && len < PROXY_IFACE_MAX_SZ) {
+         if (*cursor == '\\' && cursor[1] != '\0') {
+            char escaped = cursor[1];
+            if (escaped == 'n')
+               iface[len++] = '\n';
+            else if (escaped == 'r')
+               iface[len++] = '\r';
+            else if (escaped == 't')
+               iface[len++] = '\t';
+            else
+               iface[len++] = escaped;
+            cursor += 2;
+         } else {
+            iface[len++] = *cursor;
+            cursor++;
+         }
+      }
+
+      if (*cursor != '\"') {
+         proxy_mark_failure(proxy, "iface-entry-unclosed");
+         goto cleanup;
+      }
+
+      iface[len] = '\0';
+      cursor++;  // closing quote
+
+      char *dup = strdup(iface);
+      char **tmp;
+
+      if (dup == NULL) {
+         proxy_mark_failure(proxy, "iface-oom");
+         goto cleanup;
+      }
+
+      tmp = realloc(parsed, sizeof(char *) * (parsed_count + 1));
+      if (tmp == NULL) {
+         free(dup);
+         proxy_mark_failure(proxy, "iface-oom");
+         goto cleanup;
+      }
+
+      parsed = tmp;
+      parsed[parsed_count++] = dup;
+
+      while (*cursor != '\0' && *cursor != ',' && *cursor != ']')
+         cursor++;
+
+      if (*cursor == ',')
+         cursor++;
+   }
+
+   proxy_clear_iface_entries(proxy_num);
+   for (size_t i = 0; i < parsed_count; i++) {
+      proxy_add_iface_entry(proxy_num, (char *)normalize_iface_name(parsed[i]));
+   }
+
+   proxy_mark_success(proxy);
+
+cleanup:
+   if (parsed != NULL) {
+      for (size_t i = 0; i < parsed_count; i++)
+         free(parsed[i]);
+
+      free(parsed);
+   }
+   free(response);
+   return ret;
 }
 
 
@@ -434,36 +725,79 @@ int proxy_fetch_interfaces(int proxy_num)
 void proxy_send_stats(int sock)
 {
    int i, j;
-   struct proxy_server *proxy;
+   int trimmed = 0;
+   size_t offset = 0;
+   char line[BUF_SZ + 1];
 
-   stream_writeln(sock, "Server Connections:\nHostname:\tPort:\tConnections (free/total):");
-
-   for (i = 0; i < proxy_count; i++) {
-      proxy = proxy_list_get(i);
-      const char *label = proxy->use_unix_socket ? proxy->unix_socket_path : proxy->hostname;
-      char port_buf[32];
-      snprintf(port_buf, sizeof(port_buf), "%s", proxy->use_unix_socket ? "-" : "");
-
-      if (!proxy->use_unix_socket)
-         snprintf(port_buf, sizeof(port_buf), "%i", proxy->port);
-
-      stream_writeln(sock,  "%s\t%s\t%i/%i", label, port_buf, proxy_get_spare_conn_count(i), proxy->conn_count);
-   }
-
-   stream_writeln(sock, "\nClient Connections:");
-   stream_writeln(sock, "Connection ID:\tProxy ID:\tSocket:\tIs Busy:");
+   proxy_append_format(line, sizeof(line), &offset, "200 JSON {\"servers\":[");
 
    for (i = 0; i < proxy_count; i++) {
-      proxy = proxy_list_get(i);
+      struct proxy_server *proxy = proxy_list_get(i);
+      char label[PROXY_HOSTNAME_SZ + PROXY_UNIX_PATH_SZ + 4];
+      int ok;
 
-      if (proxy->conn_count > 0) {
-          for (j = 0; j < proxy->conn_count; j++) {
-              struct proxy_conn *conn = &proxy->conns[j];
-              stream_writeln(sock, "%i\t\t%i\t\t%i\t%i", conn->conn_id, conn->proxy_id, conn->client.sock, conn->is_busy);
-          }
+      proxy_json_escape_into(label, sizeof(label), proxy->use_unix_socket ? proxy->unix_socket_path : proxy->hostname);
+
+      ok = proxy_append_format(
+         line,
+         sizeof(line),
+         &offset,
+         "%s{\"id\":%i,\"label\":\"%s\",\"port\":%i,\"unix\":%s,\"free\":%i,\"total\":%i,\"available\":%s}",
+         (i == 0) ? "" : ",",
+         i,
+         label,
+         proxy->use_unix_socket ? 0 : proxy->port,
+         proxy->use_unix_socket ? "true" : "false",
+         proxy_get_spare_conn_count(i),
+         proxy->conn_count,
+         proxy->is_available ? "true" : "false");
+
+      if (!ok) {
+         trimmed = 1;
+         break;
       }
    }
-   stream_write(sock, "\n\n");   // end data with empty line
+
+   proxy_append_format(line, sizeof(line), &offset, "],\"clients\":[");
+
+   size_t client_count = 0;
+   for (i = 0; i < proxy_count; i++) {
+      struct proxy_server *proxy = proxy_list_get(i);
+
+      for (j = 0; j < proxy->conn_count; j++) {
+         struct proxy_conn *conn = &proxy->conns[j];
+         int ok;
+
+         if (client_count >= PROXY_STATS_CLIENT_LIMIT) {
+            trimmed = 1;
+            break;
+         }
+
+         ok = proxy_append_format(
+            line,
+            sizeof(line),
+            &offset,
+            "%s{\"conn_id\":%i,\"proxy_id\":%i,\"socket\":%i,\"busy\":%s}",
+            (client_count == 0) ? "" : ",",
+            conn->conn_id,
+            conn->proxy_id,
+            conn->client.sock,
+            conn->is_busy ? "true" : "false");
+
+         if (!ok) {
+            trimmed = 1;
+            break;
+         }
+
+         client_count++;
+      }
+
+      if (trimmed)
+         break;
+   }
+
+   proxy_append_format(line, sizeof(line), &offset, "],\"trimmed\":%s}", trimmed ? "true" : "false");
+   stream_writeln(sock, "%s", line);
 }
 
 
@@ -471,15 +805,28 @@ int proxy_pass_raw_cmd(int proxy_num, struct conn_state *client_conn, char *cmd)
 {
    int status_code, ret = 1; 
    struct proxy_conn *conn;
+   struct proxy_server *proxy;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
 
    bzero(response, BUF_SZ);
 
-   if (proxy_num > proxy_list_count())
-      die_err("Error: proxy_pass_raw_cmd(): Cannot find proxy by ID");
+   if (proxy_num > proxy_list_count()) {
+      stream_writeln(client_conn->sock, "503 Service Unavailable");
+      free(response);
+      return 0;
+   }
+
+   proxy = proxy_list_get(proxy_num);
 
    // Get interfaces
    conn = proxy_get_free_conn(proxy_num);
+   if (conn == NULL) {
+      proxy_mark_failure(proxy, "conn-unavailable");
+      stream_writeln(client_conn->sock, "503 Service Unavailable");
+      free(response);
+      return 0;
+   }
+
    proxy_set_conn_busy(conn);
    status_code = client_raw_cmd(&conn->client, cmd, response);
 
@@ -490,8 +837,10 @@ int proxy_pass_raw_cmd(int proxy_num, struct conn_state *client_conn, char *cmd)
          proxy_num,
          status_code);
 
-      proxy_restart_conn(conn);
-      status_code = client_raw_cmd(&conn->client, cmd, response);
+      if (proxy_restart_conn(conn))
+         status_code = client_raw_cmd(&conn->client, cmd, response);
+      else
+         status_code = 503;
    }
 
    if (!status_code) {
@@ -504,7 +853,13 @@ int proxy_pass_raw_cmd(int proxy_num, struct conn_state *client_conn, char *cmd)
          proxy_num);
 
       ret = 0;
+      proxy_mark_failure(proxy, "status-missing");
    }
+
+   if (status_code == 200)
+      proxy_mark_success(proxy);
+   else if (status_code == 503 && response[0] == '\0')
+      strcpy(response, "Service Unavailable");
 
    stream_writeln(client_conn->sock, "%i %s", status_code, response);
    proxy_set_conn_free(conn);
@@ -526,10 +881,13 @@ int proxy_pass_call_cmd_ex(
    int ret = 1;
    struct proxy_iface_entry *iface_entry;
    struct proxy_conn *conn;
+   struct proxy_server *proxy = NULL;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
    char *message = malloc(sizeof(char) * (BUF_SZ + 1));
    char *payload_response = NULL;
    const char *iface_lookup = normalize_iface_name(iface);
+   int status_code = 0;
+   int responded = 0;
 
    if (iface_lookup == NULL)
       iface_lookup = "";
@@ -556,9 +914,18 @@ int proxy_pass_call_cmd_ex(
       return ret;
    }
 
+   proxy = proxy_list_get(iface_entry->proxy_id);
+
    DEBUG_LOG("Proxy: Passing CALL command to proxy #%i", iface_entry->proxy_id);
 
    conn = proxy_get_free_conn(iface_entry->proxy_id);
+   if (conn == NULL) {
+      proxy_mark_failure(proxy, "conn-unavailable");
+      stream_writeln(client_conn->sock, "503 Service Unavailable");
+      ret = 0;
+      responded = 1;
+      goto cleanup;
+   }
    proxy_set_conn_busy(conn);
 
    bzero(response, BUF_SZ);
@@ -568,29 +935,53 @@ int proxy_pass_call_cmd_ex(
       const char *enc_value = (encoding != NULL && encoding[0] != '\0') ? encoding : "NONE";
 
       if (stream_writeln(conn->client.sock, "CALL %s %s PAYLOAD %s %zu", iface_lookup, cmd, enc_value, payload_len) < 0) {
+         status_code = 503;
+         snprintf(message, BUF_SZ, "Service Unavailable");
          ret = 0;
+         responded = 1;
+         stream_writeln(client_conn->sock, "%i %s", status_code, message);
+         proxy_mark_failure(proxy, "call-send-failed");
          goto cleanup;
       }
 
       if (payload_len > 0 && !proxy_write_all(conn->client.sock, payload, payload_len)) {
+         status_code = 503;
+         snprintf(message, BUF_SZ, "Service Unavailable");
          ret = 0;
+         responded = 1;
+         stream_writeln(client_conn->sock, "%i %s", status_code, message);
+         proxy_mark_failure(proxy, "call-payload-write-failed");
          goto cleanup;
       }
    } else {
       if (stream_writeln(conn->client.sock, "CALL %s %s %s", iface_lookup, cmd, arg) < 0) {
+         status_code = 503;
+         snprintf(message, BUF_SZ, "Service Unavailable");
          ret = 0;
+         responded = 1;
+         stream_writeln(client_conn->sock, "%i %s", status_code, message);
+         proxy_mark_failure(proxy, "call-send-failed");
          goto cleanup;
       }
    }
 
    if (stream_readln(conn->client.sock, response, BUF_SZ) < 0) {
+      status_code = 503;
+      snprintf(message, BUF_SZ, "Service Unavailable");
       ret = 0;
+      responded = 1;
+      stream_writeln(client_conn->sock, "%i %s", status_code, message);
+      proxy_mark_failure(proxy, "call-read-failed");
       goto cleanup;
    }
 
-   int status_code = 0;
    if (!client_parse_status_code(response, &status_code, message)) {
+      status_code = 503;
+      snprintf(message, BUF_SZ, "Service Unavailable");
       ret = 0;
+      responded = 1;
+      stream_writeln(client_conn->sock, "%i %s", status_code, message);
+      proxy_mark_failure(proxy, "call-parse-failed");
       goto cleanup;
    }
 
@@ -662,6 +1053,7 @@ int proxy_pass_call_cmd_ex(
 
          if (response_len > 0)
             proxy_write_all(client_conn->sock, (const uint8_t *)payload_response, (size_t)response_len);
+         responded = 1;
       } else {
          size_t encoded_len = (((size_t)response_len + 2) / 3) * 4 + 1;
          char *encoded = malloc(encoded_len);
@@ -676,15 +1068,41 @@ int proxy_pass_call_cmd_ex(
          else
             encoded[0] = '\0';
 
-         stream_writeln(client_conn->sock, "%i %s", status_code, encoded);
+         const char *encoding_label = response_enc[0] != '\0' ? response_enc : "PLAIN";
+
+         stream_writeln(client_conn->sock, "%i %s:%s", status_code, encoding_label, encoded);
          free(encoded);
+         responded = 1;
       }
    } else {
       stream_writeln(client_conn->sock, "%i %s", status_code, message);
+      responded = 1;
    }
 
 cleanup:
-   proxy_set_conn_free(conn);
+   if (ret == 0 && status_code == 200)
+      status_code = 503;
+
+   if (!responded) {
+      if (status_code == 0)
+         status_code = 503;
+
+      if (message[0] == '\0')
+         snprintf(message, BUF_SZ, "Service Unavailable");
+
+      stream_writeln(client_conn->sock, "%i %s", status_code, message);
+      responded = 1;
+   }
+
+   if (proxy != NULL) {
+      if (status_code == 200)
+         proxy_mark_success(proxy);
+      else if (ret == 0 || status_code == 503)
+         proxy_mark_failure(proxy, "call-failed");
+   }
+
+   if (conn != NULL)
+      proxy_set_conn_free(conn);
    free(response);
    free(message);
    free(payload_response);
@@ -698,21 +1116,23 @@ int proxy_pass_call_cmd(char *iface, char *cmd, char *arg, struct conn_state *cl
 }
 
 void proxy_print_ifaces(struct conn_state *state)
-{   
+{
    struct proxy_iface_entry *entry;
+   char line[BUF_SZ + 1];
+   size_t offset = 0;
+   int is_first = 1;
 
-   stream_writeln(state->sock, "200 Supported CALL interfaces:");
-
-   if (proxy_iface_map == NULL)
-      stream_writeln(state->sock, "- Empty proxy interface map -");
+   proxy_append_format(line, sizeof(line), &offset, "200 JSON [");
 
    entry = proxy_iface_map;
-
    while (entry != NULL) {
-      stream_writeln(state->sock, "%s", entry->iface);
+      proxy_json_array_append(line, sizeof(line), &offset, entry->iface, is_first);
+      is_first = 0;
       entry = entry->next;
    }
-   stream_write(state->sock, "\n");
+
+   proxy_append_format(line, sizeof(line), &offset, "]");
+   stream_writeln(state->sock, "%s", line);
 }
 
 int proxy_get_spare_conn_count(int proxy_id)
@@ -811,6 +1231,7 @@ int proxy_conn_keepalive(struct proxy_conn *conn)
 {
    int status_code, ret = 1;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
+   struct proxy_server *proxy = proxy_list_get(conn->proxy_id);
 
    bzero(response, BUF_SZ);
 
@@ -819,14 +1240,19 @@ int proxy_conn_keepalive(struct proxy_conn *conn)
 
    // Try to reconnect stale connection
    if (!status_code || status_code == 408) {  // 408 - request timeout
-      proxy_restart_conn(conn);
-      status_code = client_raw_cmd(&conn->client, "NOOP", response);
+      if (proxy_restart_conn(conn))
+         status_code = client_raw_cmd(&conn->client, "NOOP", response);
+      else
+         status_code = 503;
    }
 
-   if (!status_code) {
+   if (!status_code || status_code == 503) {
       status_code = 503;
       log_unexpected_event(LOG_WARNING, "proxy-keepalive-failed proxy_id=%i", conn->proxy_id);
+      proxy_mark_failure(proxy, "keepalive-failed");
       ret = 0;
+   } else {
+      proxy_mark_success(proxy);
    }
    proxy_set_conn_free(conn);
 
@@ -948,7 +1374,8 @@ int proxy_start(char *host_addresses)
 
       if (host_addresses[byte] == ',' || host_addresses[byte] == '\0') {
          if (!parse_proxy_address(address, hostname, PROXY_HOSTNAME_SZ, &proxy_port, unix_socket, PROXY_UNIX_PATH_SZ)) {
-            die_err("failed to parse proxy hostname or unix socket path");
+            log_unexpected_event(LOG_ERR, "proxy-parse-failed address=%s", address);
+            goto reset_state;
          }
 
          if (unix_socket[0] != '\0') {
@@ -957,12 +1384,14 @@ int proxy_start(char *host_addresses)
             proxy_ip = get_ip_addr(hostname);
  
             if (proxy_ip == NULL) {
-               die_err("failed to resolve proxy hostname");
+               log_unexpected_event(LOG_ERR, "proxy-resolve-failed host=%s", hostname);
+               goto reset_state;
             }
             proxy_start_new(proxy_ip, proxy_port, NULL);
             free(proxy_ip);
          }
 
+reset_state:
          bzero(hostname, PROXY_HOSTNAME_SZ);
          bzero(address, PROXY_HOSTNAME_SZ);
          bzero(unix_socket, PROXY_UNIX_PATH_SZ);

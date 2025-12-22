@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <stdint.h>
 #include <ctype.h>
+#include <errno.h>
 #include "config.h"
 #include "cloud-rmi.h"
 #include "capabilities.h"
@@ -263,6 +264,11 @@ int client_connect(char *hostname, int port_num, const char *unix_socket_path, s
          sock,
          use_unix_socket ? (struct sockaddr *)&serv_addr_un : (struct sockaddr *) &serv_addr,
          use_unix_socket ? sizeof(serv_addr_un) : sizeof(serv_addr)) < 0) {
+      log_unexpected_event(
+         LOG_ERR,
+         "client-connect-failed unix=%i errno=%i",
+         use_unix_socket,
+         errno);
       printf("Error: connect() failed\n");
       free(response);
       free(message);

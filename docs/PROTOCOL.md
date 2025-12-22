@@ -282,6 +282,24 @@ Rules:
 - Server MUST NOT downgrade to inline if MAX_LINE would be exceeded
 - Payload response framing must exactly match the announced length
 
+### 10.3 Response Line Rules and JSON Marker
+
+- Every response is exactly **one line**. Control/status text and JSON payloads
+  must not embed newlines; binary data always rides the explicit PAYLOAD
+  channel rather than being inlined.
+- Plaintext status and control keywords remain plaintext (`200 OK`, `400 Bad
+  Request`, `200 PAYLOAD ...`). Do **not** wrap protocol directives in JSON.
+- Structured responses use the explicit `JSON` marker and keep the JSON string
+  as the final token: `200 JSON <json>`. JSON is emitted on a single line
+  (compact form, no pretty printing).
+- Enumerations are JSON arrays (e.g., HELP/IFACES/CAPS → `200 JSON ["AUTH",…]`)
+  while structured/named data is a JSON object. Avoid wrapping arrays in an
+  object “for future extensibility”; switch to an object only when new fields
+  are required.
+- When payload responses are converted to inline form for legacy clients (for
+  example, by a proxy), keep the encoding token as a prefix before the base64
+  payload (`<encoding>:<base64>`).
+
 ---
 
 ## 11. Error Reporting Model (Summary)

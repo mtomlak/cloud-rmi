@@ -136,6 +136,7 @@ class ProtocolSession:
         namespace: str,
         timeout: float = 5.0,
         unix_socket: str | None = None,
+        negotiate_proto: bool = True,
     ) -> None:
         self.host = host
         self.port = port
@@ -146,6 +147,7 @@ class ProtocolSession:
         self.sock: Optional[socket.socket] = None
         self.protocol_version = 1
         self.trace = WireTrace()
+        self.negotiate_proto = negotiate_proto
 
     def __enter__(self) -> "ProtocolSession":
         self.connect()
@@ -177,7 +179,7 @@ class ProtocolSession:
         if auth_status != 200:
             raise RuntimeError("Authentication failed")
 
-        if server_max_proto >= 2:
+        if server_max_proto >= 2 and self.negotiate_proto:
             self._send_line("PROTO 2")
             proto_status, _ = parse_status(self._read_line())
             if proto_status == 200:
@@ -276,8 +278,15 @@ class ProtocolSession:
             if payload_resp:
                 decoded = payload_resp.decode("utf-8", errors="replace")
             elif message:
+                prefix = ""
+                base64_payload = message
+
+                if ":" in message:
+                    prefix, base64_payload = message.split(":", 1)
+
                 try:
-                    decoded = base64.b64decode(message).decode("utf-8", errors="replace")
+                    decoded_payload = base64.b64decode(base64_payload).decode("utf-8", errors="replace")
+                    decoded = f"{prefix}:{decoded_payload}" if prefix else decoded_payload
                 except Exception:
                     decoded = ""
 

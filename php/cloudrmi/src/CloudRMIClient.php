@@ -734,8 +734,16 @@ class CloudRMIClient
 		if ($code == 200) {
 			$parts = explode(' ', $response, 2);
 			$capsRaw = isset($parts[1]) ? trim($parts[1]) : '';
-			if ($capsRaw !== '')
+
+			if (stripos($capsRaw, 'JSON') === 0) {
+				$json = trim(substr($capsRaw, 4));
+				$decoded = json_decode($json, true);
+
+				if (is_array($decoded))
+					$this->capabilities = $this->normalizeCapabilityTokens($decoded);
+			} elseif ($capsRaw !== '') {
 				$this->capabilities = $this->normalizeCapabilityTokens(preg_split('/[\s,]+/', $capsRaw));
+			}
 		}
 	}
 

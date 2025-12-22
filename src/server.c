@@ -16,6 +16,7 @@
 #include <syslog.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <errno.h>
 #include "cloud-rmi.h"
 #include "config.h"
 #include <sys/wait.h>
@@ -39,9 +40,20 @@ static int server_socket_fd = -1;
 static char server_socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)] = {0};
 static volatile sig_atomic_t server_should_run = 1;
 static int server_use_unix_socket = 0;
+static pid_t server_owner_pid = 0;
 
 static void cleanup_listen_socket()
 {
+   if (server_owner_pid != 0 && getpid() != server_owner_pid)
+      return;
+
+   log_unexpected_event(
+      LOG_INFO,
+      "server-cleanup pid=%i owner=%i unix=%i",
+      (int)getpid(),
+      (int)server_owner_pid,
+      server_use_unix_socket);
+
    server_should_run = 0;
 
    if (server_socket_fd >= 0) {
@@ -664,7 +676,7 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
       DEBUG_LOG("- Shutting down child with PID %i", (int) getpid());
 
       close(sock);
-      exit(0);
+      _exit(0);
    }
    close(sock); // We're back in parent, child has it's own copy now
    
@@ -687,6 +699,7 @@ int server_start(int port_num, const char *unix_socket_path)
    struct sockaddr_storage cli_addr;
    const int use_unix_socket = unix_socket_path && strlen(unix_socket_path);
 
+   server_owner_pid = getpid();
    server_should_run = 1;
    server_socket_fd = -1;
    server_socket_path[0] = '\0';
@@ -787,6 +800,18 @@ int server_start(int port_num, const char *unix_socket_path)
    } /* end of while */
 
    cleanup_listen_socket();
+
+   /* Reap any remaining children before exiting to avoid zombies when the
+    * parent process is terminated by the test harness or the init system.
+    */
+   while (1) {
+      pid_t reap = waitpid(-1, NULL, 0);
+      if (reap <= 0) {
+         if (reap < 0 && errno == EINTR)
+            continue;
+         break;
+      }
+   }
 
 #ifdef REUSE_WORKER_PROC
    manager_handle_sigterm(SIGTERM);
