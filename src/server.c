@@ -13,11 +13,17 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <signal.h>
+#include <syslog.h>
 #include "cloud-rmi.h"
 #include "config.h"
 #include <sys/wait.h>
 #include <time.h>
 //#include <syscall.h>
+
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+#define IFACE_NAME_MAX 384
+#define IFACE_SCAN_FMT "%" STR(IFACE_NAME_MAX) "[^\\t\\n# ] %" STR(BUF_SZ) "[^\\t\\n ]\n"
 
 /**
  * Provides TCP server functionality, handles multiple connections by forking.
@@ -200,6 +206,11 @@ int server_add_spare_child(int pid)
 {
    struct spare_child_worker *spare_child = malloc(sizeof(struct spare_child_worker));
 
+   if (spare_child == NULL) {
+      log_event(LOG_ERR, "server_add_spare_child() -- malloc() failed");
+      return 0;
+   }
+
    // Putting new child to the beginning
    spare_child->pid = pid;
    spare_child->next_sock = -1;
@@ -337,7 +348,9 @@ int handle_cloned_proc(void *arg)
       }
 
       if (server_spare_children.count < MAX_SPARE_WORKERS) {
-         server_add_spare_child((int) getpid());
+         if (!server_add_spare_child((int) getpid())) {
+            break;
+         }
          resumed_from_pause = 1;
          if (var_debug) printf("|| Putting child %i to sleep\n", (int) getpid());
          kill(getpid(), SIGSTOP);   // pause until we got awaken
@@ -372,6 +385,9 @@ struct child_proc_state *new_child_state(int sock, int is_unix_socket, void *sta
 {
    struct child_proc_state *state = malloc(sizeof(struct child_proc_state));
 
+   if (state == NULL)
+      return NULL;
+
    state->sock = sock;
    state->is_unix_socket = is_unix_socket;
    state->stack = stack;
@@ -393,8 +409,10 @@ struct child_proc_state *new_child_state(int sock, int is_unix_socket, void *sta
 int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
 {
    int pid = 0;
-   char *stack = malloc(CHILD_STACK_SZ + 1);
-   struct child_proc_state *child_state = new_child_state(sock, is_unix_socket, stack, CHILD_STACK_SZ);
+   char *stack = NULL;
+   struct child_proc_state *child_state = NULL;
+
+   (void)server_sock;
 
    if (var_debug)
       printf("Requested new child for socket #%i\n", sock);
@@ -415,32 +433,41 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
       if (var_debug)
          printf("* Reused child with PID %i\n", pid);
 
-   } else {
-      if (var_debug && sock == -1)
-         printf("Going to create spare child\n");
-
-      if (var_debug && !server_spare_children.count)
-         printf("Going to new child, no spare ones present\n");
-
-   #endif
-
-      if (var_debug)
-         printf("Creating new child proccess with Linux clone() for socket #%i\n", sock);
-
-      // start new proccess and execute handle_cloned_proc() as a child
-      pid = clone(&handle_cloned_proc, (char *)stack + CHILD_STACK_SZ, CLONE_VM|CLONE_FILES|SIGCHLD, child_state);//CLONE_VM|CLONE_FS|CLONE_SIGHAND|
-
-      if (pid < 0) {
-         printf("Error: clone() failed");
-         return 0;
-      }
-
-      if (var_debug)
-         printf("+ Started new child with PID %i\n", pid);
-
-   #ifdef REUSE_WORKER_PROC
+      return pid;
    }
+
+   if (var_debug && sock == -1)
+      printf("Going to create spare child\n");
+
+   if (var_debug && !server_spare_children.count)
+      printf("Going to new child, no spare ones present\n");
    #endif
+
+   stack = malloc(CHILD_STACK_SZ + 1);
+   child_state = new_child_state(sock, is_unix_socket, stack, CHILD_STACK_SZ);
+
+   if (stack == NULL || child_state == NULL) {
+      log_event(LOG_ERR, "Error: failed allocating child process resources");
+      free(stack);
+      free(child_state);
+      return 0;
+   }
+
+   if (var_debug)
+      printf("Creating new child proccess with Linux clone() for socket #%i\n", sock);
+
+   // start new proccess and execute handle_cloned_proc() as a child
+   pid = clone(&handle_cloned_proc, (char *)stack + CHILD_STACK_SZ, CLONE_VM|CLONE_FILES|SIGCHLD, child_state);//CLONE_VM|CLONE_FS|CLONE_SIGHAND|
+
+   if (pid < 0) {
+      printf("Error: clone() failed");
+      free(child_state);
+      free(stack);
+      return 0;
+   }
+
+   if (var_debug)
+      printf("+ Started new child with PID %i\n", pid);
 
    // not touching server socket, it's shared resource
 
@@ -483,6 +510,9 @@ void terminate_extra_children_proc(int min_spare_children)
 struct helper_proc_state *new_helper_state(void *stack, int stack_size)
 {
    struct helper_proc_state *state = malloc(sizeof(struct helper_proc_state));
+
+   if (state == NULL)
+      return NULL;
 
    state->stack = stack;
    state->stack_size = stack_size;
@@ -556,6 +586,13 @@ int create_worker_manager_proc()
    char *stack = malloc(CHILD_STACK_SZ + 1);
    struct helper_proc_state *helper_state = new_helper_state(stack, CHILD_STACK_SZ);
 
+   if (stack == NULL || helper_state == NULL) {
+      log_event(LOG_ERR, "Error: failed allocating worker manager resources");
+      free(stack);
+      free(helper_state);
+      return 0;
+   }
+
    if (var_debug) {
       printf("Starting worker proccess manager\n");
       printf("Creating new manager proccess with Linux clone() ...\n");
@@ -567,6 +604,8 @@ int create_worker_manager_proc()
 
    if (pid < 0) {
       printf("Error: clone() failed");
+      free(helper_state);
+      free(stack);
       return 0;
    }
 
@@ -864,20 +903,26 @@ int read_iface_config(char *config_file)
    int r = 1;
    int count = 0;
    FILE *fp;
-   char *line = malloc(sizeof(char) * (BUF_SZ + 1));
    char *iface = malloc(sizeof(char) * (BUF_SZ + 1));
    char *file = malloc(sizeof(char) * (BUF_SZ + 1));
    char *iface_short = malloc(sizeof(char) * (BUF_SZ + 1));
    char *file_short = malloc(sizeof(char) * (BUF_SZ + 1));
 
-   bzero(line, BUF_SZ);
-   bzero(iface, BUF_SZ);
-   bzero(file, BUF_SZ);
-   bzero(iface_short, BUF_SZ);
-   bzero(file_short, BUF_SZ);
+   if (iface == NULL || file == NULL || iface_short == NULL || file_short == NULL) {
+      log_event(LOG_ERR, "read_iface_config() -- malloc() failed");
+      free(iface);
+      free(file);
+      free(iface_short);
+      free(file_short);
+      return 0;
+   }
+
+   bzero(iface, BUF_SZ + 1);
+   bzero(file, BUF_SZ + 1);
+   bzero(iface_short, BUF_SZ + 1);
+   bzero(file_short, BUF_SZ + 1);
 
    if((fp = fopen(config_file, "r")) == NULL) { 
-      free(line);
       free(iface);
       free(file);
       free(iface_short);
@@ -888,31 +933,51 @@ int read_iface_config(char *config_file)
    // Wipe existing interface entries (in case config gets reloaded or like)
    server_wipe_iface_entries();
 
-   r = fscanf(fp,"%[^\t\n# ] %[^\t\n ]\n", iface_short, file_short);
+   r = fscanf(fp, IFACE_SCAN_FMT, iface_short, file_short);
 
    while(r != EOF) {
       if (r == 2) {
-            // Complete relative namespace names and file names
-            if (iface_short[0] == '\\')
-               strcpy(iface, iface_short);
-            else
-               sprintf(iface, "%s\\%s", var_script_base_namespace, iface_short);
+            iface[0] = '\0';
+            file[0] = '\0';
 
-            if (file_short[0] == '/')
-               strcpy(file, file_short);
-            else
-               sprintf(file, "%s/%s", var_script_exec_dir, file_short);
+            // Complete relative namespace names and file names
+            if (iface_short[0] == '\\') {
+               int iface_written = snprintf(iface, BUF_SZ + 1, "%s", iface_short);
+               if (iface_written < 0 || iface_written >= BUF_SZ + 1) {
+                  log_event(LOG_ERR, "Skipping interface with overlong name");
+                  continue;
+               }
+            } else {
+               int iface_written = snprintf(iface, BUF_SZ + 1, "%s\\%s", var_script_base_namespace, iface_short);
+               if (iface_written < 0 || iface_written >= BUF_SZ + 1) {
+                  log_event(LOG_ERR, "Skipping interface with overlong namespaced name");
+                  continue;
+               }
+            }
+
+            if (file_short[0] == '/') {
+               int file_written = snprintf(file, BUF_SZ + 1, "%s", file_short);
+               if (file_written < 0 || file_written >= BUF_SZ + 1) {
+                  log_event(LOG_ERR, "Skipping interface with overlong absolute path");
+                  continue;
+               }
+            } else {
+               int file_written = snprintf(file, BUF_SZ + 1, "%s/%s", var_script_exec_dir, file_short);
+               if (file_written < 0 || file_written >= BUF_SZ + 1) {
+                  log_event(LOG_ERR, "Skipping interface with overlong resolved path");
+                  continue;
+               }
+            }
 
                server_add_iface_entry(iface, file);
                count++;
       } else
          fscanf(fp,"%*[^\n]\n"); // skip unparsable lines
 
-      r = fscanf(fp,"%[^\t\n# ] %[^\t\n ]\n", iface_short, file_short);
+      r = fscanf(fp, IFACE_SCAN_FMT, iface_short, file_short);
    }
 
    fclose(fp);
-   free(line);
    free(iface);
    free(file);
    free(iface_short);

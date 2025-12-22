@@ -9,6 +9,7 @@
 #include <time.h>
 #include <math.h>
 #include <stdint.h>
+#include <syslog.h>
 #include "cloud-rmi.h"
 #include "config.h"
 #include "capabilities.h"
@@ -196,11 +197,17 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       t = time(NULL);
       tmp = localtime(&t);
 
-      if (tmp == NULL)
-         die_err("Error: localtime() failed");
+      if (tmp == NULL) {
+         log_event(LOG_ERR, "Error: localtime() failed");
+         stream_writeln(state->sock, "500 Error retrieving time");
+         break;
+      }
 
-      if (strftime(output, BUF_SZ, "%a, %d %b %y %T %z", tmp) == 0)
-         die_err("Error: strftime() failed");
+      if (strftime(output, BUF_SZ, "%a, %d %b %y %T %z", tmp) == 0) {
+         log_event(LOG_ERR, "Error: strftime() failed");
+         stream_writeln(state->sock, "500 Error retrieving time");
+         break;
+      }
 
       stream_writeln(state->sock, "200 %s", output);
       break;
