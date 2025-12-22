@@ -11,6 +11,10 @@
 #include "config.h"
 #include "cloud-rmi.h"
 
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+#define CONFIG_SCAN_FMT "%" STR(BUF_SZ) "[^\\t\\n#= ] = %" STR(BUF_SZ) "[^\\t\\n=#]\n"
+
 /**
  * Parses the configuration file. Some parts borrowed from sSMTP project.
  *
@@ -57,20 +61,27 @@ int read_config(char *config_file)
 {
    int r = 1;
    FILE *fp;
-   char *line = malloc(sizeof(char) * (BUF_SZ + 1));
    char *conf_name = malloc(sizeof(char) * (BUF_SZ + 1));
    char *conf_value = malloc(sizeof(char) * (BUF_SZ + 1));
    char *buf;
 
-   bzero(line, BUF_SZ);
-   bzero(conf_name, BUF_SZ);
-   bzero(conf_value, BUF_SZ);
-
-   if((fp = fopen(config_file, "r")) == NULL) {
+   if (conf_name == NULL || conf_value == NULL) {
+      log_event(LOG_ERR, "read_config() -- malloc() failed");
+      free(conf_name);
+      free(conf_value);
       return 0;
    }
 
-   r = fscanf(fp,"%[^\t\n#= ] = %[^\t\n=#]\n", conf_name, conf_value);
+   bzero(conf_name, BUF_SZ + 1);
+   bzero(conf_value, BUF_SZ + 1);
+
+   if((fp = fopen(config_file, "r")) == NULL) {
+      free(conf_name);
+      free(conf_value);
+      return 0;
+   }
+
+   r = fscanf(fp, CONFIG_SCAN_FMT, conf_name, conf_value);
 
    while(r != EOF) {
    if (r == 2) {
@@ -242,11 +253,10 @@ int read_config(char *config_file)
       } else
          fscanf(fp,"%*[^\n]\n"); // skip unparsable lines
 
-      r = fscanf(fp,"%[^\t\n#= ] = %[^\t\n=#]\n", conf_name, conf_value);
+      r = fscanf(fp, CONFIG_SCAN_FMT, conf_name, conf_value);
    }
 
    fclose(fp);
-   free(line);
    free(conf_name);
    free(conf_value);
 
