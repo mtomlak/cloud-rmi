@@ -9,6 +9,9 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#if HAVE_SYSLOG_H
+#include <syslog.h>
+#endif
 #include "cloud-rmi.h"
 #include "config.h"
 
@@ -559,6 +562,7 @@ void log_event(int priority, char *format, ...)
    (void)vsnprintf(buf, BUF_SZ, format, ap);
    va_end(ap);
 
+#if ENABLE_SYSLOG_TRACE
    FILE *fp;
 
    if((fp = fopen("/tmp/rmi-server.log", "a")) != (FILE *)NULL) {
@@ -578,6 +582,51 @@ void log_event(int priority, char *format, ...)
    syslog(priority, "%s", buf);
    closelog();
 #endif
+#else
+   (void)priority;
+#endif
+}
+
+void log_unexpected_event(int priority, const char *format, ...)
+{
+   char buf[256];
+   va_list ap;
+
+   va_start(ap, format);
+   (void)vsnprintf(buf, sizeof(buf), format, ap);
+   va_end(ap);
+
+   log_event(priority, "unexpected:%s", buf);
+}
+
+int debug_traffic_enabled(void)
+{
+   return var_debug_traffic;
+}
+
+void log_traffic_event(const struct conn_state *state, const char *format, ...)
+{
+   if (!debug_traffic_enabled())
+      return;
+
+   char detail[256];
+   va_list ap;
+
+   va_start(ap, format);
+   (void)vsnprintf(detail, sizeof(detail), format, ap);
+   va_end(ap);
+
+   if (state != NULL) {
+      log_event(
+         LOG_DEBUG,
+         "traffic:conn=%i proto=%i authed=%i %s",
+         state->sock,
+         state->protocol_version,
+         state->is_authenticated,
+         detail);
+   } else {
+      log_event(LOG_DEBUG, "traffic:%s", detail);
+   }
 }
 
 

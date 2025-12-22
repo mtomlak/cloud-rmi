@@ -243,7 +243,7 @@ int server_remove_spare_child(int pid)
    struct spare_child_worker *spare_child = server_get_spare_child(pid);
 
    if (spare_child == NULL) {
-      printf("Warning: Cannot remove spare child %i: not found", pid);
+      log_unexpected_event(LOG_WARNING, "spare-child-missing pid=%i", pid);
       return 0;
    }
 
@@ -274,7 +274,7 @@ int handle_by_spare_proc(int sock)
    struct spare_child_worker *spare_child = server_get_last_spare_child();
 
    if (spare_child == NULL) {
-      printf("Error: handle_by_spare_proc(): Cannot find any spare child\n");
+      log_unexpected_event(LOG_ERR, "handle_by_spare_proc(): Cannot find any spare child");
       return 0;
    }
 
@@ -330,7 +330,10 @@ int handle_cloned_proc(void *arg)
          worker_state = server_get_spare_child((int) getpid());
 
          if (worker_state == NULL) {
-            printf("Warning: Cannot load worker state for resumed proccess %i, exiting spare child\n", (int) getpid());
+            log_unexpected_event(
+               LOG_WARNING,
+               "missing-worker-state pid=%i",
+               (int) getpid());
             server_remove_spare_child((int) getpid());
             break;
 
@@ -339,7 +342,10 @@ int handle_cloned_proc(void *arg)
             break;
 
          } else if (worker_state->next_sock < 0) {
-            printf("Warning: Cannot load next socket for resumed proccess %i, exiting spare child\n", (int) getpid());
+            log_unexpected_event(
+               LOG_WARNING,
+               "missing-next-sock pid=%i",
+               (int) getpid());
             server_remove_spare_child((int) getpid());
             break;
          }
@@ -428,7 +434,7 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
       pid = handle_by_spare_proc(sock);
 
       if (!pid) {
-         printf("Error: handle_by_spare_proc() failed");
+         log_unexpected_event(LOG_ERR, "handle_by_spare_proc() failed");
          return 0;
       }
       
@@ -638,7 +644,10 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
 
    #ifdef PROXY_SUPPORT
       if (var_proxy)
-         printf("Warning: Using proxy when compiled without Linux glibc support is very experimental!\n");
+         log_unexpected_event(
+            LOG_WARNING,
+            "proxy-without-linux-features pid=%i",
+            (int) getpid());
    #endif
 
    // start new proccess and continue execution below
@@ -921,91 +930,93 @@ static bool append_json(char *json, size_t json_size, size_t *written, const cha
 
 int read_iface_config(char *config_file)
 {
-   int r = 1;
    int count = 0;
    FILE *fp;
-   char *iface = malloc(sizeof(char) * (BUF_SZ + 1));
-   char *file = malloc(sizeof(char) * (BUF_SZ + 1));
-   char *iface_short = malloc(sizeof(char) * (BUF_SZ + 1));
-   char *file_short = malloc(sizeof(char) * (BUF_SZ + 1));
+   char line[BUF_SZ + 1];
+   char iface[BUF_SZ + 1];
+   char file[BUF_SZ + 1];
+   char iface_short[BUF_SZ + 1];
+   char file_short[BUF_SZ + 1];
 
-   if (iface == NULL || file == NULL || iface_short == NULL || file_short == NULL) {
-      log_event(LOG_ERR, "read_iface_config() -- malloc() failed");
-      free(iface);
-      free(file);
-      free(iface_short);
-      free(file_short);
-      return 0;
-   }
+   bzero(iface, sizeof(iface));
+   bzero(file, sizeof(file));
+   bzero(iface_short, sizeof(iface_short));
+   bzero(file_short, sizeof(file_short));
+   bzero(line, sizeof(line));
 
-   bzero(iface, BUF_SZ + 1);
-   bzero(file, BUF_SZ + 1);
-   bzero(iface_short, BUF_SZ + 1);
-   bzero(file_short, BUF_SZ + 1);
-
-   if((fp = fopen(config_file, "r")) == NULL) { 
-      free(iface);
-      free(file);
-      free(iface_short);
-      free(file_short);
+   if((fp = fopen(config_file, "r")) == NULL) {
       return 0;
    }
 
    // Wipe existing interface entries (in case config gets reloaded or like)
    server_wipe_iface_entries();
 
-   r = fscanf(fp, IFACE_SCAN_FMT, iface_short, file_short);
+   if (var_debug)
+      printf("Using base namespace \"%s\"\n", var_script_base_namespace ? var_script_base_namespace : "(null)");
+   if (var_debug)
+      if (var_script_base_namespace != NULL) {
+         size_t ns_len = strlen(var_script_base_namespace);
+         printf("Base namespace bytes:");
+         for (size_t i = 0; i < ns_len; i++)
+            printf(" %02x", (unsigned char)var_script_base_namespace[i]);
+         printf(" 00\n");
+      }
+   if (var_debug)
+      printf("Using script exec dir \"%s\"\n", var_script_exec_dir ? var_script_exec_dir : "(null)");
 
-   while(r != EOF) {
-      if (r == 2) {
-            iface[0] = '\0';
-            file[0] = '\0';
+   while (fgets(line, sizeof(line), fp) != NULL) {
+      if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
+         continue;
 
-            // Complete relative namespace names and file names
-            if (iface_short[0] == '\\') {
-               int iface_written = snprintf(iface, BUF_SZ + 1, "%s", iface_short);
-               if (iface_written < 0 || iface_written >= BUF_SZ + 1) {
-                  log_event(LOG_ERR, "Skipping interface with overlong name");
-                  continue;
-               }
-            } else {
-               int iface_written = snprintf(iface, BUF_SZ + 1, "%s\\%s", var_script_base_namespace, iface_short);
-               if (iface_written < 0 || iface_written >= BUF_SZ + 1) {
-                  log_event(LOG_ERR, "Skipping interface with overlong namespaced name");
-                  continue;
-               }
-            }
+      if (sscanf(line, "%" STR(IFACE_NAME_MAX) "s %" STR(BUF_SZ) "s", iface_short, file_short) != 2) {
+         log_unexpected_event(LOG_WARNING, "Skipping unparsable interface map line in %s", config_file);
+         continue;
+      }
 
-            if (file_short[0] == '/') {
-               int file_written = snprintf(file, BUF_SZ + 1, "%s", file_short);
-               if (file_written < 0 || file_written >= BUF_SZ + 1) {
-                  log_event(LOG_ERR, "Skipping interface with overlong absolute path");
-                  continue;
-               }
-            } else {
-               int file_written = snprintf(file, BUF_SZ + 1, "%s/%s", var_script_exec_dir, file_short);
-               if (file_written < 0 || file_written >= BUF_SZ + 1) {
-                  log_event(LOG_ERR, "Skipping interface with overlong resolved path");
-                  continue;
-               }
-            }
+      iface[0] = '\0';
+      file[0] = '\0';
 
-               server_add_iface_entry(iface, file);
-               count++;
-      } else
-         fscanf(fp,"%*[^\n]\n"); // skip unparsable lines
+      // Complete relative namespace names and file names
+      if (iface_short[0] == '\\') {
+         int iface_written = snprintf(iface, BUF_SZ + 1, "%s", iface_short);
+         if (iface_written < 0 || iface_written >= BUF_SZ + 1) {
+            log_event(LOG_ERR, "Skipping interface with overlong name");
+            continue;
+         }
+      } else {
+         int iface_written = snprintf(iface, BUF_SZ + 1, "%s\\%s", var_script_base_namespace, iface_short);
+         if (iface_written < 0 || iface_written >= BUF_SZ + 1) {
+            log_event(LOG_ERR, "Skipping interface with overlong namespaced name");
+            continue;
+         }
+      }
 
-      r = fscanf(fp, IFACE_SCAN_FMT, iface_short, file_short);
+      if (file_short[0] == '/') {
+         int file_written = snprintf(file, BUF_SZ + 1, "%s", file_short);
+         if (file_written < 0 || file_written >= BUF_SZ + 1) {
+            log_event(LOG_ERR, "Skipping interface with overlong absolute path");
+            continue;
+         }
+      } else {
+         int file_written = snprintf(file, BUF_SZ + 1, "%s/%s", var_script_exec_dir, file_short);
+         if (file_written < 0 || file_written >= BUF_SZ + 1) {
+            log_event(LOG_ERR, "Skipping interface with overlong resolved path");
+            continue;
+         }
+      }
+
+      server_add_iface_entry(iface, file);
+      if (var_debug)
+         printf("Mapped interface %s -> %s\n", iface, file);
+      count++;
    }
 
    fclose(fp);
-   free(iface);
-   free(file);
-   free(iface_short);
-   free(file_short);
 
    if (var_debug)
       printf("Loaded %d interface map entries from %s\n", count, config_file);
+   if (count == 0)
+      log_unexpected_event(LOG_WARNING, "Interface map empty after load: %s", config_file);
 
    return 1;
 }

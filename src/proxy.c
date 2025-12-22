@@ -492,8 +492,11 @@ int proxy_pass_raw_cmd(int proxy_num, struct conn_state *client_conn, char *cmd)
    status_code = client_raw_cmd(&conn->client, cmd, response);
 
    if (!status_code || status_code == 408) {  // 408 - request timeout
-      if (var_debug)
-         printf("Proxy: Could not get status code, trying to reconnect\n");
+      log_unexpected_event(
+         LOG_WARNING,
+         "proxy-reconnect proxy_id=%i status=%i",
+         proxy_num,
+         status_code);
 
       proxy_restart_conn(conn);
       status_code = client_raw_cmd(&conn->client, cmd, response);
@@ -503,8 +506,10 @@ int proxy_pass_raw_cmd(int proxy_num, struct conn_state *client_conn, char *cmd)
       status_code = 503;
       strcpy(response, "Service Unavailable");
 
-      if (var_debug)
-         printf("Proxy: Failed get status code from proxied server #%i\n", proxy_num);
+      log_unexpected_event(
+         LOG_ERR,
+         "proxy-status-missing proxy_id=%i",
+         proxy_num);
 
       ret = 0;
    }
@@ -829,7 +834,7 @@ int proxy_conn_keepalive(struct proxy_conn *conn)
 
    if (!status_code) {
       status_code = 503;
-      printf("Warning: Failed to connect to server %i", conn->proxy_id);
+      log_unexpected_event(LOG_WARNING, "proxy-keepalive-failed proxy_id=%i", conn->proxy_id);
       ret = 0;
    }
    proxy_set_conn_free(conn);

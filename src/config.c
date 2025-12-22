@@ -26,6 +26,7 @@
 
 /* Set default values for global vars */
 int var_debug = 0;
+int var_debug_traffic = 0;
 int var_port = 9500;
 int var_read_timeout = 10;
 int var_start_delay = 0;
@@ -59,206 +60,220 @@ char *var_proxy = NULL;
 
 int read_config(char *config_file)
 {
-   int r = 1;
    FILE *fp;
-   char *conf_name = malloc(sizeof(char) * (BUF_SZ + 1));
-   char *conf_value = malloc(sizeof(char) * (BUF_SZ + 1));
-   char *buf;
+   char conf_name[BUF_SZ + 1];
+   char conf_value[BUF_SZ + 1];
+   char line[BUF_SZ + 1];
+   char *name;
+   char *value;
 
-   if (conf_name == NULL || conf_value == NULL) {
-      log_event(LOG_ERR, "read_config() -- malloc() failed");
-      free(conf_name);
-      free(conf_value);
-      return 0;
-   }
-
-   bzero(conf_name, BUF_SZ + 1);
-   bzero(conf_value, BUF_SZ + 1);
+   bzero(conf_name, sizeof(conf_name));
+   bzero(conf_value, sizeof(conf_value));
+   bzero(line, sizeof(line));
 
    if((fp = fopen(config_file, "r")) == NULL) {
-      free(conf_name);
-      free(conf_value);
       return 0;
    }
 
-   r = fscanf(fp, CONFIG_SCAN_FMT, conf_name, conf_value);
+   while (fgets(line, sizeof(line), fp) != NULL) {
+      if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
+         continue;
 
-   while(r != EOF) {
-   if (r == 2) {
-         // the nasty part
-         if(strcasecmp(conf_name, "context_name") == 0) {
-            if((var_context_name = strdup(conf_value)) == (char *)NULL) {
-               die_err("parse_config() -- strdup() failed");
-            }
+      name = line;
+      value = strchr(line, '=');
+      if (value == NULL) {
+         log_unexpected_event(LOG_WARNING, "Skipping unparsable config line in %s", config_file);
+         continue;
+      }
 
-            if(log_level > 0) {
-               log_event(LOG_INFO, "Set context_name=\"%s\"\n", var_context_name);
-            }
+      *value = '\0';
+      value++;
+
+      while (isspace((unsigned char)*name))
+         name++;
+      while (*value != '\0' && isspace((unsigned char)*value))
+         value++;
+
+      char *name_end = name + strlen(name);
+      while (name_end > name && isspace((unsigned char)name_end[-1])) {
+         *--name_end = '\0';
+      }
+
+      char *value_end = value + strlen(value);
+      while (value_end > value && (isspace((unsigned char)value_end[-1]) || value_end[-1] == '#')) {
+         *--value_end = '\0';
+      }
+
+      if (*name == '\0' || *value == '\0')
+         continue;
+
+      strncpy(conf_name, name, sizeof(conf_name) - 1);
+      strncpy(conf_value, value, sizeof(conf_value) - 1);
+
+      // the nasty part
+      if(strcasecmp(conf_name, "context_name") == 0) {
+         if((var_context_name = strdup(conf_value)) == (char *)NULL) {
+            die_err("parse_config() -- strdup() failed");
          }
-         else if(strcasecmp(conf_name, "port") == 0) {
-            if((buf = strdup(conf_value)) == (char *)NULL) {
-               die_err("parse_config() -- strdup() failed");
-            }
 
-            var_port = atoi(buf);
-
-            if(log_level > 0) {
-               log_event(LOG_INFO, "Set port=\"%d\"\n", var_port);
-            }
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set context_name=\"%s\"\n", var_context_name);
          }
-         else if(strcasecmp(conf_name, "read_timeout") == 0) {
-            if((buf = strdup(conf_value)) == (char *)NULL) {
-               die_err("parse_config() -- strdup() failed");
-            }
+      }
+      else if(strcasecmp(conf_name, "port") == 0) {
+         var_port = atoi(conf_value);
 
-            var_read_timeout = atoi(buf);
-
-            if(log_level > 0) {
-               log_event(LOG_INFO, "Set read_timeout=\"%d\"\n", var_read_timeout);
-            }
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set port=\"%d\"\n", var_port);
          }
-         else if(strcasecmp(conf_name, "recovery_token") == 0) {
-            if((var_recovery_token = strdup(conf_value)) == (char *)NULL) {
-               die_err("parse_config() -- strdup() failed");
-            }
+      }
+      else if(strcasecmp(conf_name, "read_timeout") == 0) {
+         var_read_timeout = atoi(conf_value);
 
-            if(log_level > 0) {
-               log_event(LOG_INFO, "Set recovery_token=\"%s\"\n", var_recovery_token);
-            }
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set read_timeout=\"%d\"\n", var_read_timeout);
          }
+      }
+      else if(strcasecmp(conf_name, "recovery_token") == 0) {
+         if((var_recovery_token = strdup(conf_value)) == (char *)NULL) {
+            die_err("parse_config() -- strdup() failed");
+         }
+
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set recovery_token=\"%s\"\n", var_recovery_token);
+         }
+      }
 #ifdef PROXY_SUPPORT
-         else if(strcasecmp(conf_name, "proxy") == 0) {
-            if((var_proxy = strdup(conf_value)) == (char *)NULL) {
-               die_err("parse_config() -- strdup() failed");
-            }
-
-            if(log_level > 0) {
-               log_event(LOG_INFO, "Set var_proxy=\"%s\"\n", var_proxy);
-            }
+      else if(strcasecmp(conf_name, "proxy") == 0) {
+         if((var_proxy = strdup(conf_value)) == (char *)NULL) {
+            die_err("parse_config() -- strdup() failed");
          }
+
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set var_proxy=\"%s\"\n", var_proxy);
+         }
+      }
 #endif
-         else if(strcasecmp(conf_name, "script_exec_dir") == 0) {
-            if((var_script_exec_dir = strdup(conf_value)) == (char *)NULL) {
-               die_err("parse_config() -- strdup() failed");
-            }
+      else if(strcasecmp(conf_name, "script_exec_dir") == 0) {
+         if((var_script_exec_dir = strdup(conf_value)) == (char *)NULL) {
+            die_err("parse_config() -- strdup() failed");
+         }
 
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set var_script_exec_dir=\"%s\"\n", var_script_exec_dir);
+         }
+      } 
+      else if(strcasecmp(conf_name, "script_base_namespace") == 0) {
+         if((var_script_base_namespace = strdup(conf_value)) == (char *)NULL) {
+            die_err("parse_config() -- strdup() failed");
+         }
+
+         sanitize_script_base_namespace();
+
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set script_base_namespace=\"%s\"\n", var_script_base_namespace);
+         }
+      } 
+      else if(strcasecmp(conf_name, "listen_unix") == 0) {
+         if((var_unix_socket_path = strdup(conf_value)) == (char *)NULL) {
+            die_err("parse_config() -- strdup() failed");
+         }
+
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set listen_unix=\"%s\"\n", var_unix_socket_path);
+         }
+      }
+      else if(strcasecmp(conf_name, "unix_socket_skip_auth") == 0) {
+         if(strcasecmp(conf_value, "Yes") == 0 || strcasecmp(conf_value, "On") == 0 || strcasecmp(conf_value, "1") == 0) {
+            var_unix_socket_skip_auth = 1;
+         } else {
+            var_unix_socket_skip_auth = 0;
+         }
+
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set unix_socket_skip_auth=\"%s\"\n", var_unix_socket_skip_auth ? "True" : "False");
+         }
+      }
+      else if(strcasecmp(conf_name, "interface_map_file") == 0) {
+         if((var_interface_map_file = strdup(conf_value)) == (char *)NULL) {
+            die_err("parse_config() -- strdup() failed");
+         }
+
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set interface_map_file=\"%s\"\n", var_interface_map_file);
+         } //var_min_spare_workers
+      }
+      else if(strcasecmp(conf_name, "max_payload") == 0) {
+         uintmax_t parsed = strtoumax(conf_value, NULL, 10);
+         if(parsed > 0 && parsed < SIZE_MAX) {
+            var_max_payload = (size_t)parsed;
             if(log_level > 0) {
-               log_event(LOG_INFO, "Set var_script_exec_dir=\"%s\"\n", var_script_exec_dir);
-            }
-         } 
-         else if(strcasecmp(conf_name, "script_base_namespace") == 0) {
-            if((var_script_base_namespace = strdup(conf_value)) == (char *)NULL) {
-               die_err("parse_config() -- strdup() failed");
-            }
-
-            sanitize_script_base_namespace();
-
-            if(log_level > 0) {
-               log_event(LOG_INFO, "Set script_base_namespace=\"%s\"\n", var_script_base_namespace);
-            }
-         } 
-         else if(strcasecmp(conf_name, "listen_unix") == 0) {
-            if((var_unix_socket_path = strdup(conf_value)) == (char *)NULL) {
-               die_err("parse_config() -- strdup() failed");
-            }
-
-            if(log_level > 0) {
-               log_event(LOG_INFO, "Set listen_unix=\"%s\"\n", var_unix_socket_path);
+               log_event(LOG_INFO, "Set max_payload=\"%zu\"\n", var_max_payload);
             }
          }
-         else if(strcasecmp(conf_name, "unix_socket_skip_auth") == 0) {
-            if(strcasecmp(conf_value, "Yes") == 0 || strcasecmp(conf_value, "On") == 0 || strcasecmp(conf_value, "1") == 0) {
-               var_unix_socket_skip_auth = 1;
-            } else {
-               var_unix_socket_skip_auth = 0;
-            }
-
-            if(log_level > 0) {
-               log_event(LOG_INFO, "Set unix_socket_skip_auth=\"%s\"\n", var_unix_socket_skip_auth ? "True" : "False");
-            }
-         }
-         else if(strcasecmp(conf_name, "interface_map_file") == 0) {
-            if((var_interface_map_file = strdup(conf_value)) == (char *)NULL) {
-               die_err("parse_config() -- strdup() failed");
-            }
-
-            if(log_level > 0) {
-               log_event(LOG_INFO, "Set interface_map_file=\"%s\"\n", var_interface_map_file);
-            } //var_min_spare_workers
-         }
-         else if(strcasecmp(conf_name, "max_payload") == 0) {
-            uintmax_t parsed = strtoumax(conf_value, NULL, 10);
-            if(parsed > 0 && parsed < SIZE_MAX) {
-               var_max_payload = (size_t)parsed;
-               if(log_level > 0) {
-                  log_event(LOG_INFO, "Set max_payload=\"%zu\"\n", var_max_payload);
-               }
-            }
-         }
+      }
 #ifdef REUSE_WORKER_PROC
-         else if(strcasecmp(conf_name, "min_spare_workers") == 0) {
-            if((buf = strdup(conf_value)) == (char *)NULL) {
-               die_err("parse_config() -- strdup() failed");
-            }
+      else if(strcasecmp(conf_name, "min_spare_workers") == 0) {
+         var_min_spare_workers = atoi(conf_value);
 
-            var_min_spare_workers = atoi(buf);
-
-            if(log_level > 0) {
-               log_event(LOG_INFO, "Set min_spare_workers=\"%d\"\n", var_min_spare_workers);
-            }
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set min_spare_workers=\"%d\"\n", var_min_spare_workers);
          }
-         else if(strcasecmp(conf_name, "max_spare_workers") == 0) {
-            if((buf = strdup(conf_value)) == (char *)NULL) {
-               die_err("parse_config() -- strdup() failed");
-            }
+      }
+      else if(strcasecmp(conf_name, "max_spare_workers") == 0) {
+         var_max_spare_workers = atoi(conf_value);
 
-            var_max_spare_workers = atoi(buf);
-
-            if(log_level > 0) {
-               log_event(LOG_INFO, "Set max_spare_workers=\"%d\"\n", var_max_spare_workers);
-            }
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set max_spare_workers=\"%d\"\n", var_max_spare_workers);
          }
+      }
 #endif
-         else if(strcasecmp(conf_name, "start_delay") == 0) {
-            if((buf = strdup(conf_value)) == (char *)NULL) {
-               die_err("parse_config() -- strdup() failed");
-            }
+      else if(strcasecmp(conf_name, "start_delay") == 0) {
+         var_start_delay = atoi(conf_value);
 
-            var_start_delay = atoi(buf);
-
-            if(log_level > 0) {
-               log_event(LOG_INFO, "Set start_delay=\"%d\"\n", var_start_delay);
-            }
+         if(log_level > 0) {
+            log_event(LOG_INFO, "Set start_delay=\"%d\"\n", var_start_delay);
          }
-         else if(strcasecmp(conf_name, "debug") == 0) {
-            if(strcasecmp(conf_value, "Yes") == 0 || strcasecmp(conf_value, "On") == 0 || strcasecmp(conf_value, "1") == 0) {
-               var_debug = 1;
-               log_level = 1;
-            }
-            else {
-               var_debug = 0;
-               log_level = 0;
-            }
- 
-            if(log_level > 0) {
-               log_event(LOG_INFO,
-                  "Set debug=\"%s\"\n",
-                  var_debug ? "True" : "False");
-            }
+      }
+      else if(strcasecmp(conf_name, "debug") == 0) {
+         if(strcasecmp(conf_value, "Yes") == 0 || strcasecmp(conf_value, "On") == 0 || strcasecmp(conf_value, "1") == 0) {
+            var_debug = 1;
+            log_level = 1;
          }
          else {
-            log_event(LOG_INFO, "Unable to set %s=\"%s\"\n", conf_name, conf_value);
+            var_debug = 0;
+            log_level = 0;
          }
 
-      } else
-         fscanf(fp,"%*[^\n]\n"); // skip unparsable lines
+         if(log_level > 0) {
+            log_event(LOG_INFO,
+               "Set debug=\"%s\"\n",
+               var_debug ? "True" : "False");
+         }
+      }
+      else if(strcasecmp(conf_name, "debug_traffic") == 0) {
+         if(strcasecmp(conf_value, "Yes") == 0 || strcasecmp(conf_value, "On") == 0 || strcasecmp(conf_value, "1") == 0) {
+            var_debug_traffic = 1;
+         } else {
+            var_debug_traffic = 0;
+         }
 
-      r = fscanf(fp, CONFIG_SCAN_FMT, conf_name, conf_value);
+         if (log_level > 0) {
+            log_event(
+               LOG_INFO,
+               "Set debug_traffic=\"%s\"\n",
+               var_debug_traffic ? "True" : "False");
+         }
+      }
+      else {
+         log_event(LOG_INFO, "Unable to set %s=\"%s\"\n", conf_name, conf_value);
+      }
    }
 
    fclose(fp);
-   free(conf_name);
-   free(conf_value);
+
+   if (var_debug)
+      printf("Configuration loaded (unix_socket_skip_auth=%i, script_exec_dir=%s)\n", var_unix_socket_skip_auth, var_script_exec_dir);
 
    return 1;
 }

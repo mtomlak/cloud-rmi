@@ -41,6 +41,69 @@ struct child_debug{
    int pid;
 };
 
+static size_t bounded_strlen(const char *value, size_t cap)
+{
+   size_t len = 0;
+
+   if (value == NULL)
+      return 0;
+
+   while (len < cap && value[len] != '\0')
+      len++;
+
+   return len;
+}
+
+static void log_request_summary(const rmi_event_t *event, const struct conn_state *state)
+{
+   if (!debug_traffic_enabled() || event == NULL)
+      return;
+
+   switch (event->type) {
+   case RMI_EVENT_CALL: {
+      size_t payload_len = event->payload ? event->payload_len : 0;
+      const char *encoding = event->encoding ? event->encoding : "";
+      log_traffic_event(
+         state,
+         "request CALL iface=%s method=%s argc=%i arg_len=%zu payload_len=%zu encoding=%s",
+         event->arg1 ? event->arg1 : "",
+         event->arg2 ? event->arg2 : "",
+         event->argc,
+         bounded_strlen(event->arg3, 96),
+         payload_len,
+         encoding);
+      break;
+   }
+
+   case RMI_EVENT_PROTO:
+      log_traffic_event(state, "request PROTO %s", event->arg1 ? event->arg1 : "");
+      break;
+
+   case RMI_EVENT_DEBUG:
+      log_traffic_event(state, "request DEBUG %s", event->arg1 ? event->arg1 : "");
+      break;
+
+   default:
+      log_traffic_event(state, "request type=%d", event->type);
+      break;
+   }
+}
+
+static void log_parser_anomaly(rmi_status_t status, const rmi_error_t *err, const struct conn_state *state)
+{
+   const char *label = (status == RMI_E_OVERFLOW) ? "overflow" : "error";
+   int code = err ? err->code : 0;
+
+   log_unexpected_event(
+      LOG_WARNING,
+      "parser-%s status=%d code=%d proto=%d unix=%d",
+      label,
+      status,
+      code,
+      state ? state->protocol_version : 0,
+      state ? state->is_unix_socket : 0);
+}
+
 /**
  * Handles 'AUTH' command. 
  * WARNING: This version supports dev backdoor.
@@ -102,6 +165,8 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
 
    memset(output, 0, sizeof(output));
 
+   log_request_summary(event, state);
+
    switch (event->type) {
    case RMI_EVENT_AUTH:
       if (!handle_auth_cmd(event->arg1, event->arg2, state)) {
@@ -127,6 +192,7 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
 
       state->protocol_version = requested;
       stream_writeln(state->sock, "200 OK");
+      log_traffic_event(state, "protocol-switch version=%i", requested);
       break;
    }
 
@@ -246,6 +312,21 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
 
          } else if (strcmp(event->arg1, "off") == 0) {
             var_debug = 0;
+         } else if (strcmp(event->arg1, "traffic") == 0) {
+            if (event->arg2 != NULL && strcmp(event->arg2, "on") == 0) {
+               var_debug_traffic = 1;
+               stream_writeln(state->sock, "200 Debug traffic logging ON");
+            } else if (event->arg2 != NULL && strcmp(event->arg2, "off") == 0) {
+               var_debug_traffic = 0;
+               stream_writeln(state->sock, "200 Debug traffic logging OFF");
+            } else {
+               stream_writeln(
+                  state->sock,
+                  "200 Debug traffic is %s",
+                  var_debug_traffic ? "ON" : "OFF");
+            }
+
+            break;
          } else {
             stream_writeln(state->sock, "200 Debug information:");
             stream_writeln(state->sock, "Server build:");
@@ -346,16 +427,23 @@ void handle_connection (int sock, int is_unix_socket)
       stream_writeln(sock, "220 %s Server Ready EXT PROTO=2", var_context_name);
    debug.sock = sock;
    debug.pid = (int) getpid();
+   log_traffic_event(&state, "connection-open");
 
    while (loop) {
       bytes = stream_read(state.sock, buf, BUF_SZ);
-      if (bytes <= 0)
+      if (bytes <= 0) {
+         if (bytes < 0)
+            log_unexpected_event(LOG_WARNING, "stream_read failed on connection proto=%d", state.protocol_version);
+
          break;
+      }
 
       rmi_error_t err;
+      memset(&err, 0, sizeof(err));
       rmi_status_t status = rmi_protocol_feed(protocol_ctx, (const uint8_t *)buf, (size_t)bytes, &err);
 
       if (status == RMI_E_OVERFLOW || status == RMI_E_ERR) {
+         log_parser_anomaly(status, &err, &state);
          stream_writeln(state.sock, "400 Bad Request");
          loop = 0;
          continue;
@@ -364,24 +452,30 @@ void handle_connection (int sock, int is_unix_socket)
       do {
          rmi_event_t event;
          rmi_error_t parse_err;
+         memset(&parse_err, 0, sizeof(parse_err));
 
          status = rmi_protocol_next_event(protocol_ctx, &event, &parse_err);
 
          if (status == RMI_OK) {
             if (parse_err.code == RMI_ERROR_BAD_REQUEST) {
+               log_parser_anomaly(status, &parse_err, &state);
                stream_writeln(state.sock, "400 Bad Request");
                loop = 1;
             } else if (parse_err.code == RMI_ERROR_BAD_ARGS) {
+               log_parser_anomaly(status, &parse_err, &state);
                stream_writeln(state.sock, "400 Bad Request Arguments");
                loop = 1;
             } else {
                loop = handle_command_event(&event, &state, protocol_ctx);
             }
          } else if (status == RMI_E_ERR) {
-            if (parse_err.code == RMI_ERROR_BAD_ARGS)
+            if (parse_err.code == RMI_ERROR_BAD_ARGS) {
+               log_parser_anomaly(status, &parse_err, &state);
                stream_writeln(state.sock, "400 Bad Request Arguments");
-            else if (parse_err.code != RMI_ERROR_NONE)
+            } else if (parse_err.code != RMI_ERROR_NONE) {
+               log_parser_anomaly(status, &parse_err, &state);
                stream_writeln(state.sock, "400 Bad Request");
+            }
          }
       } while (status == RMI_OK && loop);
    }
@@ -390,4 +484,5 @@ void handle_connection (int sock, int is_unix_socket)
 
    if (var_debug && !loop) printf("handle_connection: Received exit command from client\n");
    if (var_debug && !bytes) printf("handle_connection: Client connection closed\n");
+   log_traffic_event(&state, "connection-close");
 }

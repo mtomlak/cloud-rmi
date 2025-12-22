@@ -18,6 +18,7 @@
 
 // Globals parsed from config file
 extern int var_debug;
+extern int var_debug_traffic;
 extern int var_port;
 extern int var_read_timeout;
 extern int var_start_delay;
