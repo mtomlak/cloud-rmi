@@ -27,6 +27,9 @@ if (!defined('RMI_DEFAULT_MAX_PAYLOAD')) define('RMI_DEFAULT_MAX_PAYLOAD', RMI_M
 if (!defined('RMI_MAX_BUFFER')) define('RMI_MAX_BUFFER', RMI_MAX_PAYLOAD);
 if (!defined('RMI_INLINE_PAYLOAD_THRESHOLD')) define('RMI_INLINE_PAYLOAD_THRESHOLD', (int)(RMI_MAX_LINE - floor(RMI_MAX_LINE * 0.35) - 500));
 if (!defined('RMI_MAX_PROTOCOL_VERSION')) define('RMI_MAX_PROTOCOL_VERSION', 2);
+if (!defined('CLOUDRMI_RESPONSE_PLAIN')) define('CLOUDRMI_RESPONSE_PLAIN', 0);
+if (!defined('CLOUDRMI_RESPONSE_JSON_INLINE')) define('CLOUDRMI_RESPONSE_JSON_INLINE', 1);
+if (!defined('CLOUDRMI_RESPONSE_PAYLOAD')) define('CLOUDRMI_RESPONSE_PAYLOAD', 2);
 
 // Events
 if (!defined('RMI_EVENT_NONE')) define('RMI_EVENT_NONE', 0);
@@ -438,5 +441,181 @@ if (!function_exists('cloudrmi_protocol_set_max_payload')) {
 
 		$ctx->maxPayload = $maxPayload;
 		return true;
+	}
+}
+
+if (!function_exists('cloudrmi_protocol_validate_line')) {
+	function cloudrmi_protocol_validate_line(string $line): bool
+	{
+		if (strlen($line) > RMI_MAX_LINE) {
+			return false;
+		}
+
+		return strpos($line, "\n") === false && strpos($line, "\r") === false;
+	}
+}
+
+if (!function_exists('cloudrmi_parse_banner')) {
+	function cloudrmi_parse_banner(string $line)
+	{
+		if (!cloudrmi_protocol_validate_line($line)) {
+			return false;
+		}
+
+		$line = ltrim($line);
+		if (!preg_match('/^220\\s+([A-Za-z0-9._-]+)\\s+(.*)$/', $line, $matches)) {
+			return false;
+		}
+
+		$context = $matches[1];
+		$rest = $matches[2];
+
+		$extPos = stripos($rest, 'EXT');
+		if ($extPos === false) {
+			return false;
+		}
+
+		$extBlock = trim(substr($rest, $extPos + 3));
+		if (stripos($extBlock, 'PROTO=') !== 0) {
+			return false;
+		}
+
+		$extBlock = substr($extBlock, strlen('PROTO='));
+		if (!preg_match('/^([0-9]+)(?:,(.*))?$/', $extBlock, $protoMatch)) {
+			return false;
+		}
+
+		$version = (int)$protoMatch[1];
+		if ($version < 1 || $version > RMI_MAX_PROTOCOL_VERSION) {
+			return false;
+		}
+
+		$caps = [];
+		if (isset($protoMatch[2]) && $protoMatch[2] !== '') {
+			$tokens = explode(',', $protoMatch[2]);
+			foreach ($tokens as $token) {
+				$token = strtoupper(trim($token));
+				if ($token === '' || preg_match('/[^A-Z0-9_-]/', $token)) {
+					return false;
+				}
+				$caps[] = $token;
+			}
+		}
+
+		return [
+			'status' => 220,
+			'context' => $context,
+			'advertised_max_protocol' => $version,
+			'capabilities' => $caps,
+		];
+	}
+}
+
+if (!function_exists('cloudrmi_parse_response_line')) {
+	function cloudrmi_parse_response_line(string $line)
+	{
+		if (!cloudrmi_protocol_validate_line($line)) {
+			return false;
+		}
+
+		$cursor = ltrim($line);
+		if (!preg_match('/^([0-9]+)/', $cursor, $statusMatch)) {
+			return false;
+		}
+
+		$status = (int)$statusMatch[1];
+		$cursor = ltrim(substr($cursor, strlen($statusMatch[1])));
+
+		if ($cursor === '') {
+			return [
+				'status' => $status,
+				'kind' => CLOUDRMI_RESPONSE_PLAIN,
+				'encoding' => '',
+				'payload_len' => 0,
+				'body' => '',
+			];
+		}
+
+		if (stripos($cursor, 'JSON') === 0 && (strlen($cursor) === 4 || ctype_space($cursor[4]))) {
+			$body = ltrim(substr($cursor, 4));
+			return [
+				'status' => $status,
+				'kind' => CLOUDRMI_RESPONSE_JSON_INLINE,
+				'encoding' => '',
+				'payload_len' => 0,
+				'body' => $body,
+			];
+		}
+
+		if (stripos($cursor, 'PAYLOAD') === 0 && (strlen($cursor) === 7 || ctype_space($cursor[7]))) {
+			$cursor = ltrim(substr($cursor, 7));
+			$parts = preg_split('/\\s+/', $cursor);
+			if (count($parts) < 2) {
+				return false;
+			}
+
+			$encoding = $parts[0];
+			if (!ctype_digit($parts[1])) {
+				return false;
+			}
+
+			$len = (int)$parts[1];
+			return [
+				'status' => $status,
+				'kind' => CLOUDRMI_RESPONSE_PAYLOAD,
+				'encoding' => $encoding,
+				'payload_len' => $len,
+				'body' => '',
+			];
+		}
+
+		return [
+			'status' => $status,
+			'kind' => CLOUDRMI_RESPONSE_PLAIN,
+			'encoding' => '',
+			'payload_len' => 0,
+			'body' => $cursor,
+		];
+	}
+}
+
+if (!function_exists('cloudrmi_parse_enum_response')) {
+	function cloudrmi_parse_enum_response(string $line)
+	{
+		$parsed = cloudrmi_parse_response_line($line);
+		if (!is_array($parsed) || $parsed['status'] !== 200 || $parsed['kind'] !== CLOUDRMI_RESPONSE_JSON_INLINE) {
+			return false;
+		}
+
+		$json = trim($parsed['body']);
+		$decoded = json_decode($json, true);
+		if (!is_array($decoded)) {
+			return false;
+		}
+
+		$result = [];
+		foreach ($decoded as $value) {
+			if (!is_string($value)) {
+				return false;
+			}
+			$token = strtoupper(trim($value));
+			if ($token === '') {
+				return false;
+			}
+			$result[] = $token;
+		}
+
+		return $result;
+	}
+}
+
+if (!function_exists('cloudrmi_protocol_payload_allowed')) {
+	function cloudrmi_protocol_payload_allowed($ctx, int $payloadLen): bool
+	{
+		if (!($ctx instanceof CloudRMIProtocolContext) || $payloadLen < 0) {
+			return false;
+		}
+
+		return $payloadLen <= $ctx->maxPayload;
 	}
 }

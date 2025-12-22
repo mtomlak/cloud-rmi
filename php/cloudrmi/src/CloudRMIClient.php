@@ -74,12 +74,9 @@ class CloudRMIClient
 			if (!is_string($banner) || $banner === '')
 				throw new RemoteMethodInvocationException("Cannot connect to RMI server: " . $this->describeEndpoint());
 
-			if (($statusCode = $this->parseStatusCode($banner)) === false || $statusCode != 220)
-				throw new RemoteMethodInvocationException("Error connecting to RMI server: $banner");
-
-			$this->parseBanner($banner);
+			$bannerInfo = $this->parseBanner($banner);
 			$this->negotiateProtocol();
-			$this->discoverCapabilities($banner);
+			$this->discoverCapabilities($bannerInfo);
 			$this->updateCapabilityFlags();
 		} finally {
 			$this->readTimeout = $previousTimeout;
@@ -682,14 +679,16 @@ class CloudRMIClient
 
 	protected function parseBanner($banner)
 	{
-		$this->advertisedMaxProtocol = 1;
-		$this->capabilities = [];
+		$parsed = cloudrmi_parse_banner((string) $banner);
 
-		if (preg_match('/PROTO=([0-9]+)/i', $banner, $match))
-			$this->advertisedMaxProtocol = max(1, min(2, (int) $match[1]));
+		if (!is_array($parsed) || !isset($parsed['status']) || (int) $parsed['status'] !== 220) {
+			throw new RemoteMethodInvocationException("Error connecting to RMI server: $banner");
+		}
 
-		if (preg_match('/PROTO=[^\s]*,([A-Z0-9_,\-]+)/i', $banner, $caps))
-			$this->capabilities = $this->normalizeCapabilityTokens(explode(',', $caps[1]));
+		$this->advertisedMaxProtocol = (int) ($parsed['advertised_max_protocol'] ?? 1);
+		$this->capabilities = $this->normalizeCapabilityTokens((array) ($parsed['capabilities'] ?? []));
+
+		return $parsed;
 	}
 
 	protected function negotiateProtocol()
@@ -723,28 +722,16 @@ class CloudRMIClient
 		}
 	}
 
-	protected function discoverCapabilities($banner)
+	protected function discoverCapabilities($banner = null)
 	{
 		if (!empty($this->capabilities))
 			return;
 
 		$response = $this->rawCmd('CAPS');
-		$code = $this->parseStatusCode($response);
+		$parsed = cloudrmi_parse_enum_response($response);
 
-		if ($code == 200) {
-			$parts = explode(' ', $response, 2);
-			$capsRaw = isset($parts[1]) ? trim($parts[1]) : '';
-
-			if (stripos($capsRaw, 'JSON') === 0) {
-				$json = trim(substr($capsRaw, 4));
-				$decoded = json_decode($json, true);
-
-				if (is_array($decoded))
-					$this->capabilities = $this->normalizeCapabilityTokens($decoded);
-			} elseif ($capsRaw !== '') {
-				$this->capabilities = $this->normalizeCapabilityTokens(preg_split('/[\s,]+/', $capsRaw));
-			}
-		}
+		if (is_array($parsed))
+			$this->capabilities = $this->normalizeCapabilityTokens($parsed);
 	}
 
 	protected function normalizeCapabilityTokens(array $tokens)
@@ -897,56 +884,52 @@ class CloudRMIClient
 		if ($line === false)
 			return ['line' => '', 'code' => false];
 
+		$parsed = cloudrmi_parse_response_line($line);
+		if (!is_array($parsed)) {
+			return ['line' => $line, 'code' => false];
+		}
+
 		$response = [
 			'line' => $line,
-			'code' => $this->parseStatusCode($line),
+			'code' => $parsed['status'],
 			'payload' => null,
 			'payload_len' => null,
 			'encoding' => null,
 			'is_payload' => false,
 		];
 
-		if ($this->protocolVersion >= 2 && $response['code'] !== false) {
-			$parts = preg_split('/\s+/', trim($line));
+		if ($this->protocolVersion >= 2 && $parsed['kind'] === CLOUDRMI_RESPONSE_PAYLOAD) {
+			$length = (int) $parsed['payload_len'];
 
-			if (count($parts) >= 4 && strtoupper($parts[1]) === 'PAYLOAD') {
-				$lengthRaw = $parts[3];
-				if (!ctype_digit((string) $lengthRaw)) {
-					return ['line' => $line, 'code' => false];
-				}
+			if ($length < 0)
+				return ['line' => $line, 'code' => false];
 
-				$length = (int) $lengthRaw;
-				$payload = '';
+			$maxPayload = $this->getMaxPayloadLength();
 
-				if ($length < 0)
-					return ['line' => $line, 'code' => false];
-
-				$maxPayload = $this->getMaxPayloadLength();
-
-				if ($length > $maxPayload) {
-					$this->connReadExact($length);	// drain to keep connection in sync
-					return [
-						'line' => '505 Payload exceeds client limit',
-						'code' => 505,
-						'payload' => null,
-						'payload_len' => null,
-						'encoding' => null,
-						'is_payload' => false,
-					];
-				}
-
-				if ($length > 0) {
-					$payload = $this->connReadExact($length);
-
-					if (!is_string($payload) || strlen($payload) != $length)
-						return ['line' => $line, 'code' => false];
-				}
-
-				$response['encoding'] = $parts[2];
-				$response['payload_len'] = $length;
-				$response['payload'] = $payload;
-				$response['is_payload'] = true;
+			if ($length > $maxPayload) {
+				$this->connReadExact($length);	// drain to keep connection in sync
+				return [
+					'line' => '505 Payload exceeds client limit',
+					'code' => 505,
+					'payload' => null,
+					'payload_len' => null,
+					'encoding' => null,
+					'is_payload' => false,
+				];
 			}
+
+			$payload = '';
+			if ($length > 0) {
+				$payload = $this->connReadExact($length);
+
+				if (!is_string($payload) || strlen($payload) != $length)
+					return ['line' => $line, 'code' => false];
+			}
+
+			$response['encoding'] = $parsed['encoding'];
+			$response['payload_len'] = $length;
+			$response['payload'] = $payload;
+			$response['is_payload'] = true;
 		}
 
 		return $response;

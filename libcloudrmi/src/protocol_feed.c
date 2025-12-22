@@ -502,3 +502,11 @@ rmi_status_t rmi_protocol_next_event(
         return RMI_OK;
     }
 }
+
+size_t rmi_protocol_get_max_payload(const rmi_protocol_ctx_t *ctx)
+{
+    if (ctx == NULL)
+        return 0;
+
+    return ctx->max_payload;
+}

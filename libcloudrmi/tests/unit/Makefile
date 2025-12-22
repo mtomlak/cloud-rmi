@@ -8,9 +8,12 @@ protocol_feed_test: protocol_feed_test.c
 proxy_payload_test: proxy_payload_test.c ../../../src/proxy.c ../../../src/cloud-rmi.c ../../../src/client.c ../../../src/config.c ../../../src/capabilities.c
 	$(CC) $(CFLAGS) -o $@ $< ../../../src/proxy.c ../../../src/cloud-rmi.c ../../../src/client.c ../../../src/config.c ../../../src/capabilities.c $(LDFLAGS)
 
-all: protocol_feed_test proxy_payload_test
+semantics_test: semantics_test.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+all: protocol_feed_test proxy_payload_test semantics_test
 
 clean:
-	rm -f protocol_feed_test proxy_payload_test
+	rm -f protocol_feed_test proxy_payload_test semantics_test
 
 .PHONY: all clean

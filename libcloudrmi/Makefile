@@ -4,7 +4,7 @@ CFLAGS += -Iinclude
 CFLAGS ?= -g -Wall
 
 LIBNAME = libcloudrmi.a
-LIB_OBJS = src/payload.o src/protocol_line.o src/protocol_feed.o
+LIB_OBJS = src/payload.o src/protocol_line.o src/protocol_feed.o src/semantics.o
 
 all: $(LIBNAME)
 

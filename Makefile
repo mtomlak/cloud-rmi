@@ -104,6 +104,7 @@ install:
 test: all
 	$(MAKE) -C libcloudrmi/tests/unit all
 	cd libcloudrmi/tests/unit && ./protocol_feed_test
+	cd libcloudrmi/tests/unit && ./semantics_test
 	cd libcloudrmi/tests/unit && ./proxy_payload_test
 	$(MAKE) -C tests/integration test
 
