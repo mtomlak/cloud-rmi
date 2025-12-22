@@ -29,13 +29,6 @@
  */
 
 
-// External config variables
-//int var_debug;
-//int var_read_timeout;
-//char *var_context_name;
-//char *var_recovery_token;
-
-
 struct child_debug{
    int sock;
    int pid;
@@ -308,22 +301,22 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
    case RMI_EVENT_DEBUG:
       if (state->is_authenticated) {
          if (strcmp(event->arg1, "on") == 0) {
-            var_debug = 1;
+            debug_log_set(1);
 
          } else if (strcmp(event->arg1, "off") == 0) {
-            var_debug = 0;
+            debug_log_set(0);
          } else if (strcmp(event->arg1, "traffic") == 0) {
             if (event->arg2 != NULL && strcmp(event->arg2, "on") == 0) {
-               var_debug_traffic = 1;
+               debug_traffic_set(1);
                stream_writeln(state->sock, "200 Debug traffic logging ON");
             } else if (event->arg2 != NULL && strcmp(event->arg2, "off") == 0) {
-               var_debug_traffic = 0;
+               debug_traffic_set(0);
                stream_writeln(state->sock, "200 Debug traffic logging OFF");
             } else {
                stream_writeln(
                   state->sock,
                   "200 Debug traffic is %s",
-                  var_debug_traffic ? "ON" : "OFF");
+                  debug_traffic_enabled() ? "ON" : "OFF");
             }
 
             break;
@@ -482,7 +475,7 @@ void handle_connection (int sock, int is_unix_socket)
 
    rmi_protocol_destroy(protocol_ctx);
 
-   if (var_debug && !loop) printf("handle_connection: Received exit command from client\n");
-   if (var_debug && !bytes) printf("handle_connection: Client connection closed\n");
+   if (debug_log_enabled() && !loop) DEBUG_LOG("handle_connection: Received exit command from client");
+   if (debug_log_enabled() && !bytes) DEBUG_LOG("handle_connection: Client connection closed");
    log_traffic_event(&state, "connection-close");
 }

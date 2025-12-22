@@ -25,8 +25,10 @@
  */
 
 /* Set default values for global vars */
+#ifdef ENABLE_DEBUG_LOGGING
 int var_debug = 0;
 int var_debug_traffic = 0;
+#endif
 int var_port = 9500;
 int var_read_timeout = 10;
 int var_start_delay = 0;
@@ -117,21 +119,21 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set context_name=\"%s\"\n", var_context_name);
+            log_event(LOG_INFO, "Set context_name=\"%s\"", var_context_name);
          }
       }
       else if(strcasecmp(conf_name, "port") == 0) {
          var_port = atoi(conf_value);
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set port=\"%d\"\n", var_port);
+            log_event(LOG_INFO, "Set port=\"%d\"", var_port);
          }
       }
       else if(strcasecmp(conf_name, "read_timeout") == 0) {
          var_read_timeout = atoi(conf_value);
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set read_timeout=\"%d\"\n", var_read_timeout);
+            log_event(LOG_INFO, "Set read_timeout=\"%d\"", var_read_timeout);
          }
       }
       else if(strcasecmp(conf_name, "recovery_token") == 0) {
@@ -140,7 +142,7 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set recovery_token=\"%s\"\n", var_recovery_token);
+            log_event(LOG_INFO, "Set recovery_token=\"%s\"", var_recovery_token);
          }
       }
 #ifdef PROXY_SUPPORT
@@ -150,7 +152,7 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set var_proxy=\"%s\"\n", var_proxy);
+            log_event(LOG_INFO, "Set var_proxy=\"%s\"", var_proxy);
          }
       }
 #endif
@@ -160,7 +162,7 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set var_script_exec_dir=\"%s\"\n", var_script_exec_dir);
+            log_event(LOG_INFO, "Set var_script_exec_dir=\"%s\"", var_script_exec_dir);
          }
       } 
       else if(strcasecmp(conf_name, "script_base_namespace") == 0) {
@@ -171,7 +173,7 @@ int read_config(char *config_file)
          sanitize_script_base_namespace();
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set script_base_namespace=\"%s\"\n", var_script_base_namespace);
+            log_event(LOG_INFO, "Set script_base_namespace=\"%s\"", var_script_base_namespace);
          }
       } 
       else if(strcasecmp(conf_name, "listen_unix") == 0) {
@@ -180,7 +182,7 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set listen_unix=\"%s\"\n", var_unix_socket_path);
+            log_event(LOG_INFO, "Set listen_unix=\"%s\"", var_unix_socket_path);
          }
       }
       else if(strcasecmp(conf_name, "unix_socket_skip_auth") == 0) {
@@ -191,7 +193,7 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set unix_socket_skip_auth=\"%s\"\n", var_unix_socket_skip_auth ? "True" : "False");
+            log_event(LOG_INFO, "Set unix_socket_skip_auth=\"%s\"", var_unix_socket_skip_auth ? "True" : "False");
          }
       }
       else if(strcasecmp(conf_name, "interface_map_file") == 0) {
@@ -200,7 +202,7 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set interface_map_file=\"%s\"\n", var_interface_map_file);
+            log_event(LOG_INFO, "Set interface_map_file=\"%s\"", var_interface_map_file);
          } //var_min_spare_workers
       }
       else if(strcasecmp(conf_name, "max_payload") == 0) {
@@ -208,7 +210,7 @@ int read_config(char *config_file)
          if(parsed > 0 && parsed < SIZE_MAX) {
             var_max_payload = (size_t)parsed;
             if(log_level > 0) {
-               log_event(LOG_INFO, "Set max_payload=\"%zu\"\n", var_max_payload);
+               log_event(LOG_INFO, "Set max_payload=\"%zu\"", var_max_payload);
             }
          }
       }
@@ -217,14 +219,14 @@ int read_config(char *config_file)
          var_min_spare_workers = atoi(conf_value);
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set min_spare_workers=\"%d\"\n", var_min_spare_workers);
+            log_event(LOG_INFO, "Set min_spare_workers=\"%d\"", var_min_spare_workers);
          }
       }
       else if(strcasecmp(conf_name, "max_spare_workers") == 0) {
          var_max_spare_workers = atoi(conf_value);
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set max_spare_workers=\"%d\"\n", var_max_spare_workers);
+            log_event(LOG_INFO, "Set max_spare_workers=\"%d\"", var_max_spare_workers);
          }
       }
 #endif
@@ -232,48 +234,48 @@ int read_config(char *config_file)
          var_start_delay = atoi(conf_value);
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set start_delay=\"%d\"\n", var_start_delay);
+            log_event(LOG_INFO, "Set start_delay=\"%d\"", var_start_delay);
          }
       }
+#ifdef ENABLE_DEBUG_LOGGING
       else if(strcasecmp(conf_name, "debug") == 0) {
          if(strcasecmp(conf_value, "Yes") == 0 || strcasecmp(conf_value, "On") == 0 || strcasecmp(conf_value, "1") == 0) {
-            var_debug = 1;
-            log_level = 1;
+            debug_log_set(1);
          }
          else {
-            var_debug = 0;
-            log_level = 0;
+            debug_log_set(0);
          }
 
          if(log_level > 0) {
             log_event(LOG_INFO,
-               "Set debug=\"%s\"\n",
-               var_debug ? "True" : "False");
+               "Set debug=\"%s\"",
+               debug_log_enabled() ? "True" : "False");
          }
       }
       else if(strcasecmp(conf_name, "debug_traffic") == 0) {
          if(strcasecmp(conf_value, "Yes") == 0 || strcasecmp(conf_value, "On") == 0 || strcasecmp(conf_value, "1") == 0) {
-            var_debug_traffic = 1;
+            debug_traffic_set(1);
          } else {
-            var_debug_traffic = 0;
+            debug_traffic_set(0);
          }
 
          if (log_level > 0) {
             log_event(
                LOG_INFO,
-               "Set debug_traffic=\"%s\"\n",
-               var_debug_traffic ? "True" : "False");
+               "Set debug_traffic=\"%s\"",
+               debug_traffic_enabled() ? "True" : "False");
          }
       }
+#endif
       else {
-         log_event(LOG_INFO, "Unable to set %s=\"%s\"\n", conf_name, conf_value);
+         log_event(LOG_INFO, "Unable to set %s=\"%s\"", conf_name, conf_value);
       }
    }
 
    fclose(fp);
 
-   if (var_debug)
-      printf("Configuration loaded (unix_socket_skip_auth=%i, script_exec_dir=%s)\n", var_unix_socket_skip_auth, var_script_exec_dir);
+   if (debug_log_enabled())
+      DEBUG_LOG("Configuration loaded (unix_socket_skip_auth=%i, script_exec_dir=%s)", var_unix_socket_skip_auth, var_script_exec_dir);
 
    return 1;
 }

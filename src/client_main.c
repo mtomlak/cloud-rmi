@@ -44,8 +44,10 @@ void show_help(char *this_cmd)
    printf("\t-u sets unix socket path (overrides TCP host/port, currently %s)\n",
       var_unix_socket_path ? var_unix_socket_path : "OFF");
    printf("\t-t sets recovery authentication token\n");
+#ifdef ENABLE_DEBUG_LOGGING
    printf("\t-v enters verbose (debug) mode (currently %s)\n\n", 
-      var_debug ? "ON" : "OFF");
+      debug_log_enabled() ? "ON" : "OFF");
+#endif
 }
 
 void print_php_error(char *response)
@@ -89,8 +91,14 @@ int main(int argc, char *argv[])
       exit(0);
    }
 
+#ifdef ENABLE_DEBUG_LOGGING
+   const char *optstring = "c:hp:r:s:t:u:v";
+#else
+   const char *optstring = "c:hp:r:s:t:u:";
+#endif
+
    // Overwrite some config variables
-   while((opt = getopt(argc, argv, "c:hp:r:s:t:u:v")) != -1) {
+   while((opt = getopt(argc, argv, optstring)) != -1) {
       switch(opt) {
          case 'c':
             read_config(optarg);
@@ -120,10 +128,12 @@ int main(int argc, char *argv[])
             var_recovery_token = strdup(optarg);
             break;
 
+#ifdef ENABLE_DEBUG_LOGGING
          case 'v':
             printf("Entering verbose mode\n");
-            var_debug = 1;
+            debug_log_set(1);
             break;
+#endif
 
          default:
             break;
