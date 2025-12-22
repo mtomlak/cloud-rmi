@@ -55,6 +55,7 @@ void show_help(char *this_cmd)
 	printf("\nFlags:\n");
 	printf("\t-d goes daemon\n");
 	printf("\t-v enters verbose (debug) mode (currently %s)\n", var_debug ? "ON" : "OFF"); 
+	printf("\t-T enables traffic debug logging (currently %s)\n", var_debug_traffic ? "ON" : "OFF");
 	printf("\nOptions:\n");
 	printf("\t-b sets base namespace for local scripts\n");
 	printf("\t-c sets path to the configuration file\n");
@@ -139,9 +140,10 @@ int main(int argc, char *argv[])
       static struct option long_options[] = {
          {"unix-socket", required_argument, 0, 'u'},
          {"help", no_argument, 0, 'h'},
+         {"debug-traffic", no_argument, 0, 'T'},
          {0, 0, 0, 0}
       };
-      while((opt = getopt_long(argc, argv, "b:c:dD:he:m:n:p:t:u:vx:", long_options, NULL)) != -1) {
+      while((opt = getopt_long(argc, argv, "b:c:dD:he:m:n:p:t:u:vTx:", long_options, NULL)) != -1) {
          switch(opt) {
          	case 'b':
                var_script_base_namespace = strdup(optarg);
@@ -151,7 +153,12 @@ int main(int argc, char *argv[])
 
             case 'c':
                var_config_file = strdup(optarg);
-               read_config(var_config_file);
+               if (!read_config(var_config_file)) {
+                  if (var_debug)
+                     printf("Failed to load config override %s\n", var_config_file);
+               } else if (var_debug) {
+                  printf("Loaded config override %s\n", var_config_file);
+               }
                break;
 
             case 'd':
@@ -166,9 +173,16 @@ int main(int argc, char *argv[])
 	            show_help(argv[0]);
 	            exit(0);
 
-	        case 'm':
+            case 'm':
                var_interface_map_file = strdup(optarg);
                read_iface_config(var_interface_map_file);
+               break;
+
+            case 'e':
+               var_script_exec_dir = strdup(optarg);
+               read_iface_config(var_interface_map_file);
+               if (var_debug)
+                  printf("CLI override script_exec_dir=%s\n", var_script_exec_dir);
                break;
 
             case 'n':
@@ -192,6 +206,11 @@ int main(int argc, char *argv[])
                var_debug = 1;
                break;
 
+            case 'T':
+               printf("Enabling traffic debug logging\n");
+               var_debug_traffic = 1;
+               break;
+
             case 'x':
 #ifdef PROXY_SUPPORT
             	var_proxy = strdup(optarg);
@@ -205,6 +224,9 @@ int main(int argc, char *argv[])
          }
       }
    }
+
+   if (var_debug)
+      printf("Configuration summary: unix_socket_skip_auth=%i, script_exec_dir=%s\n", var_unix_socket_skip_auth, var_script_exec_dir);
 
    if (!read_iface_config(var_interface_map_file))
       die_err("Error: Failed to load interface map file");

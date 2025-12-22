@@ -20,6 +20,26 @@
 #define LIBCLOUDRMI_VERSION_PATCH CLOUDRMI_LIBRARY_VERSION_PATCH
 #define BUF_SZ RMI_BUF_SZ
 
+#ifndef ENABLE_SYSLOG_TRACE
+#define ENABLE_SYSLOG_TRACE 1
+#endif
+
+#ifndef LOG_DEBUG
+#define LOG_DEBUG 7
+#endif
+#ifndef LOG_INFO
+#define LOG_INFO 6
+#endif
+#ifndef LOG_NOTICE
+#define LOG_NOTICE 5
+#endif
+#ifndef LOG_WARNING
+#define LOG_WARNING 4
+#endif
+#ifndef LOG_ERR
+#define LOG_ERR 3
+#endif
+
 #ifdef ENABLE_LINUX_FEATURES
         #define CHILD_STACK_SZ          BUF_SZ * 24   // seems safe above BUF_SZ * 10 up to version 0.91
 
@@ -94,6 +114,9 @@ int stream_read(int sock, char* buf, int buf_size);
 int stream_readln(int sock, char* line, int max_size);
 int stream_readlns(int sock, char* line, int max_size);
 void log_event(int priority, char *format, ...);
+void log_unexpected_event(int priority, const char *format, ...);
+int debug_traffic_enabled(void);
+void log_traffic_event(const struct conn_state *state, const char *format, ...);
 void substring(char *string, char *sub, int start, int len);
 void split_host_addr(char *host, char *ip, int *port);
 char *get_ip_addr(char *hostname);

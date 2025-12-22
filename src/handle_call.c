@@ -24,6 +24,19 @@
  * @license BSD
  */
 
+static size_t bounded_strlen(const char *value, size_t cap)
+{
+   size_t len = 0;
+
+   if (value == NULL)
+      return 0;
+
+   while (len < cap && value[len] != '\0')
+      len++;
+
+   return len;
+}
+
 static int append_output(char **buf, size_t *cap, size_t *len, const char *chunk, size_t chunk_len)
 {
    size_t needed;
@@ -616,6 +629,9 @@ int handle_call_cmd(
 {
    struct server_iface_entry *iface_entry;
    const char *iface_name = iface;
+   size_t arg_len = bounded_strlen(arg, 128);
+   size_t payload_len_safe = payload ? payload_len : 0;
+   const char *encoding_value = encoding ? encoding : "";
 
    // Authentication check
    if (!state->is_authenticated) {
@@ -627,6 +643,15 @@ int handle_call_cmd(
       iface_name++;
 
    iface_entry = server_get_iface_entry((char *)iface_name);
+
+    log_traffic_event(
+       state,
+       "call-dispatch iface=%s method=%s payload_len=%zu arg_len=%zu encoding=%s",
+       iface_name ? iface_name : "",
+       method ? method : "",
+       payload_len_safe,
+       arg_len,
+       encoding_value);
 
    // Check whether it's local script
    if (iface_entry != NULL) {
@@ -641,6 +666,11 @@ int handle_call_cmd(
 
    } else {
       stream_writeln(state->sock, "400 Unsupported interface: %s", iface_name);
+      log_unexpected_event(
+         LOG_NOTICE,
+         "unsupported-interface iface=%s method=%s",
+         iface_name ? iface_name : "",
+         method ? method : "");
    }
 
    return 0;

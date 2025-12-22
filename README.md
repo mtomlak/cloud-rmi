@@ -18,6 +18,17 @@ Add after `gcc` command using `-D` argument (e.g. `gcc ... -D ENABLE_LINUX_FEATU
 - ENABLE_LINUX_FEATURES	- use Linux glibc features
 - PROXY_SUPPORT			- enable proxy support for server
 - DISABLE_WORKER_REUSE	- don't use prefork frozen worker proccess manager
+- ENABLE_SYSLOG_TRACE   - enable syslog and `/tmp/rmi-server.log` writes (defaults to `1`)
+
+## Logging and debugging controls
+
+Runtime verbosity can be toggled without recompiling:
+
+- `debug`/`-v` enable the existing verbose mode.
+- `debug_traffic`/`-T` enables lightweight traffic summaries (request/response framing only) routed through `log_event`.
+- `DEBUG traffic on|off` can be issued on an authenticated session to flip traffic logging at runtime.
+
+Traffic summaries elide payload bytes and are bounded to protect protocol framing; they are useful when chasing crashes and can be disabled for steady-state performance.
 
 ## Development
 Works with standard gcc and make. Make sure to read Notes section before commiting any changes.

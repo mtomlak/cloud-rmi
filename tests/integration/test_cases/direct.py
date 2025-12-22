@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from harness import IntegrationEnvironment, TestCase, TestResult, parse_status
 
@@ -205,6 +206,35 @@ def server_stats_json(env: IntegrationEnvironment) -> TestResult:
     return TestResult(name="server-stats-json", passed=True)
 
 
+def debug_traffic_logging(env: IntegrationEnvironment) -> TestResult:
+    log_path = Path("/tmp/rmi-server.log")
+    try:
+        log_path.unlink()
+    except FileNotFoundError:
+        pass
+
+    payload = b"traffic-check"
+    with env.server_session() as session:
+        session._send_line("DEBUG traffic on")
+        status, message = parse_status(session._read_line())
+        _require(status == 200, f"expected 200 got {status} ({message})")
+        result = session.call(
+            "PayloadInterface",
+            "repeat",
+            payload=payload,
+            encoding="RAW",
+            decode_output=True,
+        )
+    _require(result.status == 200, f"expected 200 got {result.status}")
+    _require(result.message.startswith("PAYLOAD "), "payload response missing PAYLOAD keyword")
+    _require(result.decoded == "RAW:traffic-check:traffic-check", f"unexpected payload content: {result.decoded}")
+    _require(log_path.exists(), "traffic log file missing")
+    contents = log_path.read_text(encoding="utf-8", errors="replace")
+    _require("traffic:" in contents, "expected traffic log entry")
+    _require("traffic-check" not in contents, "payload bytes should not be logged verbatim")
+    return TestResult(name="debug-traffic-logging", passed=True, traces=[result.trace])
+
+
 DIRECT_CASES: list[TestCase] = [
     TestCase(name="direct-echo", runner=direct_echo),
     TestCase(name="exec-failure", runner=exec_failure),
@@ -218,4 +248,5 @@ DIRECT_CASES: list[TestCase] = [
     TestCase(name="inline-payload-large-inline", runner=inline_payload_large_inline),
     TestCase(name="control-commands", runner=control_commands),
     TestCase(name="server-stats-json", runner=server_stats_json),
+    TestCase(name="debug-traffic-logging", runner=debug_traffic_logging),
 ]
