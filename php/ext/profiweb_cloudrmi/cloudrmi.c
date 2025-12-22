@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <cloudrmi/protocol.h>
+#include <cloudrmi/semantics.h>
 
 static int le_cloudrmi_ctx;
 
@@ -213,6 +214,102 @@ PHP_FUNCTION(cloudrmi_protocol_set_max_payload)
     RETURN_BOOL(ok != 0);
 }
 
+PHP_FUNCTION(cloudrmi_parse_banner)
+{
+    zend_string *line;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(line)
+    ZEND_PARSE_PARAMETERS_END();
+
+    cloudrmi_banner_info info;
+    if (!cloudrmi_parse_banner(ZSTR_VAL(line), &info)) {
+        RETURN_FALSE;
+    }
+
+    array_init(return_value);
+    add_assoc_long(return_value, "status", info.status);
+    add_assoc_string(return_value, "context", info.context);
+    add_assoc_long(return_value, "advertised_max_protocol", info.advertised_max_protocol);
+
+    zval caps;
+    array_init(&caps);
+    for (size_t i = 0; i < info.capability_count; i++) {
+        add_next_index_string(&caps, info.capabilities[i]);
+    }
+
+    add_assoc_zval(return_value, "capabilities", &caps);
+}
+
+PHP_FUNCTION(cloudrmi_parse_response_line)
+{
+    zend_string *line;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(line)
+    ZEND_PARSE_PARAMETERS_END();
+
+    cloudrmi_response_info info;
+    if (!cloudrmi_parse_response_line(ZSTR_VAL(line), &info)) {
+        RETURN_FALSE;
+    }
+
+    array_init(return_value);
+    add_assoc_long(return_value, "status", info.status);
+    add_assoc_long(return_value, "kind", info.kind);
+    add_assoc_string(return_value, "encoding", info.encoding);
+    add_assoc_long(return_value, "payload_len", (zend_long)info.payload_len);
+    add_assoc_string(return_value, "body", info.body);
+}
+
+PHP_FUNCTION(cloudrmi_parse_enum_response)
+{
+    zend_string *line;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(line)
+    ZEND_PARSE_PARAMETERS_END();
+
+    cloudrmi_enum_response info;
+    if (!cloudrmi_parse_enum_response(ZSTR_VAL(line), &info)) {
+        RETURN_FALSE;
+    }
+
+    array_init(return_value);
+    for (size_t i = 0; i < info.count; i++) {
+        add_next_index_string(return_value, info.values[i]);
+    }
+}
+
+PHP_FUNCTION(cloudrmi_protocol_validate_line)
+{
+    zend_string *line;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(line)
+    ZEND_PARSE_PARAMETERS_END();
+
+    RETURN_BOOL(cloudrmi_protocol_validate_line(ZSTR_VAL(line)) != 0);
+}
+
+PHP_FUNCTION(cloudrmi_protocol_payload_allowed)
+{
+    zval *zctx;
+    zend_long payload_len;
+
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+        Z_PARAM_RESOURCE(zctx)
+        Z_PARAM_LONG(payload_len)
+    ZEND_PARSE_PARAMETERS_END();
+
+    cloudrmi_context_wrapper *wrapper = cloudrmi_fetch_ctx(zctx);
+    if (wrapper == NULL || wrapper->ctx == NULL || payload_len < 0) {
+        RETURN_FALSE;
+    }
+
+    RETURN_BOOL(cloudrmi_protocol_payload_allowed(wrapper->ctx, (size_t)payload_len) != 0);
+}
+
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_protocol_create, 0, 0, IS_MIXED, 0)
 ZEND_END_ARG_INFO()
 
@@ -243,6 +340,27 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_protocol_set_max_payloa
     ZEND_ARG_TYPE_INFO(0, max_payload, IS_LONG, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_parse_banner, 0, 1, IS_MIXED, 0)
+    ZEND_ARG_TYPE_INFO(0, line, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_parse_response_line, 0, 1, IS_MIXED, 0)
+    ZEND_ARG_TYPE_INFO(0, line, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_parse_enum_response, 0, 1, IS_MIXED, 0)
+    ZEND_ARG_TYPE_INFO(0, line, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_protocol_validate_line, 0, 1, _IS_BOOL, 0)
+    ZEND_ARG_TYPE_INFO(0, line, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_cloudrmi_protocol_payload_allowed, 0, 2, _IS_BOOL, 0)
+    ZEND_ARG_INFO(0, ctx)
+    ZEND_ARG_TYPE_INFO(0, payload_len, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
 static const zend_function_entry cloudrmi_functions[] = {
     PHP_FE(cloudrmi_protocol_create, arginfo_cloudrmi_protocol_create)
     PHP_FE(cloudrmi_protocol_destroy, arginfo_cloudrmi_protocol_destroy)
@@ -251,6 +369,11 @@ static const zend_function_entry cloudrmi_functions[] = {
     PHP_FE(cloudrmi_protocol_next_event, arginfo_cloudrmi_protocol_next_event)
     PHP_FE(cloudrmi_protocol_set_version, arginfo_cloudrmi_protocol_set_version)
     PHP_FE(cloudrmi_protocol_set_max_payload, arginfo_cloudrmi_protocol_set_max_payload)
+    PHP_FE(cloudrmi_parse_banner, arginfo_cloudrmi_parse_banner)
+    PHP_FE(cloudrmi_parse_response_line, arginfo_cloudrmi_parse_response_line)
+    PHP_FE(cloudrmi_parse_enum_response, arginfo_cloudrmi_parse_enum_response)
+    PHP_FE(cloudrmi_protocol_validate_line, arginfo_cloudrmi_protocol_validate_line)
+    PHP_FE(cloudrmi_protocol_payload_allowed, arginfo_cloudrmi_protocol_payload_allowed)
     PHP_FE_END
 };
 
@@ -298,6 +421,9 @@ static const cloudrmi_constant_entry cloudrmi_constant_entries[] = {
     {"RMI_EVENT_PROTO", (zend_long)RMI_EVENT_PROTO},
     {"RMI_EVENT_UNKNOWN", (zend_long)RMI_EVENT_UNKNOWN},
     {"RMI_MAX_PROTOCOL_VERSION", (zend_long)RMI_MAX_PROTOCOL_VERSION},
+    {"CLOUDRMI_RESPONSE_PLAIN", (zend_long)CLOUDRMI_RESPONSE_PLAIN},
+    {"CLOUDRMI_RESPONSE_JSON_INLINE", (zend_long)CLOUDRMI_RESPONSE_JSON_INLINE},
+    {"CLOUDRMI_RESPONSE_PAYLOAD", (zend_long)CLOUDRMI_RESPONSE_PAYLOAD},
 };
 
 static const size_t cloudrmi_constant_entries_count = sizeof(cloudrmi_constant_entries) / sizeof(cloudrmi_constant_entries[0]);

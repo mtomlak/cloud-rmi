@@ -8,6 +8,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
@@ -16,6 +17,7 @@
 #include "config.h"
 #include "proxy.h"
 #include "client.h"
+#include <cloudrmi/semantics.h>
 
 /**
  * Provides proxy server functionality
@@ -528,7 +530,7 @@ struct proxy_iface_entry *proxy_get_iface_entry(char *iface_name)
    cur = proxy_iface_map;
 
    while (cur != NULL) {
-      if (strcmp(iface_name, cur->iface) == 0)
+      if (strcasecmp(iface_name, cur->iface) == 0)
          return cur;
 
       cur = cur->next;
@@ -573,12 +575,9 @@ void proxy_add_iface_entry(int proxy_id, char *iface_name)
 
 int proxy_fetch_interfaces(int proxy_num)
 {
-   int status_code;
    struct proxy_conn *conn;
    struct proxy_server *proxy;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
-   char **parsed = NULL;
-   size_t parsed_count = 0;
    int ret = 0;
 
    if (response == NULL)
@@ -598,116 +597,30 @@ int proxy_fetch_interfaces(int proxy_num)
    }
 
    proxy_set_conn_busy(conn);
-   status_code = client_raw_cmd(&conn->client, "IFACES", response);
+   if (stream_writeln(conn->client.sock, "IFACES") < 0 || stream_readln(conn->client.sock, response, BUF_SZ) < 0) {
+      proxy_set_conn_free(conn);
+      proxy_mark_failure(proxy, "iface-status");
+      log_unexpected_event(LOG_WARNING, "proxy-ifaces-io-failed");
+      goto cleanup;
+   }
    proxy_set_conn_free(conn);
 
-   if (status_code != 200) {
-      proxy_mark_failure(proxy, "iface-status");
-      goto cleanup;
-   }
-
-   char *payload = response;
-   while (*payload == ' ')
-      payload++;
-
-   if (strncmp(payload, "JSON", 4) != 0) {
+   cloudrmi_enum_response enum_resp;
+   if (!cloudrmi_parse_enum_response(response, &enum_resp)) {
       proxy_mark_failure(proxy, "iface-format");
+      log_unexpected_event(LOG_WARNING, "proxy-ifaces-parse-failed response=%s", response);
       goto cleanup;
-   }
-
-   payload += 4;
-   while (*payload == ' ')
-      payload++;
-
-   if (*payload != '[') {
-      proxy_mark_failure(proxy, "iface-array-missing");
-      goto cleanup;
-   }
-
-   const char *cursor = payload + 1;
-   while (*cursor != '\0') {
-      while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n')
-         cursor++;
-
-      if (*cursor == ']') {
-         ret = 1;
-         break;
-      }
-
-      if (*cursor != '\"') {
-         proxy_mark_failure(proxy, "iface-entry-missing");
-         goto cleanup;
-      }
-
-      cursor++;
-      char iface[PROXY_IFACE_MAX_SZ + 1];
-      size_t len = 0;
-
-      while (*cursor != '\0' && *cursor != '\"' && len < PROXY_IFACE_MAX_SZ) {
-         if (*cursor == '\\' && cursor[1] != '\0') {
-            char escaped = cursor[1];
-            if (escaped == 'n')
-               iface[len++] = '\n';
-            else if (escaped == 'r')
-               iface[len++] = '\r';
-            else if (escaped == 't')
-               iface[len++] = '\t';
-            else
-               iface[len++] = escaped;
-            cursor += 2;
-         } else {
-            iface[len++] = *cursor;
-            cursor++;
-         }
-      }
-
-      if (*cursor != '\"') {
-         proxy_mark_failure(proxy, "iface-entry-unclosed");
-         goto cleanup;
-      }
-
-      iface[len] = '\0';
-      cursor++;  // closing quote
-
-      char *dup = strdup(iface);
-      char **tmp;
-
-      if (dup == NULL) {
-         proxy_mark_failure(proxy, "iface-oom");
-         goto cleanup;
-      }
-
-      tmp = realloc(parsed, sizeof(char *) * (parsed_count + 1));
-      if (tmp == NULL) {
-         free(dup);
-         proxy_mark_failure(proxy, "iface-oom");
-         goto cleanup;
-      }
-
-      parsed = tmp;
-      parsed[parsed_count++] = dup;
-
-      while (*cursor != '\0' && *cursor != ',' && *cursor != ']')
-         cursor++;
-
-      if (*cursor == ',')
-         cursor++;
    }
 
    proxy_clear_iface_entries(proxy_num);
-   for (size_t i = 0; i < parsed_count; i++) {
-      proxy_add_iface_entry(proxy_num, (char *)normalize_iface_name(parsed[i]));
+   for (size_t i = 0; i < enum_resp.count; i++) {
+      proxy_add_iface_entry(proxy_num, (char *)normalize_iface_name(enum_resp.values[i]));
    }
 
    proxy_mark_success(proxy);
+   ret = 1;
 
 cleanup:
-   if (parsed != NULL) {
-      for (size_t i = 0; i < parsed_count; i++)
-         free(parsed[i]);
-
-      free(parsed);
-   }
    free(response);
    return ret;
 }

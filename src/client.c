@@ -14,6 +14,7 @@
 #include "cloud-rmi.h"
 #include "capabilities.h"
 #include "client.h"
+#include <cloudrmi/semantics.h>
 
 /**
  * Simple RMI client in C
@@ -40,35 +41,15 @@ int client_parse_status_code(char *response, int *status_code, char *data)
    return 0;
 }
 
-static int parse_max_proto(const char *ext)
+static uint32_t caps_from_tokens(const char *const *tokens, size_t count)
 {
-   const char *proto = strstr(ext, "PROTO=");
-   int version = 0;
+   uint32_t caps = 0;
 
-   if (proto != NULL) {
-      proto += 6;
-
-      while (isdigit((unsigned char)*proto)) {
-         version = version * 10 + (*proto - '0');
-         proto++;
-      }
+   for (size_t i = 0; i < count; i++) {
+      caps |= rmi_capability_from_token(tokens[i]);
    }
 
-   return version > 0 ? version : 1;
-}
-
-static void normalize_capability_tokens(const char *ext, char *buffer, size_t buffer_len)
-{
-   size_t len = strlen(ext);
-
-   if (len >= buffer_len)
-      len = buffer_len - 1;
-
-   for (size_t i = 0; i < len; i++) {
-      buffer[i] = (ext[i] == ',') ? ' ' : ext[i];
-   }
-
-   buffer[len] = '\0';
+   return caps;
 }
 
 static int payload_supported(const struct rmi_client_conn *conn)
@@ -180,6 +161,24 @@ static int discard_bytes(int sock, size_t len)
    return 1;
 }
 
+static void copy_response_tail(const char *line, char *out, size_t out_len)
+{
+   if (out == NULL || out_len == 0)
+      return;
+
+   const char *cursor = strchr(line, ' ');
+   if (cursor == NULL) {
+      out[0] = '\0';
+      return;
+   }
+
+   while (*cursor == ' ')
+      cursor++;
+
+   strncpy(out, cursor, out_len - 1);
+   out[out_len - 1] = '\0';
+}
+
 /**
  * Starts client connection
  * 
@@ -288,17 +287,9 @@ int client_connect(char *hostname, int port_num, const char *unix_socket_path, s
       return -1;
    }
 
-   if (!client_parse_status_code(response, &status_code, message)) {
-      printf("Error: Cannot parse authentication response: %s\n", response);
-      free(response);
-      free(message);
-      close(sock);
-
-      return -1;
-   }
-
-   if (status_code != 220) {
-      printf("Error: Failed to connect - invalid banner received: %s\n", response);
+   cloudrmi_banner_info banner_info;
+   if (!cloudrmi_parse_banner(response, &banner_info)) {
+      printf("Error: Failed to parse banner: %s\n", response);
       free(response);
       free(message);
       close(sock);
@@ -308,22 +299,12 @@ int client_connect(char *hostname, int port_num, const char *unix_socket_path, s
 
    conn->sock = sock;
 
-   int server_max_proto = 1;
-   char *ext = strstr(response, " EXT ");
-   if (ext != NULL) {
-      char *caps_tokens = malloc(sizeof(char) * (BUF_SZ + 1));
-
-      ext += 5;
-      server_max_proto = parse_max_proto(ext);
-
-      if (caps_tokens != NULL) {
-         normalize_capability_tokens(ext, caps_tokens, BUF_SZ + 1);
-         conn->capabilities = rmi_parse_capabilities(caps_tokens);
-         conn->capabilities_known = 1;
-      }
-
-      free(caps_tokens);
-   }
+   int server_max_proto = banner_info.advertised_max_protocol > 0 ? banner_info.advertised_max_protocol : 1;
+   const char *banner_caps[CLOUDRMI_MAX_CAPABILITIES];
+   for (size_t i = 0; i < banner_info.capability_count && i < CLOUDRMI_MAX_CAPABILITIES; i++)
+      banner_caps[i] = banner_info.capabilities[i];
+   conn->capabilities = caps_from_tokens(banner_caps, banner_info.capability_count);
+   conn->capabilities_known = 1;
 
    if (!conn->capabilities_known) {
       char *caps_response = malloc(sizeof(char) * (BUF_SZ + 1));
@@ -334,8 +315,12 @@ int client_connect(char *hostname, int port_num, const char *unix_socket_path, s
          bzero(caps_message, BUF_SZ);
 
          if (stream_writeln(sock, "CAPS") >= 0 && stream_readln(sock, caps_response, BUF_SZ) >= 0) {
-            if (client_parse_status_code(caps_response, &status_code, caps_message) && status_code == 200) {
-               conn->capabilities = rmi_parse_capabilities(caps_message);
+            cloudrmi_enum_response caps_enum;
+            if (cloudrmi_parse_enum_response(caps_response, &caps_enum)) {
+               const char *cap_ptrs[CLOUDRMI_MAX_ENUM_VALUES];
+               for (size_t i = 0; i < caps_enum.count && i < CLOUDRMI_MAX_ENUM_VALUES; i++)
+                  cap_ptrs[i] = caps_enum.values[i];
+               conn->capabilities = caps_from_tokens(cap_ptrs, caps_enum.count);
                conn->capabilities_known = 1;
             }
          }
@@ -510,16 +495,21 @@ int client_call_remote_method_payload(
    if (stream_readln(conn->sock, response, BUF_SZ) < 0)
       goto done;
 
-   if (!client_parse_status_code(response, &status_code, response_payload)) {
+   cloudrmi_response_info resp_info;
+   if (!cloudrmi_parse_response_line(response, &resp_info)) {
       printf("Error: Cannot parse command response: %s\n", response);
       status_code = 505;
       goto done;
    }
 
+   status_code = resp_info.status;
+   copy_response_tail(response, response_payload, BUF_SZ);
+
    if ((status_code == 200 || status_code == 500) &&
-       sscanf(response_payload, "%s %s %zu", response_keyword, response_encoding, &response_len) == 3 &&
-       strcmp(response_keyword, "PAYLOAD") == 0) {
+       resp_info.kind == CLOUDRMI_RESPONSE_PAYLOAD) {
       has_payload_response = 1;
+      response_len = resp_info.payload_len;
+      strncpy(response_encoding, resp_info.encoding, sizeof(response_encoding) - 1);
    }
 
    if (has_payload_response) {

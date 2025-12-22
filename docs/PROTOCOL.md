@@ -79,12 +79,22 @@ Server sends a banner:
 220 <context> Server Ready EXT PROTO=2[,<capability-list>]
 ```
 
+Banner grammar (authoritative):
+
+- Status code `220` must appear at the start of the line.
+- `<context>` is a single token matching `[A-Za-z0-9._-]+`.
+- Decorative text between the context token and `EXT` is ignored by parsers.
+- The negotiation block is `EXT PROTO=<version>[,<CAP1>[,<CAP2>...]]`.
+- `PROTO=` MUST be the first item in the `EXT` block.
+- Capability tokens are alphanumeric with `_`/`-`, are case-insensitive, and
+  are normalized to uppercase. Order is not semantically relevant.
+
 - `PROTO=2` announces the maximum version; client remains on v1 until it sends
   `PROTO <version>`.
 - Capability tokens are uppercase words (`PROXY`, `STATS`, vendor
   extensions) separated by commas in the banner and normalized to spaces in
   responses.
-- Servers MUST advertise any non‑standard command or behavior as a capability.
+- Servers MUST advertise any non-standard command or behavior as a capability.
 
 ### 4.3 Explicit Upgrade
 

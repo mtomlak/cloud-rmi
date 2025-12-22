@@ -8,6 +8,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/types.h>  // good for getpid()
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -859,7 +860,7 @@ struct server_iface_entry *server_get_iface_entry(char *iface_name)
    cur = var_server_iface_map;
 
    while (cur != NULL) {
-      if (strcmp(iface_name, cur->iface) == 0)
+      if (strcasecmp(iface_name, cur->iface) == 0)
          return cur;
 
       cur = cur->next;
