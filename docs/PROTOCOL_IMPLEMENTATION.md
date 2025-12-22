@@ -64,6 +64,9 @@ Sources: `src/protocol.c`, `src/capabilities.c`
 
 Source: `src/protocol.c`
 
+- All command responses are single-line; JSON replies use compact formatting
+  with the explicit `JSON` marker, and binary data is always returned via the
+  PAYLOAD channel.
 - **AUTH**
   - `AUTH TOKEN <value>` → `200 Hello <user>` when `value == var_recovery_token`,
     otherwise `401 Unauthorized`.
@@ -77,22 +80,25 @@ Source: `src/protocol.c`
   - Requires authentication; otherwise `401 Unauthorized`.
   - Inline CALL with `< 3` args → `400 Bad Request Arguments`.
   - Dispatches to the proxy (when enabled) or local handler.
-- **HELP**: Lists supported commands (conditionally includes `PROXY`).
-- **IFACES**: Returns interface list from proxy or local server map.
+- **HELP**: `200 JSON ["AUTH", ...]` listing supported commands (conditionally
+  includes `PROXY`). Single-line only.
+- **IFACES**: `200 JSON ["iface1","iface2"]` from proxy or local server map.
 - **RELOAD**: Auth-only. Reloads configuration and interface map → `200`.
 - **SHUTDOWN**: Always returns `404 Unsupported`.
 - **TIME**: RFC822 timestamp → `200 <time>`.
 - **UPTIME**: Auth-only. Returns formatted uptime string → `200 ...` or
   `401 Unauthorized` when unauthenticated.
 - **NOOP**: `200 OK`.
-- **CAPS**: `200 <tokens>` derived from compiled capabilities.
+- **CAPS**: `200 JSON ["STATS","PROXY"]` derived from compiled capabilities.
 - **DEBUG** (auth-only):
   - `debug on/off` toggles `var_debug`.
-  - Otherwise prints build/runtime info (language, kernel API, proxy support,
-    current PID, config paths).
+  - Otherwise returns single-line JSON build/runtime info (language, kernel
+    API, proxy support, current PID, config paths).
 - **QUIT/EXIT**: `221 Bye` and closes connection.
-- **PROXY stats**: `proxy stats` → `200 Proxy is <ON|OFF> ...`; other args →
-  `400 Bad Request Arguments` (compiled only when `PROXY_SUPPORT` is enabled).
+- **PROXY stats**: `proxy stats` → `200 JSON {"servers":[...],"clients":[...],"trimmed":false}`;
+  other args → `400 Bad Request Arguments` (compiled only when
+  `PROXY_SUPPORT` is enabled). Output is capped to avoid overflowing the
+  single response line.
 - **SERVER stats**: `server stats` → `200 {json}` single line with reusable worker
   details (capped to 25 entries) and `trimmed` flag when truncated; other args
   → 400.
@@ -177,13 +183,17 @@ Source: `src/proxy.c`
 - **Response adaptation**:
   - Payload responses (`status 200/500` with `PAYLOAD <encoding> <len>`) are
     streamed directly when the downstream client is v2. For v1 clients, the
-    proxy base64-encodes the payload and responds inline (`<status>
-    <base64>`).
+    proxy base64-encodes the payload, preserves the encoding token, and
+    responds inline (`<status> <encoding>:<base64>`).
   - Inline responses are passed through unchanged.
 - **Resilience**:
   - Missing/timeout responses (status `0` or `408`) trigger a reconnect and
     retry once. Persistent failure yields `503 Service Unavailable` to the
     client.
+  - Interface discovery expects `200 JSON ["iface", ...]` from upstream
+    servers (legacy multi-line IFACES output is not supported). Connection
+    failures during discovery or dispatch trigger a 60-second cooldown before
+    the next reconnect attempt.
   - Proxy stats are available via `proxy stats` and list connection/worker
     state.
 
@@ -220,6 +230,9 @@ Source: `src/proxy.c`
   the normalized form when asserting capabilities.
 - Handler stdout is trimmed of trailing newlines before framing; binary payload
   responses preserve raw bytes without trimming.
+- JSON emission for HELP/IFACES/CAPS/debug/proxy stats is intentionally
+  hand-crafted (single-line, compact) to avoid heavyweight dependencies; keep
+  the marker `200 JSON` and the JSON string as the final response token.
 - Unix domain socket listeners can opt into trusted transport with
   `unix_socket_skip_auth = On`; when enabled the server marks the connection as
   authenticated immediately without changing protocol semantics.

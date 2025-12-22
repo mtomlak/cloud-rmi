@@ -433,19 +433,17 @@ class CloudRMIServer
 			break;
 
 		case 'caps':
-			$this->connWriteLn($socket, "200 " . implode(' ', $this->getAdvertisedCapabilities()));
+			$this->writeCapsResponse($socket);
 			break;
 
 		case 'help':
-			$this->connWriteLn($socket, "200 Supported commands:\n"
-				. "ACALL\nAUTH\nCALL\nCAPS\nHELP\nIFACES\nNOOP\nPROTO\nSHUTDOWN\nTIME\nUPTIME\nQUIT\n");
+			$this->writeHelpResponse($socket);
 			break;
 
 			// list of supported extensions - interfaces
 			case 'ifaces':
 				$this->readTimeout = $this->highReadTimeout;
-				$this->connWriteLn($socket, "200 Supported CALL interfaces:\n"
-					. implode("\n", array_keys($this->bindings)) . "\n");
+				$this->writeIfacesResponse($socket);
 				break;
 
 			case 'noop':
@@ -489,14 +487,7 @@ class CloudRMIServer
 					break;
 				}
 				$this->readTimeout = $this->highReadTimeout;
-				$this->connWriteLn($socket, "200 Debug information:");
-				$this->connWriteLn($socket, "Server build:");
-				$this->connWriteLn($socket, "\tLanguage:\tPHP " . phpversion());
-				$this->connWriteLn($socket, "\tKernel API:\t" . (($this->hasForkSupport()) ? 'POSIX' : 'none' ));
-				$this->connWriteLn($socket, "\tProxy support:\tNO");
-				$this->connWriteLn($socket, "Runtime:");
-				$this->connWriteLn($socket, "\tServer proccess PID:\t" . $this->serverPid);
-				//$this->connWriteLn($socket, "\tConfiguration file path:\t%s");
+				$this->writeDebugResponse($socket);
 				break;
 
 			case 'quit':
@@ -614,18 +605,16 @@ class CloudRMIServer
 				break;
 
 			case RMI_EVENT_CAPS:
-				$this->connWriteLn($socket, "200 " . implode(' ', $this->getAdvertisedCapabilities()));
+				$this->writeCapsResponse($socket);
 				break;
 
 			case RMI_EVENT_HELP:
-				$this->connWriteLn($socket, "200 Supported commands:\n"
-					. "ACALL\nAUTH\nCALL\nCAPS\nHELP\nIFACES\nNOOP\nPROTO\nSHUTDOWN\nTIME\nUPTIME\nQUIT\n");
+				$this->writeHelpResponse($socket);
 				break;
 
 			case RMI_EVENT_IFACES:
 				$this->readTimeout = $this->highReadTimeout;
-				$this->connWriteLn($socket, "200 Supported CALL interfaces:\n"
-					. implode("\n", array_keys($this->bindings)) . "\n");
+				$this->writeIfacesResponse($socket);
 				break;
 
 			case RMI_EVENT_NOOP:
@@ -669,13 +658,7 @@ class CloudRMIServer
 					break;
 				}
 				$this->readTimeout = $this->highReadTimeout;
-				$this->connWriteLn($socket, "200 Debug information:");
-				$this->connWriteLn($socket, "Server build:");
-				$this->connWriteLn($socket, "\tLanguage:\tPHP " . phpversion());
-				$this->connWriteLn($socket, "\tKernel API:\t" . (($this->hasForkSupport()) ? 'POSIX' : 'none' ));
-				$this->connWriteLn($socket, "\tProxy support:\tNO");
-				$this->connWriteLn($socket, "Runtime:");
-				$this->connWriteLn($socket, "\tServer proccess PID:\t" . $this->serverPid);
+				$this->writeDebugResponse($socket);
 				break;
 
 			case RMI_EVENT_QUIT:
@@ -1377,6 +1360,56 @@ class CloudRMIServer
 
 			$bytesLeft -= strlen($data);
 		}
+	}
+
+	protected function writeJsonArrayResponse($socket, array $items)
+	{
+		$this->connWriteLn($socket, '200 JSON ' . json_encode(array_values($items)));
+	}
+
+	protected function writeHelpResponse($socket)
+	{
+		$this->writeJsonArrayResponse($socket, [
+			'ACALL',
+			'AUTH',
+			'CALL',
+			'CAPS',
+			'DEBUG',
+			'HELP',
+			'IFACES',
+			'NOOP',
+			'PROTO',
+			'SHUTDOWN',
+			'TIME',
+			'UPTIME',
+			'QUIT',
+		]);
+	}
+
+	protected function writeIfacesResponse($socket)
+	{
+		$this->writeJsonArrayResponse($socket, array_keys($this->bindings));
+	}
+
+	protected function writeCapsResponse($socket)
+	{
+		$this->writeJsonArrayResponse($socket, $this->getAdvertisedCapabilities());
+	}
+
+	protected function writeDebugResponse($socket)
+	{
+		$info = [
+			'build' => [
+				'language' => 'PHP ' . phpversion(),
+				'kernel' => $this->hasForkSupport() ? 'POSIX' : 'none',
+				'proxy' => 'NO',
+			],
+			'runtime' => [
+				'pid' => $this->serverPid,
+			],
+		];
+
+		$this->connWriteLn($socket, '200 JSON ' . json_encode($info));
 	}
 
 

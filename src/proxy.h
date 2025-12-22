@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/un.h>
+#include <time.h>
 #include "client.h"
 
 #define PROXY_PROTOCOL_VERSION	"1.0"
@@ -28,6 +29,9 @@ struct proxy_server{
    char unix_socket_path[PROXY_UNIX_PATH_SZ];
 	struct proxy_conn conns[PROXY_CONN_LIST_SZ];
 	int conn_count;
+   time_t last_failure_at;
+   time_t next_retry_at;
+   int is_available;
 };
 
 struct proxy_iface_entry{

@@ -24,6 +24,10 @@
 #define ENABLE_SYSLOG_TRACE 1
 #endif
 
+#ifndef ENABLE_DEBUG_LOGGING
+#define ENABLE_DEBUG_LOGGING 1
+#endif
+
 #ifndef LOG_DEBUG
 #define LOG_DEBUG 7
 #endif
