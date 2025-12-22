@@ -18,7 +18,7 @@
 /**
  * Parses the configuration file. Some parts borrowed from sSMTP project.
  *
- * @copyright Copyright (C) 2016 ProfiWeb sro (http://profiweb.biz/).
+ * @copyright Copyright (C) 2016-2025 ProfiWeb, s.r.o. (https://profiweb.biz/).
  * @project cloud-rmi
  * @author Marian Tomlak
  * @license GNU/GPL
@@ -119,21 +119,21 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set context_name=\"%s\"", var_context_name);
+            log_event(LOG_INFO, "config:set context_name=\"%s\"", var_context_name);
          }
       }
       else if(strcasecmp(conf_name, "port") == 0) {
          var_port = atoi(conf_value);
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set port=\"%d\"", var_port);
+            log_event(LOG_INFO, "config:set port=\"%d\"", var_port);
          }
       }
       else if(strcasecmp(conf_name, "read_timeout") == 0) {
          var_read_timeout = atoi(conf_value);
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set read_timeout=\"%d\"", var_read_timeout);
+            log_event(LOG_INFO, "config:set read_timeout=\"%d\"", var_read_timeout);
          }
       }
       else if(strcasecmp(conf_name, "recovery_token") == 0) {
@@ -142,7 +142,7 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set recovery_token=\"%s\"", var_recovery_token);
+            log_event(LOG_INFO, "config:set recovery_token=\"%s\"", var_recovery_token);
          }
       }
 #ifdef PROXY_SUPPORT
@@ -152,7 +152,7 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set var_proxy=\"%s\"", var_proxy);
+            log_event(LOG_INFO, "config:set var_proxy=\"%s\"", var_proxy);
          }
       }
 #endif
@@ -162,7 +162,7 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set var_script_exec_dir=\"%s\"", var_script_exec_dir);
+            log_event(LOG_INFO, "config:set var_script_exec_dir=\"%s\"", var_script_exec_dir);
          }
       } 
       else if(strcasecmp(conf_name, "script_base_namespace") == 0) {
@@ -173,7 +173,7 @@ int read_config(char *config_file)
          sanitize_script_base_namespace();
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set script_base_namespace=\"%s\"", var_script_base_namespace);
+            log_event(LOG_INFO, "config:set script_base_namespace=\"%s\"", var_script_base_namespace);
          }
       } 
       else if(strcasecmp(conf_name, "listen_unix") == 0) {
@@ -182,7 +182,7 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set listen_unix=\"%s\"", var_unix_socket_path);
+            log_event(LOG_INFO, "config:set listen_unix=\"%s\"", var_unix_socket_path);
          }
       }
       else if(strcasecmp(conf_name, "unix_socket_skip_auth") == 0) {
@@ -193,7 +193,7 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set unix_socket_skip_auth=\"%s\"", var_unix_socket_skip_auth ? "True" : "False");
+            log_event(LOG_INFO, "config:set unix_socket_skip_auth=\"%s\"", var_unix_socket_skip_auth ? "True" : "False");
          }
       }
       else if(strcasecmp(conf_name, "interface_map_file") == 0) {
@@ -202,7 +202,7 @@ int read_config(char *config_file)
          }
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set interface_map_file=\"%s\"", var_interface_map_file);
+            log_event(LOG_INFO, "config:set interface_map_file=\"%s\"", var_interface_map_file);
          } //var_min_spare_workers
       }
       else if(strcasecmp(conf_name, "max_payload") == 0) {
@@ -210,7 +210,7 @@ int read_config(char *config_file)
          if(parsed > 0 && parsed < SIZE_MAX) {
             var_max_payload = (size_t)parsed;
             if(log_level > 0) {
-               log_event(LOG_INFO, "Set max_payload=\"%zu\"", var_max_payload);
+               log_event(LOG_INFO, "config:set max_payload=\"%zu\"", var_max_payload);
             }
          }
       }
@@ -219,14 +219,14 @@ int read_config(char *config_file)
          var_min_spare_workers = atoi(conf_value);
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set min_spare_workers=\"%d\"", var_min_spare_workers);
+            log_event(LOG_INFO, "config:set min_spare_workers=\"%d\"", var_min_spare_workers);
          }
       }
       else if(strcasecmp(conf_name, "max_spare_workers") == 0) {
          var_max_spare_workers = atoi(conf_value);
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set max_spare_workers=\"%d\"", var_max_spare_workers);
+            log_event(LOG_INFO, "config:set max_spare_workers=\"%d\"", var_max_spare_workers);
          }
       }
 #endif
@@ -234,7 +234,7 @@ int read_config(char *config_file)
          var_start_delay = atoi(conf_value);
 
          if(log_level > 0) {
-            log_event(LOG_INFO, "Set start_delay=\"%d\"", var_start_delay);
+            log_event(LOG_INFO, "config:set start_delay=\"%d\"", var_start_delay);
          }
       }
 #ifdef ENABLE_DEBUG_LOGGING
@@ -248,7 +248,7 @@ int read_config(char *config_file)
 
          if(log_level > 0) {
             log_event(LOG_INFO,
-               "Set debug=\"%s\"",
+               "config:set debug=\"%s\"",
                debug_log_enabled() ? "True" : "False");
          }
       }
@@ -262,7 +262,7 @@ int read_config(char *config_file)
          if (log_level > 0) {
             log_event(
                LOG_INFO,
-               "Set debug_traffic=\"%s\"",
+               "config:set debug_traffic=\"%s\"",
                debug_traffic_enabled() ? "True" : "False");
          }
       }

@@ -110,7 +110,15 @@ test: all
 
 clean:
 	$(MAKE) -C libcloudrmi clean
+	$(MAKE) -C php clean
 	rm -f $(APP_VERSION_HEADER)
 	rm -f $(BIN_SERVER) $(BIN_CLIENT) $(BIN_PROXY)
 
-.PHONY: all update server client proxy server_install client_install proxy_install config_install install clean test app_version
+php:
+	$(MAKE) -C php build-ext
+
+php_install:
+	$(MAKE) -C php build-ext
+	$(MAKE) -C php/ext/profiweb_cloudrmi install
+
+.PHONY: all update server client proxy server_install client_install proxy_install config_install install clean test app_version php php_install
