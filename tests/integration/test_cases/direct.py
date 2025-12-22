@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from harness import IntegrationEnvironment, TestCase, TestResult, parse_status
 
 
@@ -178,6 +180,31 @@ def control_commands(env: IntegrationEnvironment) -> TestResult:
     return TestResult(name="control-commands", passed=True, traces=[trace])
 
 
+def server_stats_json(env: IntegrationEnvironment) -> TestResult:
+    with env.server_session() as session:
+        session._send_line("SERVER stats")
+        status, message = parse_status(session._read_line())
+
+    _require(status == 200, f"expected 200 got {status}")
+    try:
+        payload = json.loads(message)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"invalid JSON payload: {exc.msg}") from exc
+
+    _require(isinstance(payload.get("workers"), list), "workers must be a list")
+    _require(len(payload["workers"]) <= 25, "workers list exceeded cap")
+
+    listed = payload.get("listed")
+    if isinstance(listed, int):
+        _require(listed == len(payload["workers"]), "listed count mismatch")
+
+    _require("reuse_enabled" in payload, "reuse_enabled flag missing")
+    _require("trimmed" in payload, "trimmed flag missing")
+    _require("total_spare" in payload, "total_spare missing")
+
+    return TestResult(name="server-stats-json", passed=True)
+
+
 DIRECT_CASES: list[TestCase] = [
     TestCase(name="direct-echo", runner=direct_echo),
     TestCase(name="exec-failure", runner=exec_failure),
@@ -190,4 +217,5 @@ DIRECT_CASES: list[TestCase] = [
     TestCase(name="inline-payload-inline", runner=inline_payload_inline),
     TestCase(name="inline-payload-large-inline", runner=inline_payload_large_inline),
     TestCase(name="control-commands", runner=control_commands),
+    TestCase(name="server-stats-json", runner=server_stats_json),
 ]
