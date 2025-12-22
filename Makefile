@@ -1,4 +1,5 @@
 CC ?= gcc
+CPPFLAGS ?=
 
 BIN_SERVER = rmi-server
 BIN_CLIENT = rmi-client
@@ -49,15 +50,15 @@ update:
 
 server: app_version $(LIBCLOUDRMI) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/capabilities.c src/cloud-rmi.h src/config.h
 	@echo " * Building rmi-server binary ..."
-	$(CC) -g $(LIBCLOUDRMI_INC) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/capabilities.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_SERVER) -D ENABLE_LINUX_FEATURES
+	$(CC) -g $(CPPFLAGS) $(LIBCLOUDRMI_INC) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/capabilities.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_SERVER)
 
 client: app_version $(LIBCLOUDRMI) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/capabilities.c src/cloud-rmi.h src/config.h src/client.h
 	@echo " * Building rmi-client binary ..."
-	$(CC) -g $(LIBCLOUDRMI_INC) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/capabilities.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_CLIENT) -D ENABLE_LINUX_FEATURES
+	$(CC) -g $(CPPFLAGS) $(LIBCLOUDRMI_INC) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/protocol.c src/server.c src/client.c src/capabilities.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_CLIENT)
 
 proxy: app_version $(LIBCLOUDRMI) src/client_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/server.c src/client.c src/capabilities.c src/cloud-rmi.h src/config.h src/client.h
 	@echo " * Building rmi-client binary ..."
-	$(CC) -g $(LIBCLOUDRMI_INC) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/client.c src/protocol.c src/server.c src/proxy.c src/capabilities.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_PROXY) -D PROXY_SUPPORT -D ENABLE_LINUX_FEATURES
+	$(CC) -g $(CPPFLAGS) $(LIBCLOUDRMI_INC) src/server_main.c src/cloud-rmi.c src/config.c src/handle_call.c src/client.c src/protocol.c src/server.c src/proxy.c src/capabilities.c $(LIBCLOUDRMI_LDFLAGS) -lm -o $(BIN_PROXY) -D PROXY_SUPPORT
 
 server_install:
 	@echo "Installing rmi-server ..."
