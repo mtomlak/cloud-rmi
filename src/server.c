@@ -14,6 +14,8 @@
 #include <unistd.h>
 #include <signal.h>
 #include <syslog.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include "cloud-rmi.h"
 #include "config.h"
 #include <sys/wait.h>
@@ -898,6 +900,25 @@ void server_wipe_iface_entries()
    }
 }
 
+static bool append_json(char *json, size_t json_size, size_t *written, const char *fmt, ...)
+{
+   if (*written >= json_size)
+      return false;
+
+   va_list args;
+   va_start(args, fmt);
+   int added = vsnprintf(json + *written, json_size - *written, fmt, args);
+   va_end(args);
+
+   if (added < 0 || (size_t)added >= json_size - *written) {
+      *written = json_size;
+      return false;
+   }
+
+   *written += (size_t)added;
+   return true;
+}
+
 int read_iface_config(char *config_file)
 {
    int r = 1;
@@ -991,25 +1012,70 @@ int read_iface_config(char *config_file)
 
 void server_send_stats(int sock)
 {
-    #ifdef REUSE_WORKER_PROC
-        struct spare_child_worker *current_child;
-        
-        stream_writeln(sock, "Server Worker Info:\nPID:\tNext Socket:\tStop Signal:");
+#ifdef REUSE_WORKER_PROC
+   /* Keep the response safely below the MAX_LINE parser limit. With 25 entries
+    * and the chosen field set we stay under ~2 KB. */
+   const int max_workers = 25;
+   char json[BUF_SZ + 1];
+   size_t written = 0;
+   int listed = 0;
+   bool trimmed = false;
+   struct spare_child_worker *current_child = server_spare_children.first;
 
-        current_child = server_spare_children.first;
+   append_json(json, sizeof(json), &written, "{\"reuse_enabled\":true,\"workers\":[");
 
-        while (current_child != NULL) {
-            stream_writeln(sock, "%i\t%i\t\t%i", current_child->pid, current_child->next_sock, current_child->stop_signal);
-            current_child = current_child->next;
-        }
+   while (current_child != NULL && listed < max_workers) {
+      const char *state = "idle";
 
-        stream_writeln(sock, "\nTotal Spare Worker: %i", server_spare_children.count);
-        stream_writeln(sock, "\nMin Spare Worker: %i", MIN_SPARE_WORKERS);
-        stream_writeln(sock, "\nMax Spare Worker: %i", MAX_SPARE_WORKERS);
+      if (current_child->stop_signal) {
+         state = "stopping";
+      } else if (current_child->next_sock >= 0) {
+         state = "assigned";
+      }
 
-    #else
-        stream_writeln(sock, "REUSE_WORKER_PROC flag not enabled. No spare children information available.");
-    #endif
+      append_json(
+         json,
+         sizeof(json),
+         &written,
+         "%s{\"pid\":%i,\"next_sock\":%i,\"stop_signal\":%i,\"state\":\"%s\"}",
+         listed ? "," : "",
+         current_child->pid,
+         current_child->next_sock,
+         current_child->stop_signal,
+         state);
 
-    stream_write(sock, "\n\n");   // end data with an empty line
+      listed++;
+      current_child = current_child->next;
+   }
+
+   if (current_child != NULL)
+      trimmed = true;
+
+   append_json(
+      json,
+      sizeof(json),
+      &written,
+      "],\"total_spare\":%i,\"min_spare\":%i,\"max_spare\":%i,\"listed\":%i,\"trimmed\":%s}",
+      server_spare_children.count,
+      MIN_SPARE_WORKERS,
+      MAX_SPARE_WORKERS,
+      listed,
+      trimmed ? "true" : "false");
+
+   /* If anything overflowed, fall back to a minimal payload to preserve protocol
+    * correctness. */
+   if (written >= sizeof(json)) {
+      snprintf(
+         json,
+         sizeof(json),
+         "{\"reuse_enabled\":true,\"workers\":[],\"total_spare\":%i,\"min_spare\":%i,\"max_spare\":%i,\"listed\":0,\"trimmed\":true}",
+         server_spare_children.count,
+         MIN_SPARE_WORKERS,
+         MAX_SPARE_WORKERS);
+   }
+
+   stream_writeln(sock, "200 %s", json);
+#else
+   stream_writeln(sock, "200 {\"reuse_enabled\":false,\"workers\":[],\"total_spare\":0,\"min_spare\":0,\"max_spare\":0,\"listed\":0,\"trimmed\":false}");
+#endif
 }

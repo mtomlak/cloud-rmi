@@ -288,7 +288,6 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
 
    case RMI_EVENT_SERVER:
       if (strcmp(event->arg1, "stats") == 0) {
-         stream_writeln(state->sock, "200 Showing statistics:");
          server_send_stats(state->sock);
       } else {
          stream_writeln(state->sock, "400 Bad Request Arguments");

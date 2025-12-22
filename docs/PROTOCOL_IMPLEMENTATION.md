@@ -93,7 +93,9 @@ Source: `src/protocol.c`
 - **QUIT/EXIT**: `221 Bye` and closes connection.
 - **PROXY stats**: `proxy stats` → `200 Proxy is <ON|OFF> ...`; other args →
   `400 Bad Request Arguments` (compiled only when `PROXY_SUPPORT` is enabled).
-- **SERVER stats**: `server stats` → `200` with worker list; other args → 400.
+- **SERVER stats**: `server stats` → `200 {json}` single line with reusable worker
+  details (capped to 25 entries) and `trimmed` flag when truncated; other args
+  → 400.
 - **Unknown commands**: `400 Bad Request`.
 
 Parser-level errors map to responses inside `handle_connection`:
