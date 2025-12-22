@@ -258,8 +258,7 @@ int proxy_restart_conn(struct proxy_conn *conn)
    int proxy_id;
    struct proxy_server *proxy;
 
-   if (var_debug)
-      printf("Proxy: Restarting connection to proxy #%i", conn->proxy_id);
+   DEBUG_LOG("Proxy: Restarting connection to proxy #%i", conn->proxy_id);
 
    proxy_id = conn->proxy_id;
    proxy = proxy_list_get(proxy_id);
@@ -302,17 +301,11 @@ struct proxy_conn *proxy_get_free_conn(int proxy_id)
 
 void proxy_set_conn_busy(struct proxy_conn *conn)
 {
-   //if (var_debug)
-   //   printf("Proxy: Locking connection #%i/%i as busy\n", conn->proxy_id, conn->conn_id);
-
    conn->is_busy = 1;
 }
 
 void proxy_set_conn_free(struct proxy_conn *conn)
 {
-   //if (var_debug)
-   //   printf("Proxy: Unlocking connection #%i/%i as free\n", conn->proxy_id, conn->conn_id);
-
    conn->is_busy = 0;
 }
 
@@ -369,8 +362,7 @@ struct proxy_iface_entry *proxy_get_iface_entry(char *iface_name)
 
 void proxy_add_iface_entry(int proxy_id, char *iface_name)
 {
-   if (var_debug)
-      printf("Proxy: Adding interface %s for proxy #%i\n", iface_name, proxy_id);
+   DEBUG_LOG("Proxy: Adding interface %s for proxy #%i", iface_name, proxy_id);
 
    if (proxy_iface_map == NULL) // adding first item
       proxy_iface_map = new_proxy_iface_entry(iface_name, proxy_id);
@@ -564,8 +556,7 @@ int proxy_pass_call_cmd_ex(
       return ret;
    }
 
-   if (var_debug)
-      printf("Proxy: Passing CALL command to proxy #%i\n", iface_entry->proxy_id);
+   DEBUG_LOG("Proxy: Passing CALL command to proxy #%i", iface_entry->proxy_id);
 
    conn = proxy_get_free_conn(iface_entry->proxy_id);
    proxy_set_conn_busy(conn);
@@ -878,11 +869,9 @@ int start_proxy_manager(void *arg)
       sleep(10);
 
       if ((int) fmod(sec_passed, 60) == 0) { // do every minute
-         if (var_debug)
-            printf("ProxyManager: Checking all connections\n");
+         DEBUG_LOG("ProxyManager: Checking all connections");
          proxy_all_keepalive_conns();  // send NOOP command to keep alive all connections
-         if (var_debug)
-            printf("ProxyManager: Checking number of spare connections per each proxy\n");
+         DEBUG_LOG("ProxyManager: Checking number of spare connections per each proxy");
          proxy_all_check_spare_conns();    // check number of spare connections
       }
       sec_passed += 10;
@@ -897,10 +886,8 @@ int create_proxy_manager_proc()
    char *stack = malloc(CHILD_STACK_SZ + 1);
    struct helper_proc_state *helper_state = new_helper_state(stack, CHILD_STACK_SZ);
 
-   if (var_debug) {
-      printf("Starting proxy proccess manager\n");
-      printf("Creating new manager proccess with Linux clone() ...\n");
-   }
+   DEBUG_LOG("Starting proxy proccess manager");
+   DEBUG_LOG("Creating new manager proccess with Linux clone() ...");
 
    pid = clone(&start_proxy_manager, (char *)stack + CHILD_STACK_SZ, CLONE_VM|CLONE_FILES|CLONE_SIGHAND, helper_state);//CLONE_VM|CLONE_FS|CLONE_SIGHAND|
 
@@ -909,8 +896,7 @@ int create_proxy_manager_proc()
       return 0;
    }
 
-   if (var_debug)
-      printf("+ Started new manager proccess with PID %i\n", pid);
+   DEBUG_LOG("+ Started new manager proccess with PID %i", pid);
 
    return pid;
 }
@@ -926,9 +912,8 @@ int proxy_start_new(const char *proxy_ip, int proxy_port, const char *unix_socke
 {
    int id, i;
 
-   if (var_debug)
-      printf("Starting proxy to %s\n",
-         unix_socket_path ? unix_socket_path : proxy_ip);
+   DEBUG_LOG("Starting proxy to %s",
+      unix_socket_path ? unix_socket_path : proxy_ip);
 
    // Add new proxy struct to the list
    id = proxy_list_add_new(proxy_ip, proxy_port, unix_socket_path);

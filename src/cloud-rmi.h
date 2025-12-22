@@ -103,6 +103,7 @@ struct spare_child_workers_list{
 extern int log_level;
 extern int var_server_start_time;
 extern struct server_iface_entry *var_server_iface_map;
+extern int var_run_as_daemon;
 #ifdef REUSE_WORKER_PROC
 extern struct spare_child_workers_list server_spare_children;
 #endif
@@ -115,8 +116,31 @@ int stream_readln(int sock, char* line, int max_size);
 int stream_readlns(int sock, char* line, int max_size);
 void log_event(int priority, char *format, ...);
 void log_unexpected_event(int priority, const char *format, ...);
+
+#ifdef ENABLE_DEBUG_LOGGING
+extern int var_debug;
+extern int var_debug_traffic;
+int debug_log_enabled(void);
+void debug_log_set(int enabled);
 int debug_traffic_enabled(void);
+void debug_traffic_set(int enabled);
+void debug_log_message(const char *format, ...);
+void debug_log_stream(char direction, const char *payload);
 void log_traffic_event(const struct conn_state *state, const char *format, ...);
+#define DEBUG_LOG(...) debug_log_message(__VA_ARGS__)
+#define DEBUG_STREAM(direction, payload) debug_log_stream(direction, payload)
+#else
+static inline int debug_log_enabled(void) { return 0; }
+static inline void debug_log_set(int enabled) { (void)enabled; }
+static inline int debug_traffic_enabled(void) { return 0; }
+static inline void debug_traffic_set(int enabled) { (void)enabled; }
+static inline void debug_log_message(const char *format, ...) { (void)format; }
+static inline void debug_log_stream(char direction, const char *payload) { (void)direction; (void)payload; }
+static inline void log_traffic_event(const struct conn_state *state, const char *format, ...) { (void)state; (void)format; }
+#define DEBUG_LOG(...) do {} while(0)
+#define DEBUG_STREAM(direction, payload) do { (void)(direction); (void)(payload); } while(0)
+#endif
+
 void substring(char *string, char *sub, int start, int len);
 void split_host_addr(char *host, char *ip, int *port);
 char *get_ip_addr(char *hostname);

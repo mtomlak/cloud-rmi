@@ -27,6 +27,7 @@
 /* Defaults for globals other than config vars */
 int log_level = 1;
 int var_server_start_time = 0;
+int var_run_as_daemon = 0;
 struct server_iface_entry *var_server_iface_map = NULL;
 #ifdef REUSE_WORKER_PROC
 struct spare_child_workers_list server_spare_children;
@@ -67,8 +68,7 @@ int stream_write(int sock, char *format, ...)
       printf("stream_write() -- ERROR writing to socket");
       return -1;
    }
-   if (var_debug)
-      printf("OUT: |%s|\n", buf);
+   DEBUG_STREAM('>', buf);
 
    return bytes;
 }
@@ -98,8 +98,7 @@ int stream_writeln(int sock, char *format, ...)
       printf("stream_write() -- ERROR writing to socket");
       return -1;
    }
-   if (var_debug)
-      printf("OUT: |%s|\n", buf);
+   DEBUG_STREAM('>', buf);
 
    return bytes;
 }
@@ -137,8 +136,13 @@ int stream_read(int sock, char* buf, int buf_size)
    if (bytes == 1 && buf[0] == 0)
       return 0;
 
-   if (var_debug)
-      printf("IN: |%s|\n", buf);
+   if (bytes > 0) {
+      int copy_len = bytes < BUF_SZ ? bytes : BUF_SZ;
+      char log_line[BUF_SZ + 1];
+      memcpy(log_line, buf, (size_t)copy_len);
+      log_line[copy_len] = '\0';
+      DEBUG_STREAM('<', log_line);
+   }
 
    return bytes;
 }
@@ -176,8 +180,7 @@ int stream_readln(int sock, char* line, int max_size)
       size++;
    }
 
-   if (var_debug)
-      printf("IN: |%s|\n", line);
+   DEBUG_STREAM('<', line);
 
    return size;
 }
@@ -227,8 +230,7 @@ int stream_readlns(int sock, char* line, int max_size)
       size++;
    } while(bytes > 0);
 
-   if (var_debug)
-      printf("IN: |%s|\n", line);
+   DEBUG_STREAM('<', line);
 
    return size;
 }
@@ -311,8 +313,7 @@ int stream_write(int sock, char *format, ...)
         written += (size_t)bytes;
     }
 
-    if (var_debug)
-        printf("OUT: |%s|\n", buf);
+    DEBUG_STREAM('>', buf);
 
     rc = (int)written;
 
@@ -397,8 +398,7 @@ int stream_writeln(int sock, char *format, ...)
 
         written += (size_t)just_written;
     }
-    if (var_debug)
-        printf("OUT: |%s|\n", buf);
+    DEBUG_STREAM('>', buf);
 
     rc = (int)written;
 
@@ -424,8 +424,7 @@ int stream_read(int sock, char* buf, int buf_size)
     
     buf[bytes] = '\0'; // Null-terminate the buffer to safely print it
 
-    if (var_debug)
-        printf("IN: |%s|\n", buf);
+    DEBUG_STREAM('<', buf);
 
     return bytes;
 }
@@ -489,8 +488,7 @@ int stream_readln(int sock, char* line, int max_size)
         }
     }
 
-    if (var_debug)
-        printf("IN: |%s|\n", line);
+    DEBUG_STREAM('<', line);
 
     return (int)size;
 }
@@ -539,8 +537,7 @@ int stream_readlns(int sock, char* line, int max_size)
 
     } while (bytes > 0);
 
-    if (var_debug)
-        printf("IN: |%s|\n", line);
+    DEBUG_STREAM('<', line);
 
     return size;
 }
@@ -548,6 +545,118 @@ int stream_readlns(int sock, char* line, int max_size)
 
 #endif
 
+
+/* Debug logging helpers */
+#ifdef ENABLE_DEBUG_LOGGING
+
+int debug_log_enabled(void)
+{
+   return var_debug;
+}
+
+void debug_log_set(int enabled)
+{
+   var_debug = enabled ? 1 : 0;
+   log_level = enabled ? 1 : 0;
+}
+
+int debug_traffic_enabled(void)
+{
+   return var_debug_traffic;
+}
+
+void debug_traffic_set(int enabled)
+{
+   var_debug_traffic = enabled ? 1 : 0;
+}
+
+static void debug_emit_line(const char *line)
+{
+   if (!line)
+      return;
+
+   log_event(LOG_DEBUG, "%s", line);
+
+   if (!var_run_as_daemon)
+      printf("%s\n", line);
+}
+
+void debug_log_message(const char *format, ...)
+{
+   if (!debug_log_enabled())
+      return;
+
+   char buf[(BUF_SZ + 1)];
+   va_list ap;
+
+   va_start(ap, format);
+   (void)vsnprintf(buf, sizeof(buf), format, ap);
+   va_end(ap);
+
+   size_t len = strlen(buf);
+   while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) {
+      buf[len - 1] = '\0';
+      len--;
+   }
+
+   debug_emit_line(buf);
+}
+
+void debug_log_stream(char direction, const char *payload)
+{
+   if (!debug_log_enabled() || payload == NULL)
+      return;
+
+   char line[(BUF_SZ + 1)];
+   size_t len = 0;
+   while (len < BUF_SZ && payload[len] != '\0')
+      len++;
+
+   memcpy(line, payload, len);
+   line[len] = '\0';
+
+   while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+      line[len - 1] = '\0';
+      len--;
+   }
+
+   for (size_t i = 0; i < len; i++)
+      if (line[i] == '\n' || line[i] == '\r')
+         line[i] = ' ';
+
+   char formatted[(BUF_SZ + 3)];
+   formatted[0] = direction;
+   formatted[1] = ' ';
+   strncpy(formatted + 2, line, sizeof(formatted) - 3);
+   formatted[sizeof(formatted) - 1] = '\0';
+   debug_emit_line(formatted);
+}
+
+void log_traffic_event(const struct conn_state *state, const char *format, ...)
+{
+   if (!debug_traffic_enabled())
+      return;
+
+   char detail[256];
+   va_list ap;
+
+   va_start(ap, format);
+   (void)vsnprintf(detail, sizeof(detail), format, ap);
+   va_end(ap);
+
+   if (state != NULL) {
+      log_event(
+         LOG_DEBUG,
+         "traffic:conn=%i proto=%i authed=%i %s",
+         state->sock,
+         state->protocol_version,
+         state->is_authenticated,
+         detail);
+   } else {
+      log_event(LOG_DEBUG, "traffic:%s", detail);
+   }
+}
+#endif
 
 /**
  * Writes a message about an event to the syslog or a log file
@@ -598,37 +707,6 @@ void log_unexpected_event(int priority, const char *format, ...)
 
    log_event(priority, "unexpected:%s", buf);
 }
-
-int debug_traffic_enabled(void)
-{
-   return var_debug_traffic;
-}
-
-void log_traffic_event(const struct conn_state *state, const char *format, ...)
-{
-   if (!debug_traffic_enabled())
-      return;
-
-   char detail[256];
-   va_list ap;
-
-   va_start(ap, format);
-   (void)vsnprintf(detail, sizeof(detail), format, ap);
-   va_end(ap);
-
-   if (state != NULL) {
-      log_event(
-         LOG_DEBUG,
-         "traffic:conn=%i proto=%i authed=%i %s",
-         state->sock,
-         state->protocol_version,
-         state->is_authenticated,
-         detail);
-   } else {
-      log_event(LOG_DEBUG, "traffic:%s", detail);
-   }
-}
-
 
 /**
  * Utility function

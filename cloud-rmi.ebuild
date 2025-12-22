@@ -9,18 +9,20 @@ EGIT_COMMIT="v${PV}"
 LICENSE="GPL-3"
 SLOT="0"
 KEYWORDS="amd64"
-IUSE="+server +client proxy linux_features"
+IUSE="+server +client proxy linux debug"
 
 DEPEND="sys-libs/glibc"
 RDEPEND="${DEPEND}"
 
 src_compile() {
-    local mycppflags=""
-    use linux_features && mycppflags="-DENABLE_LINUX_FEATURES"
+    local mycppflags=()
+    use linux && mycppflags+=(-DENABLE_LINUX_FEATURES)
+    use debug && mycppflags+=(-DENABLE_DEBUG_LOGGING)
+    local cppflags="${mycppflags[*]}"
 
-    use server && emake CPPFLAGS="${mycppflags}" server
-    use client && emake CPPFLAGS="${mycppflags}" client
-    use proxy  && emake CPPFLAGS="${mycppflags}" proxy
+    use server && emake CPPFLAGS="${cppflags}" server
+    use client && emake CPPFLAGS="${cppflags}" client
+    use proxy  && emake CPPFLAGS="${cppflags}" proxy
 }
 
 src_install() {

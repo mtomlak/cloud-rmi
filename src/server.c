@@ -278,8 +278,7 @@ int handle_by_spare_proc(int sock)
       return 0;
    }
 
-   if (var_debug)
-      printf("Going to wake up child %i to serve socket %i\n", spare_child->pid, sock);
+   DEBUG_LOG("Reusing frozen child %i to serve socket %i", spare_child->pid, sock);
 
    spare_child->next_sock = sock;
    kill(spare_child->pid, SIGCONT);
@@ -350,6 +349,7 @@ int handle_cloned_proc(void *arg)
             break;
          }
          state.sock = worker_state->next_sock;
+         DEBUG_LOG("Resumed frozen child %i for socket #%i", (int) getpid(), state.sock);
          server_remove_spare_child(worker_state->pid);
          handle_connection(state.sock, state.is_unix_socket);
          close(state.sock);
@@ -360,13 +360,16 @@ int handle_cloned_proc(void *arg)
             break;
          }
          resumed_from_pause = 1;
-         if (var_debug) printf("|| Putting child %i to sleep\n", (int) getpid());
+         DEBUG_LOG("|| Putting child %i to sleep (spares=%i)", (int) getpid(), server_spare_children.count);
          kill(getpid(), SIGSTOP);   // pause until we got awaken
-         if (var_debug) printf(">> Waking child %i from sleep\n", (int) getpid());
+         DEBUG_LOG(">> Waking child %i from sleep", (int) getpid());
 
       } else {
-         if (var_debug)
-            printf("Not keeping child %i for reuse (reached %i/%i max_spare_children)\n", (int) getpid(), server_spare_children.count, MAX_SPARE_WORKERS);
+         DEBUG_LOG(
+            "Not keeping child %i for reuse (reached %i/%i max_spare_children)",
+            (int) getpid(),
+            server_spare_children.count,
+            MAX_SPARE_WORKERS);
 
          break;   // if we don't need any more spare proccesses
       }
@@ -375,8 +378,7 @@ int handle_cloned_proc(void *arg)
 
    #endif
 
-   if (var_debug)
-      printf("- Shutting down child with PID %i\n", (int) getpid());
+   DEBUG_LOG("- Shutting down child with PID %i", (int) getpid());
 
    if (state.sock >= 0)
       close(state.sock);
@@ -422,13 +424,11 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
 
    (void)server_sock;
 
-   if (var_debug)
-      printf("Requested new child for socket #%i\n", sock);
+   DEBUG_LOG("Requested new child for socket #%i", sock);
 
    #ifdef REUSE_WORKER_PROC
    if (sock != -1 && server_spare_children.count) {
-      if (var_debug)
-         printf("Trying to reuse existing child proccess for socket #%i\n", sock);
+      DEBUG_LOG("Trying to reuse existing child proccess for socket #%i", sock);
 
       // We can re-use sleeping spare children instead of creating new one
       pid = handle_by_spare_proc(sock);
@@ -438,17 +438,16 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
          return 0;
       }
       
-      if (var_debug)
-         printf("* Reused child with PID %i\n", pid);
+      DEBUG_LOG("* Reused child with PID %i", pid);
 
       return pid;
    }
 
-   if (var_debug && sock == -1)
-      printf("Going to create spare child\n");
+   if (sock == -1)
+      DEBUG_LOG("Going to create spare child");
 
-   if (var_debug && !server_spare_children.count)
-      printf("Going to new child, no spare ones present\n");
+   if (!server_spare_children.count)
+      DEBUG_LOG("Going to new child, no spare ones present");
    #endif
 
    stack = malloc(CHILD_STACK_SZ + 1);
@@ -461,8 +460,7 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
       return 0;
    }
 
-   if (var_debug)
-      printf("Creating new child proccess with Linux clone() for socket #%i\n", sock);
+   DEBUG_LOG("Creating new child proccess with Linux clone() for socket #%i", sock);
 
    // start new proccess and execute handle_cloned_proc() as a child
    pid = clone(&handle_cloned_proc, (char *)stack + CHILD_STACK_SZ, CLONE_VM|CLONE_FILES|SIGCHLD, child_state);//CLONE_VM|CLONE_FS|CLONE_SIGHAND|
@@ -474,8 +472,7 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
       return 0;
    }
 
-   if (var_debug)
-      printf("+ Started new child with PID %i\n", pid);
+   DEBUG_LOG("+ Started new child with PID %i", pid);
 
    // not touching server socket, it's shared resource
 
@@ -532,8 +529,7 @@ void manager_handle_sigterm(int signum)
 {
    shutdown_handler(signum);
 
-   if (var_debug)
-      printf("WorkerManager: Terminating all children\n");
+   DEBUG_LOG("WorkerManager: Terminating all children");
 
    // Wake up and terminate sleeping children
    terminate_extra_children_proc(server_spare_children.count);
@@ -562,18 +558,15 @@ int start_worker_manager(void *arg)
    while (1) {
       if ((int) fmod(sec_passed, 60) == 0) { // actions to be done every minute
          // check spare worker proccesses
-         if (var_debug)
-               printf("WorkerManager: Checking number of spare worker proccesses\n");
+         DEBUG_LOG("WorkerManager: Checking number of spare worker proccesses");
 
          if (server_spare_children.count > MIN_SPARE_WORKERS) {
-            if (var_debug)
-               printf("WorkerManager: Terminating extra children (got %i of %i required)\n", server_spare_children.count, MIN_SPARE_WORKERS);
+            DEBUG_LOG("WorkerManager: Terminating extra children (got %i of %i required)", server_spare_children.count, MIN_SPARE_WORKERS);
             terminate_extra_children_proc(MIN_SPARE_WORKERS);
          }
          
          if (server_spare_children.count < MIN_SPARE_WORKERS) {
-            if (var_debug)
-               printf("WorkerManager: Creating new children (got %i of %i required)\n", server_spare_children.count, MIN_SPARE_WORKERS);
+            DEBUG_LOG("WorkerManager: Creating new children (got %i of %i required)", server_spare_children.count, MIN_SPARE_WORKERS);
             create_spare_children_proc(MIN_SPARE_WORKERS);
          }
       }
@@ -601,10 +594,8 @@ int create_worker_manager_proc()
       return 0;
    }
 
-   if (var_debug) {
-      printf("Starting worker proccess manager\n");
-      printf("Creating new manager proccess with Linux clone() ...\n");
-   }
+   DEBUG_LOG("Starting worker proccess manager");
+   DEBUG_LOG("Creating new manager proccess with Linux clone() ...");
 
    // start new proccess and execute handle_cloned_proc() as a child
    //sleep(1);//don't fork too fast
@@ -617,8 +608,7 @@ int create_worker_manager_proc()
       return 0;
    }
 
-   if (var_debug)
-      printf("+ Started new manager proccess with PID %i\n", pid);
+   DEBUG_LOG("+ Started new manager proccess with PID %i", pid);
 
    return pid;
 }
@@ -639,8 +629,7 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
 {
    int pid = 0;
 
-   if (var_debug)
-      printf("Creating new child proccess with POSIX fork() socket #%i\n", sock);
+   DEBUG_LOG("Creating new child proccess with POSIX fork() socket #%i", sock);
 
    #ifdef PROXY_SUPPORT
       if (var_proxy)
@@ -667,14 +656,12 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
       sa_default.sa_flags = 0;
       sigaction(SIGCHLD, &sa_default, NULL);
 
-      if (var_debug)
-         printf("+ Started new child with PID %i\n", (int) getpid());
+      DEBUG_LOG("+ Started new child with PID %i", (int) getpid());
 
       close(server_sock); // Parent has it's own copy now, close it
       handle_connection(sock, is_unix_socket);
 
-      if (var_debug)
-         printf("- Shutting down child with PID %i\n", (int) getpid());
+      DEBUG_LOG("- Shutting down child with PID %i", (int) getpid());
 
       close(sock);
       exit(0);
@@ -951,18 +938,8 @@ int read_iface_config(char *config_file)
    // Wipe existing interface entries (in case config gets reloaded or like)
    server_wipe_iface_entries();
 
-   if (var_debug)
-      printf("Using base namespace \"%s\"\n", var_script_base_namespace ? var_script_base_namespace : "(null)");
-   if (var_debug)
-      if (var_script_base_namespace != NULL) {
-         size_t ns_len = strlen(var_script_base_namespace);
-         printf("Base namespace bytes:");
-         for (size_t i = 0; i < ns_len; i++)
-            printf(" %02x", (unsigned char)var_script_base_namespace[i]);
-         printf(" 00\n");
-      }
-   if (var_debug)
-      printf("Using script exec dir \"%s\"\n", var_script_exec_dir ? var_script_exec_dir : "(null)");
+   DEBUG_LOG("Using base namespace \"%s\"", var_script_base_namespace ? var_script_base_namespace : "(null)");
+   DEBUG_LOG("Using script exec dir \"%s\"", var_script_exec_dir ? var_script_exec_dir : "(null)");
 
    while (fgets(line, sizeof(line), fp) != NULL) {
       if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
@@ -1006,15 +983,13 @@ int read_iface_config(char *config_file)
       }
 
       server_add_iface_entry(iface, file);
-      if (var_debug)
-         printf("Mapped interface %s -> %s\n", iface, file);
+      DEBUG_LOG("Mapped interface %s -> %s", iface, file);
       count++;
    }
 
    fclose(fp);
 
-   if (var_debug)
-      printf("Loaded %d interface map entries from %s\n", count, config_file);
+   DEBUG_LOG("Loaded %d interface map entries from %s", count, config_file);
    if (count == 0)
       log_unexpected_event(LOG_WARNING, "Interface map empty after load: %s", config_file);
 

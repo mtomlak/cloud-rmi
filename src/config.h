@@ -17,8 +17,10 @@
 
 
 // Globals parsed from config file
+#ifdef ENABLE_DEBUG_LOGGING
 extern int var_debug;
 extern int var_debug_traffic;
+#endif
 extern int var_port;
 extern int var_read_timeout;
 extern int var_start_delay;

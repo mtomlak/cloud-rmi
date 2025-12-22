@@ -54,8 +54,10 @@ void show_help(char *this_cmd)
 	printf("\t%s --help | -h\n", basename(this_cmd));
 	printf("\nFlags:\n");
 	printf("\t-d goes daemon\n");
-	printf("\t-v enters verbose (debug) mode (currently %s)\n", var_debug ? "ON" : "OFF"); 
-	printf("\t-T enables traffic debug logging (currently %s)\n", var_debug_traffic ? "ON" : "OFF");
+#ifdef ENABLE_DEBUG_LOGGING
+	printf("\t-v enters verbose (debug) mode (currently %s)\n", debug_log_enabled() ? "ON" : "OFF"); 
+	printf("\t-T enables traffic debug logging (currently %s)\n", debug_traffic_enabled() ? "ON" : "OFF");
+#endif
 	printf("\nOptions:\n");
 	printf("\t-b sets base namespace for local scripts\n");
 	printf("\t-c sets path to the configuration file\n");
@@ -106,12 +108,12 @@ int find_and_load_configs(char *command)
          success = 0;
    }
 
-   if (var_debug) {  // args are not parsed yet, this is for testing - can be set inside config
+   if (debug_log_enabled()) {  // args are not parsed yet, this is for testing - can be set inside config
       if (success) {
-         printf("Loaded configuration file %s\n", var_config_file);
-         printf("Loaded interface map file %s\n", var_interface_map_file);
+         DEBUG_LOG("Loaded configuration file %s", var_config_file);
+         DEBUG_LOG("Loaded interface map file %s", var_interface_map_file);
       } else
-         printf("Failed to load some configuration files\n");
+         DEBUG_LOG("Failed to load some configuration files");
    } 
 }
 
@@ -137,13 +139,23 @@ int main(int argc, char *argv[])
 
    if (argc > 1) { 
    // Overwrite some config variables
+#ifdef ENABLE_DEBUG_LOGGING
       static struct option long_options[] = {
          {"unix-socket", required_argument, 0, 'u'},
          {"help", no_argument, 0, 'h'},
          {"debug-traffic", no_argument, 0, 'T'},
          {0, 0, 0, 0}
       };
-      while((opt = getopt_long(argc, argv, "b:c:dD:he:m:n:p:t:u:vTx:", long_options, NULL)) != -1) {
+      const char *optstring = "b:c:dD:he:m:n:p:t:u:vTx:";
+#else
+      static struct option long_options[] = {
+         {"unix-socket", required_argument, 0, 'u'},
+         {"help", no_argument, 0, 'h'},
+         {0, 0, 0, 0}
+      };
+      const char *optstring = "b:c:dD:he:m:n:p:t:u:x:";
+#endif
+      while((opt = getopt_long(argc, argv, optstring, long_options, NULL)) != -1) {
          switch(opt) {
          	case 'b':
                var_script_base_namespace = strdup(optarg);
@@ -154,15 +166,16 @@ int main(int argc, char *argv[])
             case 'c':
                var_config_file = strdup(optarg);
                if (!read_config(var_config_file)) {
-                  if (var_debug)
-                     printf("Failed to load config override %s\n", var_config_file);
-               } else if (var_debug) {
-                  printf("Loaded config override %s\n", var_config_file);
+                  if (debug_log_enabled())
+                     DEBUG_LOG("Failed to load config override %s", var_config_file);
+               } else if (debug_log_enabled()) {
+                  DEBUG_LOG("Loaded config override %s", var_config_file);
                }
                break;
 
             case 'd':
                daemon = 1;
+               var_run_as_daemon = 1;
                break;
 
             case 'D':
@@ -181,8 +194,8 @@ int main(int argc, char *argv[])
             case 'e':
                var_script_exec_dir = strdup(optarg);
                read_iface_config(var_interface_map_file);
-               if (var_debug)
-                  printf("CLI override script_exec_dir=%s\n", var_script_exec_dir);
+               if (debug_log_enabled())
+                  DEBUG_LOG("CLI override script_exec_dir=%s", var_script_exec_dir);
                break;
 
             case 'n':
@@ -201,15 +214,17 @@ int main(int argc, char *argv[])
                var_recovery_token = strdup(optarg);
                break;
 
+#ifdef ENABLE_DEBUG_LOGGING
             case 'v':
                printf("Entering verbose mode\n");
-               var_debug = 1;
+               debug_log_set(1);
                break;
 
             case 'T':
                printf("Enabling traffic debug logging\n");
-               var_debug_traffic = 1;
+               debug_traffic_set(1);
                break;
+#endif
 
             case 'x':
 #ifdef PROXY_SUPPORT
@@ -225,16 +240,16 @@ int main(int argc, char *argv[])
       }
    }
 
-   if (var_debug)
-      printf("Configuration summary: unix_socket_skip_auth=%i, script_exec_dir=%s\n", var_unix_socket_skip_auth, var_script_exec_dir);
+   if (debug_log_enabled())
+      DEBUG_LOG("Configuration summary: unix_socket_skip_auth=%i, script_exec_dir=%s", var_unix_socket_skip_auth, var_script_exec_dir);
 
    if (!read_iface_config(var_interface_map_file))
       die_err("Error: Failed to load interface map file");
 
    // Let's sleep a bit if we want to
    if (var_start_delay) {
-      if (var_debug)
-         printf("Delayed start set, starting in %i seconds ...\n", var_start_delay);
+      if (debug_log_enabled())
+         DEBUG_LOG("Delayed start set, starting in %i seconds ...", var_start_delay);
 
       fflush(stdout);   // make sure output is shown before sleep
       sleep(var_start_delay);
