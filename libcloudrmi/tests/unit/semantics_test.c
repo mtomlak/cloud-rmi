@@ -24,31 +24,66 @@ static int expect_size(size_t actual, size_t expected, const char *label)
 static int test_banner(void)
 {
     cloudrmi_banner_info info;
-    const char *line = "220 demo Server Ready EXT PROTO=2,stats,proxy";
 
-    if (!cloudrmi_parse_banner(line, &info)) {
-        printf("Failed to parse banner\n");
+    /* v2 banner with proto + caps */
+    if (!cloudrmi_parse_banner("220 demo Server Ready EXT PROTO=2,stats,proxy", &info)) {
+        printf("Failed to parse v2 banner\n");
         return 0;
     }
-
-    if (!expect_int(info.status, 220, "banner status"))
+    if (info.status != 220)
         return 0;
-    if (strcmp(info.context, "demo") != 0) {
-        printf("Unexpected context '%s'\n", info.context);
+    if (strcmp(info.context, "demo") != 0)
+        return 0;
+    if (info.advertised_max_protocol != 2)
+        return 0;
+    if (info.capability_count != 2)
+        return 0;
+    if (strcmp(info.capabilities[0], "STATS") != 0)
+        return 0;
+    if (strcmp(info.capabilities[1], "PROXY") != 0)
+        return 0;
+
+    /* v2 banner, proto only */
+    if (!cloudrmi_parse_banner("220 demo EXT PROTO=2", &info)) {
+        printf("Failed to parse proto-only banner\n");
         return 0;
     }
-    if (!expect_int(info.advertised_max_protocol, 2, "banner protocol"))
+    if (info.advertised_max_protocol != 2 || info.capability_count != 0)
         return 0;
-    if (!expect_size(info.capability_count, 2, "capability count"))
-        return 0;
-    if (strcmp(info.capabilities[0], "STATS") != 0 || strcmp(info.capabilities[1], "PROXY") != 0) {
-        printf("Unexpected capability tokens '%s','%s'\n", info.capabilities[0], info.capabilities[1]);
+
+    /* v1 banner with EXT but no PROTO */
+    if (!cloudrmi_parse_banner("220 demo Server Ready EXT SERVER-STATS", &info)) {
+        printf("Failed to parse v1 EXT-only banner\n");
         return 0;
     }
+    if (info.advertised_max_protocol != 1)
+        return 0;
+    if (info.capability_count != 1)
+        return 0;
+    if (strcmp(info.capabilities[0], "SERVER-STATS") != 0)
+        return 0;
 
-    const char *bad = "220 missing-ext";
-    if (cloudrmi_parse_banner(bad, &info)) {
-        printf("Invalid banner accepted\n");
+    /* v1 banner without EXT at all */
+    if (!cloudrmi_parse_banner("220 demo Server Ready", &info)) {
+        printf("Failed to parse legacy banner without EXT\n");
+        return 0;
+    }
+    if (info.advertised_max_protocol != 1)
+        return 0;
+    if (info.capability_count != 0)
+        return 0;
+
+    /* invalid banners */
+    if (cloudrmi_parse_banner("220", &info)) {
+        printf("Accepted malformed banner\n");
+        return 0;
+    }
+    if (cloudrmi_parse_banner("220 demo EXT PROTO=0", &info)) {
+        printf("Accepted invalid protocol version\n");
+        return 0;
+    }
+    if (cloudrmi_parse_banner("220 demo EXT PROTO=999", &info)) {
+        printf("Accepted out-of-range protocol\n");
         return 0;
     }
 
