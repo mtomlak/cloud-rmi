@@ -463,6 +463,80 @@ if (!function_exists('cloudrmi_parse_banner')) {
 		}
 
 		$line = ltrim($line);
+
+		if (!preg_match('/^220\s+([A-Za-z0-9._-]+)(?:\s+(.*))?$/', $line, $matches)) {
+			return false;
+		}
+
+		$context = $matches[1];
+		$rest = $matches[2] ?? '';
+
+		// No EXT  - legacy v1
+		if (!preg_match('/(?:^|\s)EXT(?:\s+(.*))?$/i', $rest, $extMatch)) {
+			return [
+				'status' => 220,
+				'context' => $context,
+				'advertised_max_protocol' => 1,
+				'capabilities' => [],
+			];
+		}
+
+		$extTail = trim($extMatch[1] ?? '');
+
+		// EXT present but empty → invalid
+		if ($extTail === '') {
+			return false;
+		}
+
+		$version = 1;
+		$caps = [];
+
+		$tokens = preg_split('/\s*,\s*/', $extTail);
+		foreach ($tokens as $token) {
+			$token = trim($token);
+			if ($token === '') {
+				return false;
+			}
+
+			// PROTO token
+			if (stripos($token, 'PROTO=') === 0) {
+				$protoVal = substr($token, strlen('PROTO='));
+				if (!ctype_digit($protoVal)) {
+					return false;
+				}
+				$version = (int)$protoVal;
+				if ($version < 1 || $version > RMI_MAX_PROTOCOL_VERSION) {
+					return false;
+				}
+				continue;
+			}
+
+			// Capability token
+			$cap = strtoupper($token);
+			if (preg_match('/[^A-Z0-9_-]/', $cap)) {
+				return false;
+			}
+			$caps[] = $cap;
+		}
+
+		return [
+			'status' => 220,
+			'context' => $context,
+			'advertised_max_protocol' => $version,
+			'capabilities' => $caps,
+		];
+	}
+}
+
+/* rename parse method with the one below after deprecating protocol v1 */
+if (!function_exists('cloudrmi_parse_banner_v2')) {
+	function cloudrmi_parse_banner_v2(string $line)
+	{
+		if (!cloudrmi_protocol_validate_line($line)) {
+			return false;
+		}
+
+		$line = ltrim($line);
 		if (!preg_match('/^220\\s+([A-Za-z0-9._-]+)\\s+(.*)$/', $line, $matches)) {
 			return false;
 		}

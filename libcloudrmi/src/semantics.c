@@ -110,60 +110,87 @@ int cloudrmi_parse_banner(const char *line, cloudrmi_banner_info *out)
     memset(out, 0, sizeof(*out));
 
     int status = 0;
-    const char *ext = NULL;
+    const char *rest = NULL;
 
-    if (!parse_status_and_context(line, &status, out->context, sizeof(out->context), &ext))
+    if (!parse_status_and_context(line, &status,
+                                  out->context, sizeof(out->context),
+                                  &rest))
         return 0;
 
     out->status = status;
 
+    /* Default: legacy v1 */
+    out->advertised_max_protocol = 1;
+    out->capability_count = 0;
+
+    if (rest == NULL || *rest == '\0')
+        return 1;
+
+    /* Find EXT as a standalone token */
+    const char *p = rest;
+    const char *ext = NULL;
+
+    while (*p) {
+        if ((p == rest || isspace((unsigned char)p[-1])) &&
+            strncmp(p, "EXT", 3) == 0 &&
+            (p[3] == '\0' || isspace((unsigned char)p[3]))) {
+            ext = p + 3;
+            break;
+        }
+        p++;
+    }
+
+    /* No EXT → legacy v1 */
+    if (ext == NULL)
+        return 1;
+
+    while (*ext && isspace((unsigned char)*ext))
+        ext++;
+
+    /* EXT present but empty → invalid */
     if (*ext == '\0')
         return 0;
 
-    const char *ext_token = strstr(ext, "EXT");
-    if (ext_token == NULL)
-        return 0;
+    /* Parse comma-separated EXT tokens */
+    const char *cursor = ext;
 
-    const char *cursor = ext_token + 3;
-    if (*cursor != '\0' && !isspace((unsigned char)*cursor))
-        return 0;
-
-    while (*cursor == ' ')
-        cursor++;
-
-    if (strncasecmp(cursor, "PROTO=", 6) != 0)
-        return 0;
-
-    cursor += 6;
-    char *endptr = NULL;
-    long version = strtol(cursor, &endptr, 10);
-    if (endptr == cursor || version <= 0 || version > RMI_MAX_PROTOCOL_VERSION)
-        return 0;
-
-    out->advertised_max_protocol = (int)version;
-    cursor = endptr;
-
-    if (*cursor == '\0')
-        return 1;
-
-    if (*cursor != ',')
-        return 0;
-
-    cursor++;
-
-    while (*cursor != '\0') {
+    while (*cursor) {
         const char *start = cursor;
-        while (*cursor != '\0' && *cursor != ',')
+
+        while (*cursor && *cursor != ',')
             cursor++;
 
         size_t len = (size_t)(cursor - start);
-        if (out->capability_count >= CLOUDRMI_MAX_CAPABILITIES)
+        if (len == 0)
             return 0;
 
-        if (!parse_capability_token(start, len, out->capabilities[out->capability_count], CLOUDRMI_MAX_CAPABILITY_LEN))
-            return 0;
+        /* PROTO token */
+        if (len >= 6 && strncasecmp(start, "PROTO=", 6) == 0) {
+            const char *num = start + 6;
+            char *endptr = NULL;
 
-        out->capability_count++;
+            long v = strtol(num, &endptr, 10);
+            if (endptr == num || endptr != start + len)
+                return 0;
+
+            if (v < 1 || v > RMI_MAX_PROTOCOL_VERSION)
+                return 0;
+
+            out->advertised_max_protocol = (int)v;
+        }
+        /* Capability token */
+        else {
+            if (out->capability_count >= CLOUDRMI_MAX_CAPABILITIES)
+                return 0;
+
+            if (!parse_capability_token(
+                    start, len,
+                    out->capabilities[out->capability_count],
+                    CLOUDRMI_MAX_CAPABILITY_LEN))
+                return 0;
+
+            out->capability_count++;
+        }
 
         if (*cursor == ',')
             cursor++;
