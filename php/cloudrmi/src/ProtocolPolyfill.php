@@ -470,12 +470,19 @@ if (!function_exists('cloudrmi_parse_banner')) {
 		$context = $matches[1];
 		$rest = $matches[2];
 
-		$extPos = stripos($rest, 'EXT');
+		// Look for EXT as a standalone token (avoid TEXT/NEXT/etc)
+		$extPos = stripos($rest, ' EXT ');
 		if ($extPos === false) {
-			return false;
+			// Legacy v1 banner: no EXT advertised
+			return [
+				'status' => 220,
+				'context' => $context,
+				'advertised_max_protocol' => 1,
+				'capabilities' => [],
+			];
 		}
 
-		$extBlock = trim(substr($rest, $extPos + 3));
+		$extBlock = trim(substr($rest, $extPos + 5)); // strlen(' EXT ') = 5
 		if (stripos($extBlock, 'PROTO=') !== 0) {
 			return false;
 		}
@@ -510,6 +517,7 @@ if (!function_exists('cloudrmi_parse_banner')) {
 		];
 	}
 }
+
 
 if (!function_exists('cloudrmi_parse_response_line')) {
 	function cloudrmi_parse_response_line(string $line)
