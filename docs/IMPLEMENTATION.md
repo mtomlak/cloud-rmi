@@ -97,7 +97,6 @@ Source: `src/protocol.c`
 - **HELP**: `200 JSON ["AUTH", ...]` listing supported commands (conditionally
   includes `PROXY`). Single-line only.
 - **IFACES**: `200 JSON ["iface1","iface2"]` from proxy or local server map.
-- **TIME**: RFC822 timestamp → `200 <time>`.
 - **PING**: `200 PONG`. Optional echo argument: `PING hello` → `200 PONG hello`.
 - **CAPS**: `200 JSON ["SERVER"]` or `200 JSON ["PROXY"]` depending on role.
 - **INFO**: `200 JSON {...}` returning structured node information including

@@ -452,10 +452,6 @@ class CloudRMIServer
 			$this->connWriteLn($socket, "200 PONG" . $pingEcho);
 			break;
 
-		case 'time':
-			$this->connWriteLn($socket, date("200 D, d M y H:i:s O"));	// RFC822
-			break;
-
 		case 'info':
 			$this->writeInfoResponse($socket);
 			break;
@@ -595,10 +591,6 @@ class CloudRMIServer
 			$this->readTimeout = $this->highReadTimeout;
 			$pingEcho = (isset($event['arg1']) && $event['arg1'] !== '') ? (' ' . $event['arg1']) : '';
 			$this->connWriteLn($socket, "200 PONG" . $pingEcho);
-			break;
-
-		case RMI_EVENT_TIME:
-			$this->connWriteLn($socket, date("200 D, d M y H:i:s O"));	// RFC822
 			break;
 
 		case RMI_EVENT_INFO:
@@ -1328,7 +1320,6 @@ class CloudRMIServer
 			'PING',
 			'PROTO',
 			'SERVER',
-			'TIME',
 			'QUIT',
 		]);
 	}
