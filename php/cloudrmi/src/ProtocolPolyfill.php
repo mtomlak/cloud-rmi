@@ -41,7 +41,7 @@ if (!defined('RMI_EVENT_RELOAD')) define('RMI_EVENT_RELOAD', 5);
 if (!defined('RMI_EVENT_SHUTDOWN')) define('RMI_EVENT_SHUTDOWN', 6);
 if (!defined('RMI_EVENT_TIME')) define('RMI_EVENT_TIME', 7);
 if (!defined('RMI_EVENT_UPTIME')) define('RMI_EVENT_UPTIME', 8);
-if (!defined('RMI_EVENT_NOOP')) define('RMI_EVENT_NOOP', 9);
+if (!defined('RMI_EVENT_PING')) define('RMI_EVENT_PING', 9);
 if (!defined('RMI_EVENT_DEBUG')) define('RMI_EVENT_DEBUG', 10);
 if (!defined('RMI_EVENT_QUIT')) define('RMI_EVENT_QUIT', 11);
 if (!defined('RMI_EVENT_PROXY')) define('RMI_EVENT_PROXY', 12);
@@ -288,8 +288,9 @@ if (!class_exists('CloudRMIProtocolContext', false)) {
 			case 'uptime':
 				$event['type'] = RMI_EVENT_UPTIME;
 				break;
+			case 'ping':
 			case 'noop':
-				$event['type'] = RMI_EVENT_NOOP;
+				$event['type'] = RMI_EVENT_PING;
 				break;
 			case 'debug':
 				$event['type'] = RMI_EVENT_DEBUG;
@@ -370,7 +371,7 @@ if (!function_exists('cloudrmi_protocol_destroy')) {
 	function cloudrmi_protocol_destroy($ctx): void
 	{
 		if ($ctx instanceof CloudRMIProtocolContext) {
-			// noop; allow GC to reclaim object.
+			// ping; allow GC to reclaim object.
 		}
 	}
 }

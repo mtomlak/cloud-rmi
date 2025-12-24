@@ -346,7 +346,7 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       items[idx++] = "DEBUG";
       items[idx++] = "HELP";
       items[idx++] = "IFACES";
-      items[idx++] = "NOOP";
+      items[idx++] = "PING";
       items[idx++] = "PROTO";
       items[idx++] = "RELOAD";
       items[idx++] = "SERVER";
@@ -420,7 +420,7 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
          stream_writeln(state->sock, "401 Unauthorized");
       break;
 
-   case RMI_EVENT_NOOP:
+   case RMI_EVENT_PING:
       stream_writeln(state->sock, "200 OK");
       break;
 

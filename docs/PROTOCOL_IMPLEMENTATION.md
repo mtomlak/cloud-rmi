@@ -88,7 +88,7 @@ Source: `src/protocol.c`
 - **TIME**: RFC822 timestamp → `200 <time>`.
 - **UPTIME**: Auth-only. Returns formatted uptime string → `200 ...` or
   `401 Unauthorized` when unauthenticated.
-- **NOOP**: `200 OK`.
+- **PING**: `200 OK`.
 - **CAPS**: `200 JSON ["STATS","PROXY"]` derived from compiled capabilities.
 - **DEBUG** (auth-only):
   - `debug on/off` toggles `var_debug`.
@@ -173,7 +173,7 @@ Source: `src/proxy.c`
 
 - Maintains a pool of upstream connections per proxy target. Spare connections
   are pre-created (`var_proxy_min_spare_conns`) and kept alive via periodic
-  `NOOP`.
+  `PING`.
 - Upstream connections reuse the standard client flow: connect, optional token
   authentication, banner parsing, capability discovery, and PROTO negotiation.
 - **CALL forwarding**:

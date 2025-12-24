@@ -100,7 +100,7 @@ class PayloadStubServer:
                 elif cmd == "PROTO" and len(parts) >= 2:
                     stream.write(b"200 OK\r\n")
                     stream.flush()
-                elif cmd == "NOOP":
+                elif cmd == "PING":
                     stream.write(b"200 OK\r\n")
                     stream.flush()
                 elif cmd == "CALL":

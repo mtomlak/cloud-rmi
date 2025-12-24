@@ -107,8 +107,8 @@ int rmi_protocol_handle_line(
         out_event->type = RMI_EVENT_TIME;
     } else if (strcmp(out_event->cmd, "uptime") == 0) {
         out_event->type = RMI_EVENT_UPTIME;
-    } else if (strcmp(out_event->cmd, "noop") == 0) {
-        out_event->type = RMI_EVENT_NOOP;
+    } else if ((strcmp(out_event->cmd, "ping") == 0) || (strcmp(out_event->cmd, "noop") == 0)) {
+        out_event->type = RMI_EVENT_PING;
     } else if (strcmp(out_event->cmd, "debug") == 0) {
         out_event->type = RMI_EVENT_DEBUG;
     } else if ((strcmp(out_event->cmd, "quit") == 0) || (strcmp(out_event->cmd, "exit") == 0)) {

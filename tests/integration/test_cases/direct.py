@@ -171,10 +171,10 @@ def control_commands(env: IntegrationEnvironment) -> TestResult:
         _require(time_status == 200, f"expected 200 got {time_status}")
         _require(len(time_message) > 0, "TIME response should include a timestamp payload")
 
-        session._send_line("NOOP")
-        noop_status, noop_message = parse_status(session._read_line())
-        _require(noop_status == 200, f"expected 200 got {noop_status}")
-        _require(noop_message == "OK", f"unexpected NOOP response: {noop_message}")
+        session._send_line("PING")
+        ping_status, ping_message = parse_status(session._read_line())
+        _require(ping_status == 200, f"expected 200 got {ping_status}")
+        _require(ping_message == "OK", f"unexpected PING response: {ping_message}")
 
         trace = session.trace
 

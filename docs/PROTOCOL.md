@@ -190,7 +190,7 @@ Commands that NEVER accept payload:
 AUTH
 HELP
 IFACES
-NOOP
+PING
 TIME
 UPTIME
 DEBUG

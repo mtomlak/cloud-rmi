@@ -446,7 +446,7 @@ class CloudRMIServer
 				$this->writeIfacesResponse($socket);
 				break;
 
-			case 'noop':
+			case 'ping':
 				$this->readTimeout = $this->highReadTimeout;
 				$this->connWriteLn($socket, "200 OK");
 				break;
@@ -617,7 +617,7 @@ class CloudRMIServer
 				$this->writeIfacesResponse($socket);
 				break;
 
-			case RMI_EVENT_NOOP:
+			case RMI_EVENT_PING:
 				$this->readTimeout = $this->highReadTimeout;
 				$this->connWriteLn($socket, "200 OK");
 				break;
@@ -1377,7 +1377,7 @@ class CloudRMIServer
 			'DEBUG',
 			'HELP',
 			'IFACES',
-			'NOOP',
+			'PING',
 			'PROTO',
 			'SHUTDOWN',
 			'TIME',

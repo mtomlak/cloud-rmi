@@ -1149,12 +1149,12 @@ int proxy_conn_keepalive(struct proxy_conn *conn)
    bzero(response, BUF_SZ);
 
    proxy_set_conn_busy(conn);
-   status_code = client_raw_cmd(&conn->client, "NOOP", response);
+   status_code = client_raw_cmd(&conn->client, "PING", response);
 
    // Try to reconnect stale connection
    if (!status_code || status_code == 408) {  // 408 - request timeout
       if (proxy_restart_conn(conn))
-         status_code = client_raw_cmd(&conn->client, "NOOP", response);
+         status_code = client_raw_cmd(&conn->client, "PING", response);
       else
          status_code = 503;
    }
@@ -1209,7 +1209,7 @@ int start_proxy_manager(void *arg)
 
       if ((int) fmod(sec_passed, 60) == 0) { // do every minute
          DEBUG_LOG("ProxyManager: Checking all connections");
-         proxy_all_keepalive_conns();  // send NOOP command to keep alive all connections
+         proxy_all_keepalive_conns();  // send PING command to keep alive all connections
          DEBUG_LOG("ProxyManager: Checking number of spare connections per each proxy");
          proxy_all_check_spare_conns();    // check number of spare connections
       }

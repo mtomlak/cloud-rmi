@@ -127,11 +127,11 @@ int main(void)
         return 1;
 
     /* Multiple commands in one buffer with CRLF and empty lines */
-    const char *combo = "noop\r\n\nHELP\n";
+    const char *combo = "ping\r\n\nHELP\n";
     rmi_error_t err;
     if (rmi_protocol_feed(ctx, (const uint8_t *)combo, strlen(combo), &err) != RMI_OK)
         return 1;
-    if (!expect_event(ctx, RMI_EVENT_NOOP, "noop", "", "", RMI_ERROR_NONE, NULL, NULL, 0))
+    if (!expect_event(ctx, RMI_EVENT_PING, "ping", "", "", RMI_ERROR_NONE, NULL, NULL, 0))
         return 1;
     if (!expect_event(ctx, RMI_EVENT_HELP, "help", "", "", RMI_ERROR_NONE, NULL, NULL, 0))
         return 1;
@@ -155,12 +155,12 @@ int main(void)
         return 1;
 
     /* Multiple commands in one buffer without chunking */
-    const char *double_noop = "NOOP\nNOOP\n";
-    if (rmi_protocol_feed(ctx, (const uint8_t *)double_noop, strlen(double_noop), &err) != RMI_OK)
+    const char *double_ping = "PING\nPING\n";
+    if (rmi_protocol_feed(ctx, (const uint8_t *)double_ping, strlen(double_ping), &err) != RMI_OK)
         return 1;
-    if (!expect_event(ctx, RMI_EVENT_NOOP, "noop", "", "", RMI_ERROR_NONE, NULL, NULL, 0))
+    if (!expect_event(ctx, RMI_EVENT_PING, "ping", "", "", RMI_ERROR_NONE, NULL, NULL, 0))
         return 1;
-    if (!expect_event(ctx, RMI_EVENT_NOOP, "noop", "", "", RMI_ERROR_NONE, NULL, NULL, 0))
+    if (!expect_event(ctx, RMI_EVENT_PING, "ping", "", "", RMI_ERROR_NONE, NULL, NULL, 0))
         return 1;
 
     /* CALL with payload */
@@ -182,7 +182,7 @@ int main(void)
         return 1;
 
     /* Missing CALL arguments should error and reset */
-    const char *bad_sequence = "CALL test iface\nNOOP\n";
+    const char *bad_sequence = "CALL test iface\nPING\n";
     if (rmi_protocol_feed(ctx, (const uint8_t *)bad_sequence, strlen(bad_sequence), &err) != RMI_OK)
         return 1;
     status = rmi_protocol_next_event(ctx, &event, &err);
