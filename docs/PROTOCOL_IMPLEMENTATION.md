@@ -52,9 +52,12 @@ Source: `libcloudrmi/src/protocol_feed.c`, `libcloudrmi/include/cloudrmi/types.h
 Sources: `src/protocol.c`, `src/capabilities.c`
 
 - Banner format: `220 <context> Server Ready EXT PROTO=2[,<caps>]`.
-- Built-in capability tokens: `PROXY`, `STATS`.
-- Compiled set: `STATS` are always emitted; `PROXY` is present
+- Built-in capability tokens: `SERVER`, `PING`, `CALL`, `PROXY`.
+- Compiled set: `SERVER`, `PING`, `CALL` are always emitted; `PROXY` is present
   only when built with `PROXY_SUPPORT`.
+- `SERVER` advertises that the SERVER namespace is implemented.
+- `PING` advertises that the PING command is supported.
+- `CALL` advertises that the CALL command is supported.
 - Tokens are comma-separated in the banner, then normalized to spaces by
   clients before parsing.
 
@@ -83,25 +86,29 @@ Source: `src/protocol.c`
 - **HELP**: `200 JSON ["AUTH", ...]` listing supported commands (conditionally
   includes `PROXY`). Single-line only.
 - **IFACES**: `200 JSON ["iface1","iface2"]` from proxy or local server map.
-- **RELOAD**: Auth-only. Reloads configuration and interface map → `200`.
-- **SHUTDOWN**: Always returns `404 Unsupported`.
 - **TIME**: RFC822 timestamp → `200 <time>`.
-- **UPTIME**: Auth-only. Returns formatted uptime string → `200 ...` or
-  `401 Unauthorized` when unauthenticated.
-- **PING**: `200 OK`.
-- **CAPS**: `200 JSON ["STATS","PROXY"]` derived from compiled capabilities.
-- **DEBUG** (auth-only):
-  - `debug on/off` toggles `var_debug`.
-  - Otherwise returns single-line JSON build/runtime info (language, kernel
-    API, proxy support, current PID, config paths).
+- **PING**: `200 PONG`. Optional echo argument: `PING hello` → `200 PONG hello`.
+- **CAPS**: `200 JSON ["SERVER","PING","CALL","PROXY"]` derived from compiled
+  capabilities.
+- **INFO**: `200 JSON {...}` returning structured node information including
+  role (server/proxy), capabilities, build info (language, kernel, version),
+  and runtime info (pid, uptime). Read-only and always allowed.
 - **QUIT/EXIT**: `221 Bye` and closes connection.
 - **PROXY stats**: `proxy stats` → `200 JSON {"servers":[...],"clients":[...],"trimmed":false}`;
   other args → `400 Bad Request Arguments` (compiled only when
   `PROXY_SUPPORT` is enabled). Output is capped to avoid overflowing the
   single response line.
-- **SERVER stats**: `server stats` → `200 {json}` single line with reusable worker
-  details (capped to 25 entries) and `trimmed` flag when truncated; other args
-  → 400.
+- **SERVER**: Namespace for implementation-specific subcommands:
+  - `SERVER HELP` → `200 JSON ["DEBUG","RELOAD","SHUTDOWN","WORKERS"]`
+    listing available subcommands.
+  - `SERVER DEBUG on/off` (auth-only) toggles debug logging. `SERVER DEBUG`
+    without argument returns current state.
+  - `SERVER DEBUG TRAFFIC on/off` (auth-only) toggles traffic logging.
+  - `SERVER RELOAD` (auth-only) reloads configuration and interface map.
+  - `SERVER SHUTDOWN` → `404 Unsupported` (reserved for future use).
+  - `SERVER WORKERS` → `200 JSON {...}` single-line JSON with worker/process
+    details (capped to 25 entries), `trimmed` flag when truncated.
+    Only available when worker reuse is compiled in.
 - **Unknown commands**: `400 Bad Request`.
 
 Parser-level errors map to responses inside `handle_connection`:
@@ -213,8 +220,8 @@ Source: `src/proxy.c`
 - **Server responses**:
   - `400 Bad Request` on BAD_REQUEST or transport overflow.
   - `400 Bad Request Arguments` on BAD_ARGS.
-  - `401 Unauthorized` for unauthenticated CALL/UPTIME/RELOAD/DEBUG.
-  - `404 Unsupported` for `SHUTDOWN`.
+  - `401 Unauthorized` for unauthenticated CALL or auth-only SERVER subcommands.
+  - `404 Unsupported` for `SERVER SHUTDOWN`.
   - `500 ...` for handler or pipeline failures.
 - **Client-local errors**: Lack of negotiated payload support returns status
   `505` with a human-readable explanation; no network request is sent.
