@@ -166,11 +166,6 @@ def inline_payload_large_inline(env: IntegrationEnvironment) -> TestResult:
 
 def control_commands(env: IntegrationEnvironment) -> TestResult:
     with env.server_session() as session:
-        session._send_line("TIME")
-        time_status, time_message = parse_status(session._read_line())
-        _require(time_status == 200, f"expected 200 got {time_status}")
-        _require(len(time_message) > 0, "TIME response should include a timestamp payload")
-
         session._send_line("PING")
         ping_status, ping_message = parse_status(session._read_line())
         _require(ping_status == 200, f"expected 200 got {ping_status}")

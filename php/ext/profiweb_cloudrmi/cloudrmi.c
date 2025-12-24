@@ -410,7 +410,6 @@ static const cloudrmi_constant_entry cloudrmi_constant_entries[] = {
     {"RMI_EVENT_IFACES", (zend_long)RMI_EVENT_IFACES},
     {"RMI_EVENT_RELOAD", (zend_long)RMI_EVENT_RELOAD},
     {"RMI_EVENT_SHUTDOWN", (zend_long)RMI_EVENT_SHUTDOWN},
-    {"RMI_EVENT_TIME", (zend_long)RMI_EVENT_TIME},
     {"RMI_EVENT_UPTIME", (zend_long)RMI_EVENT_UPTIME},
     {"RMI_EVENT_PING", (zend_long)RMI_EVENT_PING},
     {"RMI_EVENT_DEBUG", (zend_long)RMI_EVENT_DEBUG},

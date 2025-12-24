@@ -264,8 +264,6 @@ void handle_print_ifaces(struct conn_state *state)
 static int handle_command_event(rmi_event_t *event, struct conn_state *state, rmi_protocol_ctx_t *protocol_ctx)
 {
    char output[BUF_SZ + 1];
-   time_t t;
-   struct tm *tmp;
 
    memset(output, 0, sizeof(output));
 
@@ -353,7 +351,6 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
 #else
       items[idx++] = "SERVER";
 #endif
-      items[idx++] = "TIME";
       items[idx++] = "QUIT";
 
       json_array_write_line(state->sock, items, idx);
@@ -367,25 +364,6 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       else
 #endif
       handle_print_ifaces(state);
-      break;
-
-   case RMI_EVENT_TIME: // RFC822 time string
-      t = time(NULL);
-      tmp = localtime(&t);
-
-      if (tmp == NULL) {
-         log_event(LOG_ERR, "Error: localtime() failed");
-         stream_writeln(state->sock, "500 Error retrieving time");
-         break;
-      }
-
-      if (strftime(output, BUF_SZ, "%a, %d %b %y %T %z", tmp) == 0) {
-         log_event(LOG_ERR, "Error: strftime() failed");
-         stream_writeln(state->sock, "500 Error retrieving time");
-         break;
-      }
-
-      stream_writeln(state->sock, "200 %s", output);
       break;
 
    case RMI_EVENT_PING:

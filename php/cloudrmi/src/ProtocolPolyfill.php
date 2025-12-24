@@ -37,15 +37,14 @@ if (!defined('RMI_EVENT_AUTH')) define('RMI_EVENT_AUTH', 1);
 if (!defined('RMI_EVENT_CALL')) define('RMI_EVENT_CALL', 2);
 if (!defined('RMI_EVENT_HELP')) define('RMI_EVENT_HELP', 3);
 if (!defined('RMI_EVENT_IFACES')) define('RMI_EVENT_IFACES', 4);
-if (!defined('RMI_EVENT_TIME')) define('RMI_EVENT_TIME', 5);
-if (!defined('RMI_EVENT_PING')) define('RMI_EVENT_PING', 6);
-if (!defined('RMI_EVENT_QUIT')) define('RMI_EVENT_QUIT', 7);
-if (!defined('RMI_EVENT_PROXY')) define('RMI_EVENT_PROXY', 8);
-if (!defined('RMI_EVENT_CAPS')) define('RMI_EVENT_CAPS', 9);
-if (!defined('RMI_EVENT_SERVER')) define('RMI_EVENT_SERVER', 10);
-if (!defined('RMI_EVENT_PROTO')) define('RMI_EVENT_PROTO', 11);
-if (!defined('RMI_EVENT_INFO')) define('RMI_EVENT_INFO', 12);
-if (!defined('RMI_EVENT_UNKNOWN')) define('RMI_EVENT_UNKNOWN', 13);
+if (!defined('RMI_EVENT_PING')) define('RMI_EVENT_PING', 5);
+if (!defined('RMI_EVENT_QUIT')) define('RMI_EVENT_QUIT', 6);
+if (!defined('RMI_EVENT_PROXY')) define('RMI_EVENT_PROXY', 7);
+if (!defined('RMI_EVENT_CAPS')) define('RMI_EVENT_CAPS', 8);
+if (!defined('RMI_EVENT_SERVER')) define('RMI_EVENT_SERVER', 9);
+if (!defined('RMI_EVENT_PROTO')) define('RMI_EVENT_PROTO', 10);
+if (!defined('RMI_EVENT_INFO')) define('RMI_EVENT_INFO', 11);
+if (!defined('RMI_EVENT_UNKNOWN')) define('RMI_EVENT_UNKNOWN', 12);
 
 // Protocol parser states
 if (!defined('RMI_PROTOCOL_IDLE')) define('RMI_PROTOCOL_IDLE', 0);
@@ -270,13 +269,10 @@ if (!class_exists('CloudRMIProtocolContext', false)) {
 			case 'help':
 				$event['type'] = RMI_EVENT_HELP;
 				break;
-			case 'ifaces':
-				$event['type'] = RMI_EVENT_IFACES;
-				break;
-			case 'time':
-				$event['type'] = RMI_EVENT_TIME;
-				break;
-			case 'ping':
+		case 'ifaces':
+			$event['type'] = RMI_EVENT_IFACES;
+			break;
+		case 'ping':
 			case 'noop':
 				$event['type'] = RMI_EVENT_PING;
 				break;
