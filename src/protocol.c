@@ -73,10 +73,6 @@ static void log_request_summary(const rmi_event_t *event, const struct conn_stat
       log_traffic_event(state, "request PROTO %s", event->arg1 ? event->arg1 : "");
       break;
 
-   case RMI_EVENT_DEBUG:
-      log_traffic_event(state, "request DEBUG %s", event->arg1 ? event->arg1 : "");
-      break;
-
    default:
       log_traffic_event(state, "request type=%d", event->type);
       break;
@@ -243,6 +239,7 @@ int handle_auth_cmd(char *cmd, char *arg, struct conn_state *state)
    } else {
       stream_writeln(state->sock, "400 Bad Request Arguments");
    }
+   return 1;
 }
 
 void handle_print_ifaces(struct conn_state *state)
@@ -266,7 +263,6 @@ void handle_print_ifaces(struct conn_state *state)
 
 static int handle_command_event(rmi_event_t *event, struct conn_state *state, rmi_protocol_ctx_t *protocol_ctx)
 {
-   int time_diff;
    char output[BUF_SZ + 1];
    time_t t;
    struct tm *tmp;
@@ -343,20 +339,22 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       items[idx++] = "AUTH";
       items[idx++] = "CALL";
       items[idx++] = "CAPS";
-      items[idx++] = "DEBUG";
       items[idx++] = "HELP";
       items[idx++] = "IFACES";
+      items[idx++] = "INFO";
       items[idx++] = "PING";
       items[idx++] = "PROTO";
-      items[idx++] = "RELOAD";
-      items[idx++] = "SERVER";
-      items[idx++] = "TIME";
-      items[idx++] = "UPTIME";
-      items[idx++] = "QUIT";
 #ifdef PROXY_SUPPORT
-      if (var_proxy && idx < sizeof(items) / sizeof(items[0]))
+      if (var_proxy) {
          items[idx++] = "PROXY";
+      } else {
+         items[idx++] = "SERVER";
+      }
+#else
+      items[idx++] = "SERVER";
 #endif
+      items[idx++] = "TIME";
+      items[idx++] = "QUIT";
 
       json_array_write_line(state->sock, items, idx);
       break;
@@ -369,20 +367,6 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       else
 #endif
       handle_print_ifaces(state);
-      break;
-
-   case RMI_EVENT_RELOAD:
-      if (state->is_authenticated) {
-         stream_writeln(state->sock, "200 Reloading configuration");
-         read_config(CONFIGURATION_FILE);
-         read_iface_config(INTERFACE_MAP_FILE);
-
-      } else
-         stream_writeln(state->sock, "401 Unauthorized");
-      break;
-
-   case RMI_EVENT_SHUTDOWN:
-      stream_writeln(state->sock, "404 Unsupported");
       break;
 
    case RMI_EVENT_TIME: // RFC822 time string
@@ -404,24 +388,12 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       stream_writeln(state->sock, "200 %s", output);
       break;
 
-   case RMI_EVENT_UPTIME:
-      if (state->is_authenticated) {
-         time_diff = (int)time(NULL) - var_server_start_time;
-
-         stream_writeln(
-            state->sock,
-            "200 Server up for %i days, %i hrs, %i min, %i sec",
-            (int)floor(time_diff / 86400),
-            (int)floor(fmod(time_diff, 86400) / 3600),
-            (int)floor(fmod(time_diff, 3600) / 60),
-            (int)fmod(time_diff, 60)
-            );
-      } else
-         stream_writeln(state->sock, "401 Unauthorized");
-      break;
-
    case RMI_EVENT_PING:
-      stream_writeln(state->sock, "200 OK");
+      if (event->argc > 1 && event->arg1[0] != '\0') {
+         stream_writeln(state->sock, "200 PONG %s", event->arg1);
+      } else {
+         stream_writeln(state->sock, "200 PONG");
+      }
       break;
 
    case RMI_EVENT_CAPS: {
@@ -430,7 +402,7 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       const char *items[MAX_CAP_TOKENS];
       size_t idx = 0;
 
-      rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
+      rmi_capabilities_to_tokens(rmi_get_runtime_capabilities(), caps_buf, sizeof(caps_buf));
 
       token = strtok(caps_buf, " ");
       while (token != NULL && idx < (sizeof(items) / sizeof(items[0]))) {
@@ -441,64 +413,6 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       json_array_write_line(state->sock, items, idx);
       break;
    }
-
-   case RMI_EVENT_DEBUG:
-      if (state->is_authenticated) {
-         if (strcmp(event->arg1, "on") == 0) {
-            debug_log_set(1);
-         } else if (strcmp(event->arg1, "off") == 0) {
-            debug_log_set(0);
-         } else if (strcmp(event->arg1, "traffic") == 0) {
-            if (event->arg2 != NULL && strcmp(event->arg2, "on") == 0) {
-               debug_traffic_set(1);
-               stream_writeln(state->sock, "200 Debug traffic logging ON");
-            } else if (event->arg2 != NULL && strcmp(event->arg2, "off") == 0) {
-               debug_traffic_set(0);
-               stream_writeln(state->sock, "200 Debug traffic logging OFF");
-            } else {
-               stream_writeln(
-                  state->sock,
-                  "200 Debug traffic is %s",
-                  debug_traffic_enabled() ? "ON" : "OFF");
-            }
-         } else {
-            char line[BUF_SZ + 1];
-            char config_path[BUF_SZ + 1];
-            char iface_path[BUF_SZ + 1];
-            size_t offset = 0;
-            const char *language_label = "C (libc)";
-            const char *kernel_label = "POSIX";
-            const char *proxy_label = "NO";
-
-#ifdef ENABLE_LINUX_FEATURES
-            language_label = "C (glibc)";
-            kernel_label = "Linux";
-#endif
-#ifdef PROXY_SUPPORT
-            proxy_label = var_proxy ? "YES" : "NO";
-#endif
-
-            json_escape_into(config_path, sizeof(config_path), var_config_file);
-            json_escape_into(iface_path, sizeof(iface_path), var_interface_map_file);
-
-            append_format(
-               line,
-               sizeof(line),
-               &offset,
-               "200 JSON {\"build\":{\"language\":\"%s\",\"kernel\":\"%s\",\"proxy\":\"%s\"},\"runtime\":{\"pid\":%i,\"config\":\"%s\",\"iface_map\":\"%s\"}}",
-               language_label,
-               kernel_label,
-               proxy_label,
-               (int)getpid(),
-               config_path,
-               iface_path);
-
-            stream_writeln(state->sock, "%s", line);
-         }
-      } else {
-         stream_writeln(state->sock, "401 Unauthorized");
-      }
-      break;
 
    case RMI_EVENT_QUIT:
       stream_writeln(state->sock, "221 Bye");
@@ -514,9 +428,116 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       break;
 #endif
 
+   case RMI_EVENT_INFO: {
+      char line[BUF_SZ + 1];
+      char caps_buf[BUF_SZ + 1];
+      char *token;
+      size_t offset = 0;
+      int uptime = (int)time(NULL) - var_server_start_time;
+      const char *language_label = "C";
+      const char *kernel_label = "POSIX";
+      const char *role_label = "server";
+
+#ifdef ENABLE_LINUX_FEATURES
+      kernel_label = "Linux";
+#endif
+#ifdef PROXY_SUPPORT
+      if (var_proxy)
+         role_label = "proxy";
+#endif
+
+      append_format(
+         line,
+         sizeof(line),
+         &offset,
+         "200 JSON {\"role\":\"%s\",\"capabilities\":[",
+         role_label);
+
+      rmi_capabilities_to_tokens(rmi_get_runtime_capabilities(), caps_buf, sizeof(caps_buf));
+      token = strtok(caps_buf, " ");
+      int is_first = 1;
+      while (token != NULL) {
+         append_format(line, sizeof(line), &offset, "%s\"%s\"", is_first ? "" : ",", token);
+         is_first = 0;
+         token = strtok(NULL, " ");
+      }
+
+      append_format(
+         line,
+         sizeof(line),
+         &offset,
+         "],\"build\":{\"language\":\"%s\",\"kernel\":\"%s\",\"version\":\"%s\"},\"runtime\":{\"pid\":%i,\"uptime\":%i}}",
+         language_label,
+         kernel_label,
+         CLOUDRMI_LIBRARY_VERSION,
+         (int)getpid(),
+         uptime);
+
+      stream_writeln(state->sock, "%s", line);
+      break;
+   }
+
    case RMI_EVENT_SERVER:
-      if (strcmp(event->arg1, "stats") == 0) {
+#ifdef PROXY_SUPPORT
+      /* SERVER command is not available in proxy mode - use PROXY command instead */
+      if (var_proxy) {
+         stream_writeln(state->sock, "400 Bad Request");
+         break;
+      }
+#endif
+      if (strcasecmp(event->arg1, "workers") == 0) {
          server_send_stats(state->sock);
+      } else if (strcasecmp(event->arg1, "reload") == 0) {
+         if (state->is_authenticated) {
+            stream_writeln(state->sock, "200 Reloading configuration");
+            read_config(CONFIGURATION_FILE);
+            read_iface_config(INTERFACE_MAP_FILE);
+         } else {
+            stream_writeln(state->sock, "401 Unauthorized");
+         }
+      } else if (strcasecmp(event->arg1, "shutdown") == 0) {
+         stream_writeln(state->sock, "404 Unsupported");
+      } else if (strcasecmp(event->arg1, "debug") == 0) {
+         if (state->is_authenticated) {
+            if (strcasecmp(event->arg2, "on") == 0) {
+               debug_log_set(1);
+               stream_writeln(state->sock, "200 Debug logging ON");
+            } else if (strcasecmp(event->arg2, "off") == 0) {
+               debug_log_set(0);
+               stream_writeln(state->sock, "200 Debug logging OFF");
+            } else if (strcasecmp(event->arg2, "traffic") == 0) {
+            if (event->arg3[0] != '\0' && strcasecmp(event->arg3, "on") == 0) {
+               debug_traffic_set(1);
+               stream_writeln(state->sock, "200 Debug traffic logging ON");
+            } else if (event->arg3[0] != '\0' && strcasecmp(event->arg3, "off") == 0) {
+                  debug_traffic_set(0);
+                  stream_writeln(state->sock, "200 Debug traffic logging OFF");
+               } else {
+                  stream_writeln(
+                     state->sock,
+                     "200 Debug traffic is %s",
+                     debug_traffic_enabled() ? "ON" : "OFF");
+               }
+            } else {
+               stream_writeln(
+                  state->sock,
+                  "200 Debug logging is %s",
+                  debug_log_enabled() ? "ON" : "OFF");
+            }
+         } else {
+            stream_writeln(state->sock, "401 Unauthorized");
+         }
+      } else if (strcasecmp(event->arg1, "help") == 0) {
+         const char *items[8];
+         size_t idx = 0;
+
+         items[idx++] = "DEBUG";
+         items[idx++] = "RELOAD";
+         items[idx++] = "SHUTDOWN";
+#ifdef REUSE_WORKER_PROC
+         items[idx++] = "WORKERS";
+#endif
+         json_array_write_line(state->sock, items, idx);
       } else {
          stream_writeln(state->sock, "400 Bad Request Arguments");
       }
@@ -562,7 +583,7 @@ void handle_connection (int sock, int is_unix_socket)
 
    // Write welcome message
    char caps_buf[BUF_SZ + 1];
-   rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
+   rmi_capabilities_to_tokens(rmi_get_runtime_capabilities(), caps_buf, sizeof(caps_buf));
 
    for (size_t i = 0; caps_buf[i]; i++)
       if (caps_buf[i] == ' ')

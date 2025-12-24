@@ -31,24 +31,21 @@ if (!defined('CLOUDRMI_RESPONSE_PLAIN')) define('CLOUDRMI_RESPONSE_PLAIN', 0);
 if (!defined('CLOUDRMI_RESPONSE_JSON_INLINE')) define('CLOUDRMI_RESPONSE_JSON_INLINE', 1);
 if (!defined('CLOUDRMI_RESPONSE_PAYLOAD')) define('CLOUDRMI_RESPONSE_PAYLOAD', 2);
 
-// Events
+// Events - matches C enum rmi_event_type_t in types.h
 if (!defined('RMI_EVENT_NONE')) define('RMI_EVENT_NONE', 0);
 if (!defined('RMI_EVENT_AUTH')) define('RMI_EVENT_AUTH', 1);
 if (!defined('RMI_EVENT_CALL')) define('RMI_EVENT_CALL', 2);
 if (!defined('RMI_EVENT_HELP')) define('RMI_EVENT_HELP', 3);
 if (!defined('RMI_EVENT_IFACES')) define('RMI_EVENT_IFACES', 4);
-if (!defined('RMI_EVENT_RELOAD')) define('RMI_EVENT_RELOAD', 5);
-if (!defined('RMI_EVENT_SHUTDOWN')) define('RMI_EVENT_SHUTDOWN', 6);
-if (!defined('RMI_EVENT_TIME')) define('RMI_EVENT_TIME', 7);
-if (!defined('RMI_EVENT_UPTIME')) define('RMI_EVENT_UPTIME', 8);
-if (!defined('RMI_EVENT_PING')) define('RMI_EVENT_PING', 9);
-if (!defined('RMI_EVENT_DEBUG')) define('RMI_EVENT_DEBUG', 10);
-if (!defined('RMI_EVENT_QUIT')) define('RMI_EVENT_QUIT', 11);
-if (!defined('RMI_EVENT_PROXY')) define('RMI_EVENT_PROXY', 12);
-if (!defined('RMI_EVENT_CAPS')) define('RMI_EVENT_CAPS', 13);
-if (!defined('RMI_EVENT_SERVER')) define('RMI_EVENT_SERVER', 14);
-if (!defined('RMI_EVENT_PROTO')) define('RMI_EVENT_PROTO', 15);
-if (!defined('RMI_EVENT_UNKNOWN')) define('RMI_EVENT_UNKNOWN', 16);
+if (!defined('RMI_EVENT_TIME')) define('RMI_EVENT_TIME', 5);
+if (!defined('RMI_EVENT_PING')) define('RMI_EVENT_PING', 6);
+if (!defined('RMI_EVENT_QUIT')) define('RMI_EVENT_QUIT', 7);
+if (!defined('RMI_EVENT_PROXY')) define('RMI_EVENT_PROXY', 8);
+if (!defined('RMI_EVENT_CAPS')) define('RMI_EVENT_CAPS', 9);
+if (!defined('RMI_EVENT_SERVER')) define('RMI_EVENT_SERVER', 10);
+if (!defined('RMI_EVENT_PROTO')) define('RMI_EVENT_PROTO', 11);
+if (!defined('RMI_EVENT_INFO')) define('RMI_EVENT_INFO', 12);
+if (!defined('RMI_EVENT_UNKNOWN')) define('RMI_EVENT_UNKNOWN', 13);
 
 // Protocol parser states
 if (!defined('RMI_PROTOCOL_IDLE')) define('RMI_PROTOCOL_IDLE', 0);
@@ -276,24 +273,12 @@ if (!class_exists('CloudRMIProtocolContext', false)) {
 			case 'ifaces':
 				$event['type'] = RMI_EVENT_IFACES;
 				break;
-			case 'reload':
-				$event['type'] = RMI_EVENT_RELOAD;
-				break;
-			case 'shutdown':
-				$event['type'] = RMI_EVENT_SHUTDOWN;
-				break;
 			case 'time':
 				$event['type'] = RMI_EVENT_TIME;
-				break;
-			case 'uptime':
-				$event['type'] = RMI_EVENT_UPTIME;
 				break;
 			case 'ping':
 			case 'noop':
 				$event['type'] = RMI_EVENT_PING;
-				break;
-			case 'debug':
-				$event['type'] = RMI_EVENT_DEBUG;
 				break;
 			case 'quit':
 			case 'exit':
@@ -310,6 +295,9 @@ if (!class_exists('CloudRMIProtocolContext', false)) {
 				break;
 			case 'proto':
 				$event['type'] = RMI_EVENT_PROTO;
+				break;
+			case 'info':
+				$event['type'] = RMI_EVENT_INFO;
 				break;
 			case '':
 				$event['type'] = RMI_EVENT_UNKNOWN;

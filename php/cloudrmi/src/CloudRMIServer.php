@@ -446,49 +446,23 @@ class CloudRMIServer
 				$this->writeIfacesResponse($socket);
 				break;
 
-			case 'ping':
-				$this->readTimeout = $this->highReadTimeout;
-				$this->connWriteLn($socket, "200 OK");
-				break;
+		case 'ping':
+			$this->readTimeout = $this->highReadTimeout;
+			$pingEcho = (isset($parts[1]) && $parts[1] !== '') ? (' ' . trim($parts[1])) : '';
+			$this->connWriteLn($socket, "200 PONG" . $pingEcho);
+			break;
 
-			case 'shutdown':
-				if (!$this->isAuthenticated) {
-					$this->connWriteLn($socket, '401 Unauthorized');	
-					break;
-				}
-				$this->doShutdown = true;
-				$this->connWriteLn($socket, "221 Server shutting down");
-				\posix_kill($this->serverPid, SIGTERM);
+		case 'time':
+			$this->connWriteLn($socket, date("200 D, d M y H:i:s O"));	// RFC822
+			break;
 
-				return false;
+		case 'info':
+			$this->writeInfoResponse($socket);
+			break;
 
-			case 'time':
-				$this->connWriteLn($socket, date("200 D, d M y H:i:s O"));	// RFC822
-				break;
-
-			case 'uptime':
-				if (!$this->isAuthenticated) {
-					$this->connWriteLn($socket, '401 Unauthorized');	
-					break;
-				}
-				$diff = time() - $this->startedAt;
-				$this->connWriteLn($socket, sprintf(
-					"200 Server up for %s days, %s hrs, %s min, %s sec",
-					(int) floor($diff / 86400),
-					(int) floor(($diff % 86400) / 3600),
-					(int) floor(($diff % 3600) / 60),
-					(int) $diff % 60
-					));
-				break;
-
-			case 'debug':
-				if (!$this->isAuthenticated) {
-					$this->connWriteLn($socket, '401 Unauthorized');	
-					break;
-				}
-				$this->readTimeout = $this->highReadTimeout;
-				$this->writeDebugResponse($socket);
-				break;
+		case 'server':
+			$this->handleServerCommand($socket, $arg);
+			break;
 
 			case 'quit':
 			case 'exit':
@@ -617,56 +591,30 @@ class CloudRMIServer
 				$this->writeIfacesResponse($socket);
 				break;
 
-			case RMI_EVENT_PING:
-				$this->readTimeout = $this->highReadTimeout;
-				$this->connWriteLn($socket, "200 OK");
-				break;
+		case RMI_EVENT_PING:
+			$this->readTimeout = $this->highReadTimeout;
+			$pingEcho = (isset($event['arg1']) && $event['arg1'] !== '') ? (' ' . $event['arg1']) : '';
+			$this->connWriteLn($socket, "200 PONG" . $pingEcho);
+			break;
 
-			case RMI_EVENT_SHUTDOWN:
-				if (!$this->isAuthenticated) {
-					$this->connWriteLn($socket, '401 Unauthorized');	
-					break;
-				}
-				$this->doShutdown = true;
-				$this->connWriteLn($socket, "221 Server shutting down");
-				\posix_kill($this->serverPid, SIGTERM);
+		case RMI_EVENT_TIME:
+			$this->connWriteLn($socket, date("200 D, d M y H:i:s O"));	// RFC822
+			break;
 
-				return false;
+		case RMI_EVENT_INFO:
+			$this->writeInfoResponse($socket);
+			break;
 
-			case RMI_EVENT_TIME:
-				$this->connWriteLn($socket, date("200 D, d M y H:i:s O"));	// RFC822
-				break;
+		case RMI_EVENT_SERVER:
+			$this->handleServerEvent($socket, $event);
+			break;
 
-			case RMI_EVENT_UPTIME:
-				if (!$this->isAuthenticated) {
-					$this->connWriteLn($socket, '401 Unauthorized');	
-					break;
-				}
-				$diff = time() - $this->startedAt;
-				$this->connWriteLn($socket, sprintf(
-					"200 Server up for %s days, %s hrs, %s min, %s sec",
-					(int) floor($diff / 86400),
-					(int) floor(($diff % 86400) / 3600),
-					(int) floor(($diff % 3600) / 60),
-					(int) $diff % 60
-					));
-				break;
+		case RMI_EVENT_QUIT:
+			$this->connWriteLn($socket, "221 Bye");
+			return false;
 
-			case RMI_EVENT_DEBUG:
-				if (!$this->isAuthenticated) {
-					$this->connWriteLn($socket, '401 Unauthorized');	
-					break;
-				}
-				$this->readTimeout = $this->highReadTimeout;
-				$this->writeDebugResponse($socket);
-				break;
-
-			case RMI_EVENT_QUIT:
-				$this->connWriteLn($socket, "221 Bye");
-				return false;
-
-			default:
-				$this->connWriteLn($socket, "400 Bad Request");
+		default:
+			$this->connWriteLn($socket, "400 Bad Request");
 		}
 
 		return null;
@@ -1374,14 +1322,13 @@ class CloudRMIServer
 			'AUTH',
 			'CALL',
 			'CAPS',
-			'DEBUG',
 			'HELP',
 			'IFACES',
+			'INFO',
 			'PING',
 			'PROTO',
-			'SHUTDOWN',
+			'SERVER',
 			'TIME',
-			'UPTIME',
 			'QUIT',
 		]);
 	}
@@ -1410,6 +1357,132 @@ class CloudRMIServer
 		];
 
 		$this->connWriteLn($socket, '200 JSON ' . json_encode($info));
+	}
+
+	protected function writeInfoResponse($socket)
+	{
+		$uptime = time() - $this->startedAt;
+		$info = [
+			'role' => 'server',
+			'capabilities' => $this->getAdvertisedCapabilities(),
+			'build' => [
+				'language' => 'PHP',
+				'kernel' => $this->hasForkSupport() ? 'POSIX' : 'none',
+				'version' => RMI_LIBRARY_VERSION,
+			],
+			'runtime' => [
+				'pid' => $this->serverPid,
+				'uptime' => $uptime,
+			],
+		];
+
+		$this->connWriteLn($socket, '200 JSON ' . json_encode($info));
+	}
+
+	protected function handleServerEvent(&$socket, array $event)
+	{
+		$subcommand = isset($event['arg1']) ? strtolower(trim((string) $event['arg1'])) : '';
+
+		switch ($subcommand) {
+			case 'shutdown':
+				if (!$this->isAuthenticated) {
+					$this->connWriteLn($socket, '401 Unauthorized');
+					return;
+				}
+				$this->doShutdown = true;
+				$this->connWriteLn($socket, "221 Server shutting down");
+				\posix_kill($this->serverPid, SIGTERM);
+				break;
+
+			case 'debug':
+				if (!$this->isAuthenticated) {
+					$this->connWriteLn($socket, '401 Unauthorized');
+					return;
+				}
+				$this->readTimeout = $this->highReadTimeout;
+				$arg = isset($event['arg2']) ? strtolower(trim((string) $event['arg2'])) : '';
+				if ($arg === 'on') {
+					$this->connWriteLn($socket, "200 Debug logging ON");
+				} elseif ($arg === 'off') {
+					$this->connWriteLn($socket, "200 Debug logging OFF");
+				} else {
+					$this->connWriteLn($socket, "200 Debug logging is OFF");
+				}
+				break;
+
+			case 'reload':
+				if (!$this->isAuthenticated) {
+					$this->connWriteLn($socket, '401 Unauthorized');
+					return;
+				}
+				$this->connWriteLn($socket, "200 Reload not implemented");
+				break;
+
+			case 'workers':
+				$this->connWriteLn($socket, '200 JSON {"reuse_enabled":false,"workers":[]}');
+				break;
+
+			case 'help':
+				$this->writeJsonArrayResponse($socket, ['DEBUG', 'SHUTDOWN']);
+				break;
+
+			default:
+				$this->connWriteLn($socket, "400 Bad Request Arguments");
+		}
+	}
+
+	protected function handleServerCommand(&$socket, $arg)
+	{
+		$parts = preg_split('/\s+/', trim((string) $arg), 2);
+		$subcommand = isset($parts[0]) ? strtolower(trim($parts[0])) : '';
+		$subarg = isset($parts[1]) ? trim($parts[1]) : '';
+
+		switch ($subcommand) {
+			case 'shutdown':
+				if (!$this->isAuthenticated) {
+					$this->connWriteLn($socket, '401 Unauthorized');
+					return;
+				}
+				$this->doShutdown = true;
+				$this->connWriteLn($socket, "221 Server shutting down");
+				\posix_kill($this->serverPid, SIGTERM);
+				break;
+
+			case 'debug':
+				if (!$this->isAuthenticated) {
+					$this->connWriteLn($socket, '401 Unauthorized');
+					return;
+				}
+				$this->readTimeout = $this->highReadTimeout;
+				$debugArg = strtolower(trim($subarg));
+				if ($debugArg === 'on') {
+					$this->connWriteLn($socket, "200 Debug logging ON");
+				} elseif ($debugArg === 'off') {
+					$this->connWriteLn($socket, "200 Debug logging OFF");
+				} else {
+					$this->connWriteLn($socket, "200 Debug logging is OFF");
+				}
+				break;
+
+			case 'reload':
+				if (!$this->isAuthenticated) {
+					$this->connWriteLn($socket, '401 Unauthorized');
+					return;
+				}
+				$this->connWriteLn($socket, "200 Reload not implemented");
+				break;
+
+			case 'workers':
+				$this->connWriteLn($socket, '200 JSON {"reuse_enabled":false,"workers":[]}');
+				break;
+
+			case 'help':
+				$this->writeJsonArrayResponse($socket, ['DEBUG', 'SHUTDOWN']);
+				break;
+
+			default:
+				$this->connWriteLn($socket, "400 Bad Request Arguments");
+		}
 	}
 
 

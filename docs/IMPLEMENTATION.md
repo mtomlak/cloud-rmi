@@ -1,8 +1,13 @@
-# Cloud-RMI Protocol — Implementation Companion
+# Cloud-RMI — Implementation Notes
 
-This document captures the **code-level semantics** enforced by the C library,
-server, client, and proxy. It expands on `docs/PROTOCOL.md` with precise limits,
-status codes, and bridging behaviors.
+This document captures the **current implementation state** of the C library,
+server, client, and proxy. It is **not** the protocol specification—see
+`docs/PROTOCOL.md` for the normative protocol definition.
+
+Different language implementations (C, PHP, etc.) may implement different
+subsets of optional features. This document describes what the C implementation
+currently does; other implementations may behave differently while remaining
+protocol-compliant.
 
 ---
 
@@ -52,9 +57,18 @@ Source: `libcloudrmi/src/protocol_feed.c`, `libcloudrmi/include/cloudrmi/types.h
 Sources: `src/protocol.c`, `src/capabilities.c`
 
 - Banner format: `220 <context> Server Ready EXT PROTO=2[,<caps>]`.
-- Built-in capability tokens: `PROXY`, `STATS`.
-- Compiled set: `STATS` are always emitted; `PROXY` is present
-  only when built with `PROXY_SUPPORT`.
+- Capabilities advertise the **node's role** and optional protocol extensions.
+- Core commands (CALL, PING, AUTH, HELP, etc.) are part of the base protocol
+  and are NOT advertised as capabilities.
+- `SERVER` and `PROXY` are mutually exclusive roles:
+  - A node running as a server advertises `SERVER`.
+  - A node running as a proxy advertises `PROXY`.
+  - The capability effectively indicates which role-specific command namespace
+    is available (SERVER or PROXY).
+- Other implementations may advertise additional capabilities (e.g., PHP servers
+  advertise `ACALL` for async call support).
+- Clients and servers MUST ignore unknown capability tokens gracefully—this
+  allows implementations to evolve independently.
 - Tokens are comma-separated in the banner, then normalized to spaces by
   clients before parsing.
 
@@ -83,26 +97,49 @@ Source: `src/protocol.c`
 - **HELP**: `200 JSON ["AUTH", ...]` listing supported commands (conditionally
   includes `PROXY`). Single-line only.
 - **IFACES**: `200 JSON ["iface1","iface2"]` from proxy or local server map.
-- **RELOAD**: Auth-only. Reloads configuration and interface map → `200`.
-- **SHUTDOWN**: Always returns `404 Unsupported`.
 - **TIME**: RFC822 timestamp → `200 <time>`.
-- **UPTIME**: Auth-only. Returns formatted uptime string → `200 ...` or
-  `401 Unauthorized` when unauthenticated.
-- **PING**: `200 OK`.
-- **CAPS**: `200 JSON ["STATS","PROXY"]` derived from compiled capabilities.
-- **DEBUG** (auth-only):
-  - `debug on/off` toggles `var_debug`.
-  - Otherwise returns single-line JSON build/runtime info (language, kernel
-    API, proxy support, current PID, config paths).
+- **PING**: `200 PONG`. Optional echo argument: `PING hello` → `200 PONG hello`.
+- **CAPS**: `200 JSON ["SERVER"]` or `200 JSON ["PROXY"]` depending on role.
+- **INFO**: `200 JSON {...}` returning structured node information including
+  role (server/proxy), capabilities, build info (language, kernel, version),
+  and runtime info (pid, uptime). Read-only and always allowed.
 - **QUIT/EXIT**: `221 Bye` and closes connection.
 - **PROXY stats**: `proxy stats` → `200 JSON {"servers":[...],"clients":[...],"trimmed":false}`;
   other args → `400 Bad Request Arguments` (compiled only when
   `PROXY_SUPPORT` is enabled). Output is capped to avoid overflowing the
   single response line.
-- **SERVER stats**: `server stats` → `200 {json}` single line with reusable worker
-  details (capped to 25 entries) and `trimmed` flag when truncated; other args
-  → 400.
 - **Unknown commands**: `400 Bad Request`.
+
+---
+
+## 3a. SERVER Extension (C Implementation)
+
+The SERVER command namespace provides implementation-specific subcommands.
+Availability and behavior of subcommands varies by implementation—what works
+in C may not work in PHP and vice versa. Clients should use `SERVER HELP` to
+discover available subcommands.
+
+**C server subcommands:**
+
+- `SERVER HELP` → `200 JSON ["DEBUG","RELOAD","SHUTDOWN","WORKERS"]`
+  listing available subcommands for this implementation.
+- `SERVER DEBUG on/off` (auth-only) toggles debug logging. `SERVER DEBUG`
+  without argument returns current state.
+- `SERVER DEBUG TRAFFIC on/off` (auth-only) toggles traffic logging.
+- `SERVER RELOAD` (auth-only) reloads configuration and interface map.
+- `SERVER SHUTDOWN` → `404 Unsupported` in C implementation.
+- `SERVER WORKERS` → `200 JSON {...}` single-line JSON with worker/process
+  details (capped to 25 entries), `trimmed` flag when truncated.
+  Only available when worker reuse is compiled in.
+
+**PHP server subcommands (may differ):**
+
+- `SERVER SHUTDOWN` → actually shuts down the server (PHP supports this).
+- `SERVER RELOAD` → `200 Reload not implemented` (PHP does not support hot reload).
+- `SERVER DEBUG` → returns current state only (PHP has no runtime debug toggle).
+
+Implementations should return appropriate status codes for unsupported
+subcommands (e.g., `404 Unsupported` or `400 Bad Request Arguments`).
 
 Parser-level errors map to responses inside `handle_connection`:
 - `RMI_E_OVERFLOW`/`RMI_E_ERR` from `rmi_protocol_feed` → `400 Bad Request`.
@@ -213,8 +250,8 @@ Source: `src/proxy.c`
 - **Server responses**:
   - `400 Bad Request` on BAD_REQUEST or transport overflow.
   - `400 Bad Request Arguments` on BAD_ARGS.
-  - `401 Unauthorized` for unauthenticated CALL/UPTIME/RELOAD/DEBUG.
-  - `404 Unsupported` for `SHUTDOWN`.
+  - `401 Unauthorized` for unauthenticated CALL or auth-only SERVER subcommands.
+  - `404 Unsupported` for unimplemented optional commands.
   - `500 ...` for handler or pipeline failures.
 - **Client-local errors**: Lack of negotiated payload support returns status
   `505` with a human-readable explanation; no network request is sent.

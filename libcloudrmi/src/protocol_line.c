@@ -99,18 +99,10 @@ int rmi_protocol_handle_line(
         out_event->type = RMI_EVENT_HELP;
     } else if (strcmp(out_event->cmd, "ifaces") == 0) {
         out_event->type = RMI_EVENT_IFACES;
-    } else if (strcmp(out_event->cmd, "reload") == 0) {
-        out_event->type = RMI_EVENT_RELOAD;
-    } else if (strcmp(out_event->cmd, "shutdown") == 0) {
-        out_event->type = RMI_EVENT_SHUTDOWN;
     } else if (strcmp(out_event->cmd, "time") == 0) {
         out_event->type = RMI_EVENT_TIME;
-    } else if (strcmp(out_event->cmd, "uptime") == 0) {
-        out_event->type = RMI_EVENT_UPTIME;
     } else if ((strcmp(out_event->cmd, "ping") == 0) || (strcmp(out_event->cmd, "noop") == 0)) {
         out_event->type = RMI_EVENT_PING;
-    } else if (strcmp(out_event->cmd, "debug") == 0) {
-        out_event->type = RMI_EVENT_DEBUG;
     } else if ((strcmp(out_event->cmd, "quit") == 0) || (strcmp(out_event->cmd, "exit") == 0)) {
         out_event->type = RMI_EVENT_QUIT;
     } else if (strcmp(out_event->cmd, "proxy") == 0) {
@@ -121,6 +113,8 @@ int rmi_protocol_handle_line(
         out_event->type = RMI_EVENT_SERVER;
     } else if (strcmp(out_event->cmd, "proto") == 0) {
         out_event->type = RMI_EVENT_PROTO;
+    } else if (strcmp(out_event->cmd, "info") == 0) {
+        out_event->type = RMI_EVENT_INFO;
     } else {
         out_event->type = RMI_EVENT_UNKNOWN;
         if (err != NULL) {

@@ -174,7 +174,7 @@ def control_commands(env: IntegrationEnvironment) -> TestResult:
         session._send_line("PING")
         ping_status, ping_message = parse_status(session._read_line())
         _require(ping_status == 200, f"expected 200 got {ping_status}")
-        _require(ping_message == "OK", f"unexpected PING response: {ping_message}")
+        _require(ping_message == "PONG", f"unexpected PING response: {ping_message}")
 
         trace = session.trace
 
@@ -183,7 +183,7 @@ def control_commands(env: IntegrationEnvironment) -> TestResult:
 
 def server_stats_json(env: IntegrationEnvironment) -> TestResult:
     with env.server_session() as session:
-        session._send_line("SERVER stats")
+        session._send_line("SERVER workers")
         status, message = parse_status(session._read_line())
 
     _require(status == 200, f"expected 200 got {status}")
@@ -215,7 +215,7 @@ def debug_traffic_logging(env: IntegrationEnvironment) -> TestResult:
 
     payload = b"traffic-check"
     with env.server_session() as session:
-        session._send_line("DEBUG traffic on")
+        session._send_line("SERVER debug traffic on")
         status, message = parse_status(session._read_line())
         _require(status == 200, f"expected 200 got {status} ({message})")
         result = session.call(

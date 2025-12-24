@@ -8,3 +8,18 @@
 /tests/integration/test_cases/__pycache__/
 /php/cloudrmi/vendor/
 src/app_version.h
+
+# Object files (any depth)
+*.o
+
+# Static libraries
+*.a
+
+# Shared libraries (if applicable)
+*.so
+*.so.*
+*.dylib
+
+# Executables (optional, if produced by build)
+protocol_feed_test
+semantics_test

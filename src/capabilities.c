@@ -10,20 +10,36 @@ struct capability_def {
    const char *token;
 };
 
+/* Capability tokens that this implementation understands.
+ * Unknown tokens from other implementations are ignored gracefully. */
 static const struct capability_def capability_definitions[] = {
+   { RMI_CAP_SERVER,  "SERVER"  },
    { RMI_CAP_PROXY,   "PROXY"   },
-   { RMI_CAP_STATS,   "STATS"   },
 };
 
-static const uint32_t RMI_COMPILED_CAPS =
 #ifdef PROXY_SUPPORT
-   RMI_CAP_PROXY |
+extern char *var_proxy;
 #endif
-   RMI_CAP_STATS;
 
+/* Returns all capabilities compiled in (for help output). */
 uint32_t rmi_get_compiled_capabilities(void)
 {
-   return RMI_COMPILED_CAPS;
+   uint32_t caps = RMI_CAP_SERVER;
+#ifdef PROXY_SUPPORT
+   caps |= RMI_CAP_PROXY;
+#endif
+   return caps;
+}
+
+/* Returns capabilities based on current runtime mode.
+ * SERVER and PROXY are mutually exclusive roles. */
+uint32_t rmi_get_runtime_capabilities(void)
+{
+#ifdef PROXY_SUPPORT
+   if (var_proxy)
+      return RMI_CAP_PROXY;
+#endif
+   return RMI_CAP_SERVER;
 }
 
 uint32_t rmi_capability_from_token(const char *token)
