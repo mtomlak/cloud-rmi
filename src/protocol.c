@@ -344,13 +344,17 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       items[idx++] = "INFO";
       items[idx++] = "PING";
       items[idx++] = "PROTO";
+#ifdef PROXY_SUPPORT
+      if (var_proxy) {
+         items[idx++] = "PROXY";
+      } else {
+         items[idx++] = "SERVER";
+      }
+#else
       items[idx++] = "SERVER";
+#endif
       items[idx++] = "TIME";
       items[idx++] = "QUIT";
-#ifdef PROXY_SUPPORT
-      if (var_proxy && idx < sizeof(items) / sizeof(items[0]))
-         items[idx++] = "PROXY";
-#endif
 
       json_array_write_line(state->sock, items, idx);
       break;
@@ -398,7 +402,7 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       const char *items[MAX_CAP_TOKENS];
       size_t idx = 0;
 
-      rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
+      rmi_capabilities_to_tokens(rmi_get_runtime_capabilities(), caps_buf, sizeof(caps_buf));
 
       token = strtok(caps_buf, " ");
       while (token != NULL && idx < (sizeof(items) / sizeof(items[0]))) {
@@ -449,7 +453,7 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
          "200 JSON {\"role\":\"%s\",\"capabilities\":[",
          role_label);
 
-      rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
+      rmi_capabilities_to_tokens(rmi_get_runtime_capabilities(), caps_buf, sizeof(caps_buf));
       token = strtok(caps_buf, " ");
       int is_first = 1;
       while (token != NULL) {
@@ -474,6 +478,13 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
    }
 
    case RMI_EVENT_SERVER:
+#ifdef PROXY_SUPPORT
+      /* SERVER command is not available in proxy mode - use PROXY command instead */
+      if (var_proxy) {
+         stream_writeln(state->sock, "400 Bad Request");
+         break;
+      }
+#endif
       if (strcasecmp(event->arg1, "workers") == 0) {
          server_send_stats(state->sock);
       } else if (strcasecmp(event->arg1, "reload") == 0) {
@@ -572,7 +583,7 @@ void handle_connection (int sock, int is_unix_socket)
 
    // Write welcome message
    char caps_buf[BUF_SZ + 1];
-   rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
+   rmi_capabilities_to_tokens(rmi_get_runtime_capabilities(), caps_buf, sizeof(caps_buf));
 
    for (size_t i = 0; caps_buf[i]; i++)
       if (caps_buf[i] == ' ')

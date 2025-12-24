@@ -57,13 +57,15 @@ Source: `libcloudrmi/src/protocol_feed.c`, `libcloudrmi/include/cloudrmi/types.h
 Sources: `src/protocol.c`, `src/capabilities.c`
 
 - Banner format: `220 <context> Server Ready EXT PROTO=2[,<caps>]`.
-- Capabilities advertise **optional protocol extensions**, not core commands.
+- Capabilities advertise the **node's role** and optional protocol extensions.
 - Core commands (CALL, PING, AUTH, HELP, etc.) are part of the base protocol
   and are NOT advertised as capabilities.
-- C implementation capabilities:
-  - `SERVER` — the SERVER command namespace is implemented.
-  - `PROXY` — proxy mode is compiled in (only when built with `PROXY_SUPPORT`).
-- Other implementations may advertise different capabilities (e.g., PHP servers
+- `SERVER` and `PROXY` are mutually exclusive roles:
+  - A node running as a server advertises `SERVER`.
+  - A node running as a proxy advertises `PROXY`.
+  - The capability effectively indicates which role-specific command namespace
+    is available (SERVER or PROXY).
+- Other implementations may advertise additional capabilities (e.g., PHP servers
   advertise `ACALL` for async call support).
 - Clients and servers MUST ignore unknown capability tokens gracefully—this
   allows implementations to evolve independently.
@@ -97,7 +99,7 @@ Source: `src/protocol.c`
 - **IFACES**: `200 JSON ["iface1","iface2"]` from proxy or local server map.
 - **TIME**: RFC822 timestamp → `200 <time>`.
 - **PING**: `200 PONG`. Optional echo argument: `PING hello` → `200 PONG hello`.
-- **CAPS**: `200 JSON ["SERVER","PROXY"]` derived from compiled capabilities.
+- **CAPS**: `200 JSON ["SERVER"]` or `200 JSON ["PROXY"]` depending on role.
 - **INFO**: `200 JSON {...}` returning structured node information including
   role (server/proxy), capabilities, build info (language, kernel, version),
   and runtime info (pid, uptime). Read-only and always allowed.
