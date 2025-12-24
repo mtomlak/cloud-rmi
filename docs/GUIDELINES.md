@@ -220,10 +220,10 @@ If a change:
 
 ---
 ## 8. Next Steps
-- Study `docs/PROTOCOL.md` **and** its companion `docs/PROTOCOL_IMPLEMENTATION.md`
-  for protocol design and command semantics. Read them end-to-end before
-  making any edits—skipping protocol details is considered a violation of
-  these guidelines.
+- Study `docs/PROTOCOL.md` for protocol design and command semantics, and
+  `docs/IMPLEMENTATION.md` for C implementation details. Read them end-to-end
+  before making any edits—skipping protocol details is considered a violation
+  of these guidelines.
 
 
 **It should not be merged.**

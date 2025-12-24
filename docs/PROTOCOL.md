@@ -4,8 +4,8 @@ Status: Draft (intended long‑term stable reference)
 Scope: Protocol framing, parsing, state machine, negotiation, extensibility
 Out of scope: Business logic, scheduling, language bindings, transport internals
 
-Use `docs/PROTOCOL_IMPLEMENTATION.md` for the authoritative, code-aligned
-command, error, and capability reference.
+Use `docs/IMPLEMENTATION.md` for implementation-specific details on how the
+C server, client, and proxy currently behave.
 
 ---
 
@@ -201,7 +201,7 @@ PROXY
 
 Servers MAY implement additional commands but MUST advertise them via banner
 capabilities. Detailed semantics, authentication rules, and status codes live
-in `docs/PROTOCOL_IMPLEMENTATION.md`.
+in `docs/IMPLEMENTATION.md`.
 
 ---
 
@@ -319,7 +319,7 @@ Rules:
 - Overflow resets parser state to avoid desynchronization
 
 Full error code mapping and recovery expectations are described in
-`docs/PROTOCOL_IMPLEMENTATION.md`.
+`docs/IMPLEMENTATION.md`.
 
 ---
 

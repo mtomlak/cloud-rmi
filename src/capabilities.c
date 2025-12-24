@@ -10,18 +10,19 @@ struct capability_def {
    const char *token;
 };
 
+/* Capability tokens that this implementation understands.
+ * Unknown tokens from other implementations are ignored gracefully. */
 static const struct capability_def capability_definitions[] = {
    { RMI_CAP_SERVER,  "SERVER"  },
-   { RMI_CAP_PING,    "PING"    },
-   { RMI_CAP_CALL,    "CALL"    },
    { RMI_CAP_PROXY,   "PROXY"   },
 };
 
 static const uint32_t RMI_COMPILED_CAPS =
+   RMI_CAP_SERVER
 #ifdef PROXY_SUPPORT
-   RMI_CAP_PROXY |
+   | RMI_CAP_PROXY
 #endif
-   RMI_CAP_SERVER | RMI_CAP_PING | RMI_CAP_CALL;
+   ;
 
 uint32_t rmi_get_compiled_capabilities(void)
 {

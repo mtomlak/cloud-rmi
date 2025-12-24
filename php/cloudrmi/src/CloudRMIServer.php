@@ -1423,7 +1423,7 @@ class CloudRMIServer
 				break;
 
 			case 'help':
-				$this->writeJsonArrayResponse($socket, ['DEBUG', 'RELOAD', 'SHUTDOWN']);
+				$this->writeJsonArrayResponse($socket, ['DEBUG', 'SHUTDOWN']);
 				break;
 
 			default:
@@ -1477,7 +1477,7 @@ class CloudRMIServer
 				break;
 
 			case 'help':
-				$this->writeJsonArrayResponse($socket, ['DEBUG', 'RELOAD', 'SHUTDOWN']);
+				$this->writeJsonArrayResponse($socket, ['DEBUG', 'SHUTDOWN']);
 				break;
 
 			default:
