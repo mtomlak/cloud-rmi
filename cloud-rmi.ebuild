@@ -34,6 +34,8 @@ src_install() {
 	use client && emake DESTDIR="${D}" client_install
 	use proxy  && emake DESTDIR="${D}" proxy_install
 
+	newinitd "${FILESDIR}/cloud-rmi.initd" cloud-rmi
+
 	use php && emake -C php/ext/profiweb_cloudrmi \
             INSTALL_ROOT="${D}" \
             install

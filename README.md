@@ -26,7 +26,8 @@ Runtime verbosity can be toggled without recompiling:
 
 - `debug`/`-v` enable the existing verbose mode.
 - `debug_traffic`/`-T` enables lightweight traffic summaries (request/response framing only) routed through `log_event`.
-- `DEBUG traffic on|off` can be issued on an authenticated session to flip traffic logging at runtime.
+- `SERVER DEBUG on|off` enable verbose mode lat runtime.
+- `SERVER DEBUG TRAFFIC on|off` can be issued on an authenticated session to flip traffic logging at runtime.
 
 Traffic summaries elide payload bytes and are bounded to protect protocol framing; they are useful when chasing crashes and can be disabled for steady-state performance.
 

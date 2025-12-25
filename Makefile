@@ -66,7 +66,6 @@ server_install:
 	cp $(BIN_SERVER) $(DESTDIR)/usr/local/sbin/
 	strip $(DESTDIR)/usr/local/sbin/$(BIN_SERVER)
 	chmod +x $(DESTDIR)/usr/local/sbin/$(BIN_SERVER)
-	$(MAKE) config_install DESTDIR=$(DESTDIR)
 
 client_install:
 	@echo "Installing rmi-client ..."
@@ -74,7 +73,6 @@ client_install:
 	cp $(BIN_CLIENT) $(DESTDIR)/usr/local/sbin/
 	strip $(DESTDIR)/usr/local/sbin/$(BIN_CLIENT)
 	chmod +x $(DESTDIR)/usr/local/sbin/$(BIN_CLIENT)
-	$(MAKE) config_install DESTDIR=$(DESTDIR)
 
 proxy_install:
 	@echo "Installing rmi-proxy ..."
@@ -82,19 +80,6 @@ proxy_install:
 	cp $(BIN_PROXY) $(DESTDIR)/usr/local/sbin/
 	strip $(DESTDIR)/usr/local/sbin/$(BIN_PROXY)
 	chmod +x $(DESTDIR)/usr/local/sbin/$(BIN_PROXY)
-	$(MAKE) config_install DESTDIR=$(DESTDIR)
-
-config_install:
-	@echo "Installing configuration files ..."
-	mkdir -p $(DESTDIR)/etc/init.d/
-	cp etc/init.d/cloud-rmi $(DESTDIR)/etc/init.d/
-	chmod +x $(DESTDIR)/etc/init.d/cloud-rmi
-
-	mkdir -p $(DESTDIR)/etc/monit.d/
-	cp etc/monit.d/cloud-rmi.conf $(DESTDIR)/etc/monit.d/
-
-	mkdir -p $(DESTDIR)/etc/cloud/
-	cp -r config/* $(DESTDIR)/etc/cloud/
 
 install:
 	$(MAKE) server_install
