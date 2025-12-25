@@ -27,52 +27,77 @@
 
 void show_help(char *this_cmd)
 {
-	printf("ProfiWeb Cloud SimpleRMI Server\n\n");
-   printf(" - version %s, libcloudrmi version %s, protocol version %d\n", APP_VERSION, LIBCLOUDRMI_VERSION, CLOUDRMI_PROTOCOL_VERSION);
-#ifdef ENABLE_LINUX_FEATURES
-   printf(" - compiled with Linux glibc features \n");
-   #ifdef REUSE_WORKER_PROC
-   printf(" - compiled with support for prefork frozen worker proccess manager (%i-%i spare workers)\n", MIN_SPARE_WORKERS, MAX_SPARE_WORKERS);
-   #else
-   printf(" - compiled without support for forked proccess manager\n");
-   #endif
-#else
-   printf(" - compiled with POSIX libc features\n");
-#endif
-#ifdef PROXY_SUPPORT
-	printf(" - compiled with Proxy support (protocol %s)\n", PROXY_PROTOCOL_VERSION);
-#endif
-#ifdef LEGACY_STREAM
-   printf(" - compiled with legacy stream implementation\n");
-#endif
-   char caps_buf[BUF_SZ + 1];
-   rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
-   printf(" - compiled with protocol extensions: %s\n", caps_buf);
+   printf("\nProfiWeb CloudRMI Server\n");
+   printf("Enterprise Remote Invocation Service\n");
 
 	printf("\nUsage: \n");
 	printf("\t%s < flags | options >\n", basename(this_cmd));
 	printf("\t%s --help | -h\n", basename(this_cmd));
 	printf("\nFlags:\n");
-	printf("\t-d goes daemon\n");
+	printf("\t-d daemonize process\n");
 #ifdef ENABLE_DEBUG_LOGGING
-	printf("\t-v enters verbose (debug) mode (currently %s)\n", debug_log_enabled() ? "ON" : "OFF"); 
-	printf("\t-T enables traffic debug logging (currently %s)\n", debug_traffic_enabled() ? "ON" : "OFF");
+   printf("\t-T enable traffic debug logging (default: %s)\n", debug_traffic_enabled() ? "ON" : "OFF");
+	printf("\t-v enable verbose logging (default: %s)\n", debug_log_enabled() ? "ON" : "OFF"); 
 #endif
+
 	printf("\nOptions:\n");
-	printf("\t-b sets base namespace for local scripts\n");
-	printf("\t-c sets path to the configuration file\n");
-   printf("\t-D delay start for number of seconds (currently %i)\n", var_start_delay);
-	printf("\t-e sets directory for executing local scripts\n");
-	printf("\t-m sets path to the interface map file\n");
-	printf("\t-n sets context name (currently to %s)\n", var_context_name);
-	printf("\t-p sets port number (currently to %d)\n", var_port);
-	printf("\t-u sets unix socket path (currently %s)\n", var_unix_socket_path ? var_unix_socket_path : "OFF");
-	printf("\t-t sets recovery authentication token\n");
+	printf("\t-b set base namespace for local scripts\n");
+	printf("\t-c set path to the configuration file\n");
+   printf("\t-D delay start for number of seconds (default: %i)\n", var_start_delay);
+	printf("\t-e set directory for executing local scripts\n");
+   printf("\t-h print help and exit\n");
+	printf("\t-m set path to the interface map file\n");
+	printf("\t-n set context name (default: %s)\n", var_context_name);
+	printf("\t-p set port number (default: %d)\n", var_port);
+	printf("\t-u set unix socket path (default: %s)\n", var_unix_socket_path ? var_unix_socket_path : "disabled");
+	printf("\t-t set authentication token\n");
 #ifdef PROXY_SUPPORT
-	printf("\t-x enables proxy to given host (currently %s)\n", 
+	printf("\t-x enable proxy to given host (currently %s)\n", 
 		var_proxy ? var_proxy : "OFF"); 
 #endif
-	printf("\n");
+
+   printf("\nVersion: \n");
+   printf("\tapplication\t%s\n", APP_VERSION);
+   printf("\tlibcloudrmi\t%s\n", LIBCLOUDRMI_VERSION);
+   printf("\tprotocol\t%d\n", CLOUDRMI_PROTOCOL_VERSION);
+#ifdef PROXY_SUPPORT
+   printf("\tproxy protocol\t%s\n", PROXY_PROTOCOL_VERSION);
+#endif   
+   char caps_buf[BUF_SZ + 1];
+   
+   printf("\nBuild Options: \n");   
+   rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
+   printf("\tprotocol extensions\t%s\n", caps_buf);   
+#ifdef ENABLE_LINUX_FEATURES
+   printf("\tkernel interfaces\tLinux\n");
+   #ifdef REUSE_WORKER_PROC
+   printf("\tworker model\t\tprefork [MIN_SPARE_WORKERS=%i; MAX_SPARE_WORKERS=%i]\n", MIN_SPARE_WORKERS, MAX_SPARE_WORKERS);
+   #else
+   printf("\tworker model\t\tfork\n");
+   #endif
+#else
+   printf("\tkernel interfaces\tPOSIX\n");
+   printf("\tworker model\t\tfork\n");
+#endif
+   printf("\tbuild symbols\t\t");
+#ifdef ENABLE_LINUX_FEATURES
+   printf("ENABLE_LINUX_FEATURES ");
+#endif
+#ifdef REUSE_WORKER_PROC
+   printf("REUSE_WORKER_PROC ");
+#endif
+#ifdef PROXY_SUPPORT
+   printf("PROXY_SUPPORT ");
+#endif
+#ifdef LEGACY_STREAM
+   printf("LEGACY_STREAM ");
+#endif
+#ifdef ENABLE_DEBUG_LOGGING
+   printf("ENABLE_DEBUG_LOGGING ");
+#endif
+   printf("\n"); //   end of build  
+
+   printf("\n"); // end of help      
 }
 
 int find_and_load_configs(char *command)

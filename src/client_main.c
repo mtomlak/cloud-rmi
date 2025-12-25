@@ -15,7 +15,7 @@
  * C POSIX implementation of Cloud Simple Remote Method Invocation server.
  * This file declares functions commonly through the project.
  *
- * @copyright Copyright (C) 2016 ProfiWeb sro (http://profiweb.biz/).
+ * @copyright Copyright (C) 2016-2025 ProfiWeb, s.r.o. (https://profiweb.biz/).
  * @author Marian Tomlak
  * @license BSD
  */
@@ -30,24 +30,30 @@ char *var_server_name = "127.0.0.1";   // = malloc(sizeof(char) * (BUF_SZ + 1));
  */
 void show_help(char *this_cmd)
 {
-   printf("ProfiWeb Cloud SimpleRMI Client (version %s)\n", APP_VERSION);
-   printf(" - libcloudrmi version %s (protocol %d)\n", LIBCLOUDRMI_VERSION, CLOUDRMI_PROTOCOL_VERSION);
+   printf("\nProfiWeb CloudRMI Client\n");
+   printf("Enterprise Remote Invocation Service\n");
+
    printf("\nUsage: \n");
    printf("\t%s < options > [ interface ] [ method ] < arguments >\n", basename(this_cmd));
    printf("\t%s < options > -r [ command ]\n", basename(this_cmd));
    printf("\t%s --help\n", basename(this_cmd));
    printf("\nOptions:\n");
-   printf("\t-h prints this help\n");
-   printf("\t-p sets port number (defaults to %d)\n", var_port);
-   printf("\t-r executes raw RMI command\n");
-   printf("\t-s sets server name (defaults to %s)\n", var_server_name);
-   printf("\t-u sets unix socket path (overrides TCP host/port, currently %s)\n",
-      var_unix_socket_path ? var_unix_socket_path : "OFF");
-   printf("\t-t sets recovery authentication token\n");
+   printf("\t-h print help and exit\n");
+   printf("\t-p set port number (default: %d)\n", var_port);
+   printf("\t-r execute raw RMI command\n");
+   printf("\t-s set server name (default: %s)\n", var_server_name);
+   printf("\t-t set authentication token\n");
+   printf("\t-u set unix socket path (default: %s)\n", var_unix_socket_path ? var_unix_socket_path : "disabled");
 #ifdef ENABLE_DEBUG_LOGGING
-   printf("\t-v enters verbose (debug) mode (currently %s)\n\n", 
+   printf("\t-v enable verbose logging (default: %s)\n", 
       debug_log_enabled() ? "ON" : "OFF");
 #endif
+
+   printf("\nVersion: \n");
+   printf("\tapplication\t%s\n", APP_VERSION);
+   printf("\tlibcloudrmi\t%s\n", LIBCLOUDRMI_VERSION);
+   printf("\tprotocol\t%d\n", CLOUDRMI_PROTOCOL_VERSION);   
+   printf("\n"); // end of help    
 }
 
 void print_php_error(char *response)
