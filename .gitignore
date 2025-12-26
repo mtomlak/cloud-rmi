@@ -1,25 +1,56 @@
+# C binaries (root level)
 /rmi-proxy
 /rmi-server
 /rmi-client
-/libcloudrmi/tests/unit/protocol_feed_test
-/libcloudrmi/tests/unit/proxy_payload_test
-/tests/integration/.venv/
-/tests/integration/__pycache__/
-/tests/integration/test_cases/__pycache__/
-/php/cloudrmi/vendor/
+
+# Generated headers
 src/app_version.h
+src/app_version.h.tmp
 
 # Object files (any depth)
 *.o
+*.lo
 
 # Static libraries
 *.a
+*.la
 
-# Shared libraries (if applicable)
+# Shared libraries
 *.so
 *.so.*
 *.dylib
 
-# Executables (optional, if produced by build)
+# Test executables
+/libcloudrmi/tests/unit/protocol_feed_test
+/libcloudrmi/tests/unit/semantics_test
+/libcloudrmi/tests/unit/proxy_payload_test
 protocol_feed_test
 semantics_test
+proxy_payload_test
+
+# Python
+/tests/integration/.venv/
+/tests/integration/__pycache__/
+/tests/integration/test_cases/__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# PHP
+/php/cloudrmi/vendor/
+
+# Build directories and artifacts
+*.tmp
+*.log
+*.dep
+*.dSYM
+.cache/
+
+# Editor files
+*~
+.*.swp
+.*.swo
+.DS_Store
+*.orig
