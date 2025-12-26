@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from harness import IntegrationEnvironment, IntegrationRunner
-from test_cases import DIRECT_CASES, PROXY_CASES, UNIX_CASES
+from test_cases import DIRECT_CASES, PROXY_CASES, UNIX_CASES, WORKER_MODEL_CASES
 
 
 def bootstrap_venv(venv_path: Path) -> None:
@@ -126,6 +126,26 @@ def main() -> int:
                     verbose=args.verbose > 0,
                 ),
                 unix_cases,
+            )
+        )
+
+    # Worker model tests (fork vs prefork)
+    worker_model_cases = WORKER_MODEL_CASES
+    if args.filter:
+        worker_model_cases = [case for case in worker_model_cases if args.filter in case.name]
+
+    if worker_model_cases:
+        suites.append(
+            (
+                IntegrationEnvironment(
+                    root=root,
+                    server_port=args.server_port,
+                    proxy_port=args.proxy_port,
+                    token=args.token,
+                    namespace=args.namespace,
+                    verbose=args.verbose > 0,
+                ),
+                worker_model_cases,
             )
         )
 

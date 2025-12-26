@@ -355,6 +355,10 @@ class IntegrationEnvironment:
     upstream_unix_socket: str | None = None
     verbose: bool = False
     logger: logging.Logger = LOG
+    server_worker_model: str | None = None  # "fork" or "prefork"
+    server_prefork_workers: int | None = None  # Number of prefork workers
+    proxy_worker_model: str | None = None  # "fork" or "prefork"
+    proxy_prefork_workers: int | None = None  # Number of prefork workers
     _server: Optional[ProcessHandle] = field(default=None, init=False)
     _proxy: Optional[ProcessHandle] = field(default=None, init=False)
     _baseline_zombies: set[int] = field(default_factory=set, init=False)
@@ -411,6 +415,10 @@ class IntegrationEnvironment:
         if self.server_unix_socket:
             Path(self.server_unix_socket).parent.mkdir(parents=True, exist_ok=True)
             command.extend(["-u", self.server_unix_socket])
+        if self.server_worker_model:
+            command.extend(["-w", self.server_worker_model])
+        if self.server_prefork_workers is not None:
+            command.extend(["-W", str(self.server_prefork_workers)])
         self.logger.debug("Starting server: %s", " ".join(command))
         self._server = launch_process("rmi-server", command, self.logger, self.verbose)
         if self.server_unix_socket:
@@ -442,6 +450,10 @@ class IntegrationEnvironment:
         if self.proxy_unix_socket:
             Path(self.proxy_unix_socket).parent.mkdir(parents=True, exist_ok=True)
             command.extend(["-u", self.proxy_unix_socket])
+        if self.proxy_worker_model:
+            command.extend(["-w", self.proxy_worker_model])
+        if self.proxy_prefork_workers is not None:
+            command.extend(["-W", str(self.proxy_prefork_workers)])
         self.logger.debug("Starting proxy: %s", " ".join(command))
         self._proxy = launch_process("rmi-proxy", command, self.logger, self.verbose)
         if self.proxy_unix_socket:
