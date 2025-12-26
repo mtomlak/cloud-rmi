@@ -219,16 +219,28 @@ int read_config(char *config_file)
             log_event(LOG_INFO, "config:set start_delay=\"%d\"", var_start_delay);
          }
       }
-      else if(strcasecmp(conf_name, "worker_model") == 0) {
-         if(strcasecmp(conf_value, "prefork") == 0) {
-            var_worker_model = WORKER_MODEL_PREFORK;
-         } else {
+      else if (strcasecmp(conf_name, "worker_model") == 0) {
+         if (strcasecmp(conf_value, "fork") == 0) {
             var_worker_model = WORKER_MODEL_FORK;
          }
+         else if (strcasecmp(conf_value, "prefork") == 0) {
+            var_worker_model = WORKER_MODEL_PREFORK;
+         }
+         else {
+            log_unexpected_event(
+               LOG_WARNING,
+               "config: invalid worker_model=\"%s\" (expected fork|prefork)",
+               conf_value
+            );
+            /* keep default */
+         }
 
-         if(log_level > 0) {
-            log_event(LOG_INFO, "config:set worker_model=\"%s\"",
-               var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork");
+         if (log_level > 0) {
+            log_event(
+               LOG_INFO,
+               "config:set worker_model=\"%s\"",
+               var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork"
+            );
          }
       }
       else if(strcasecmp(conf_name, "prefork_workers") == 0) {
