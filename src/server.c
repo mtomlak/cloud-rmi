@@ -163,13 +163,11 @@ static pid_t prefork_spawn_worker(int listen_fd, int is_unix_socket, int worker_
 
 #ifdef PROXY_SUPPORT
       /* In prefork mode with proxy, each worker must have its own upstream pool.
-       * Reset the proxy state so each worker initializes fresh connections lazily.
-       * The parent should NOT have opened any upstream connections. */
+       * Reset and initialize connections before accepting clients.
+       * Prefork mode pre-warms spare connections for better performance. */
       if (var_proxy) {
-         /* Clear upstream connection counts so worker starts fresh */
-         for (int p = 0; p < proxy_count; p++) {
-            proxy_list[p].conn_count = 0;
-         }
+         proxy_reset_after_fork();
+         proxy_init_connections_ex(1);  /* prewarm_spares = true */
       }
 #endif
 
@@ -324,35 +322,16 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
 
    DEBUG_LOG("Creating new child proccess with POSIX fork() socket #%i", sock);
 
-   #ifdef PROXY_SUPPORT
-      if (var_proxy) {
-         /*
-          * IMPORTANT: In fork-per-connection mode with proxy, forking per client
-          * while maintaining an upstream connection pool is unsafe: the child
-          * inherits the same upstream socket FDs but does NOT share the in-memory
-          * busy/free bookkeeping with the parent. Multiple processes would then
-          * concurrently read/write the same upstream stream, violating strict
-          * framing (desync) and causing nondeterministic behavior.
-          *
-          * In fork mode, we fall back to single-process accept loop (no fork per
-          * connection) to preserve correctness. This limits concurrency but is safe.
-          *
-          * For production proxy use, use worker_model=prefork instead, where each
-          * worker has its own isolated upstream connection pool.
-          */
-         static int proxy_fork_warning_logged = 0;
-         if (!proxy_fork_warning_logged) {
-            log_unexpected_event(
-               LOG_WARNING,
-               "proxy-fork-mode-single-process pid=%d (use worker_model=prefork for production)",
-               (int)getpid());
-            proxy_fork_warning_logged = 1;
-         }
-         handle_connection(sock, is_unix_socket);
-         close(sock);
-         return 1;
-      }
-   #endif
+   /*
+    * Note: Proxy mode works correctly with fork-per-connection because:
+    * - Parent process never opens upstream connections (proxy_start only parses config)
+    * - Each forked child calls proxy_reset_after_fork() + proxy_init_connections()
+    *   to establish its own isolated upstream connection pool
+    * - Child handles one connection then exits, so no pool sharing issues
+    *
+    * For better performance with proxy, consider worker_model=prefork which
+    * reuses workers across connections.
+    */
 
    // start new proccess and continue execution below
    pid = fork();
@@ -374,6 +353,18 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
       DEBUG_LOG("+ Started new child with PID %i", (int) getpid());
 
       close(server_sock); // Parent has it's own copy now, close it
+
+#ifdef PROXY_SUPPORT
+      /* Reset and initialize proxy connections in this child process.
+       * Each child gets isolated upstream pool. We must fetch interfaces
+       * before handling the connection to know how to route CALL commands.
+       * In fork mode, we only fetch interfaces (no spare connection pre-warming). */
+      if (var_proxy) {
+         proxy_reset_after_fork();
+         proxy_init_connections();  /* Uses worker_model to decide prewarm */
+      }
+#endif
+
       handle_connection(sock, is_unix_socket);
 
       DEBUG_LOG("- Shutting down child with PID %i", (int) getpid());

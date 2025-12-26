@@ -5,11 +5,14 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdint.h>
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include "config.h"
 #include "cloud-rmi.h"
 #include "capabilities.h"
@@ -23,6 +26,62 @@
  * @author Marian Tomlak
  * @license BSD
  */
+
+#define CLIENT_CONNECT_TIMEOUT_MS 5000  /* 5 second connect timeout */
+
+/**
+ * Connect with timeout using non-blocking socket and poll.
+ * Returns 0 on success, -1 on error/timeout.
+ */
+static int connect_with_timeout(int sock, struct sockaddr *addr, socklen_t addrlen, int timeout_ms)
+{
+   int flags, ret, err;
+   socklen_t errlen = sizeof(err);
+   struct pollfd pfd;
+
+   /* Set non-blocking */
+   flags = fcntl(sock, F_GETFL, 0);
+   if (flags < 0)
+      return -1;
+   if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0)
+      return -1;
+
+   /* Attempt connect */
+   ret = connect(sock, addr, addrlen);
+   if (ret == 0) {
+      /* Connected immediately (e.g., unix socket) */
+      fcntl(sock, F_SETFL, flags);  /* Restore blocking */
+      return 0;
+   }
+
+   if (errno != EINPROGRESS) {
+      fcntl(sock, F_SETFL, flags);
+      return -1;
+   }
+
+   /* Wait for connect to complete */
+   pfd.fd = sock;
+   pfd.events = POLLOUT;
+   pfd.revents = 0;
+
+   ret = poll(&pfd, 1, timeout_ms);
+   if (ret <= 0) {
+      /* Timeout or error */
+      fcntl(sock, F_SETFL, flags);
+      return -1;
+   }
+
+   /* Check if connect succeeded */
+   if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &err, &errlen) < 0 || err != 0) {
+      fcntl(sock, F_SETFL, flags);
+      errno = err ? err : ECONNREFUSED;
+      return -1;
+   }
+
+   /* Restore blocking mode */
+   fcntl(sock, F_SETFL, flags);
+   return 0;
+}
 
 /**
  * Parses status code from the response
@@ -216,6 +275,16 @@ int client_connect(char *hostname, int port_num, const char *unix_socket_path, s
       return -1;
    }
 
+   /* Set socket timeouts for connect/read/write operations.
+    * This prevents blocking forever on unavailable upstreams. */
+   {
+      struct timeval tv;
+      tv.tv_sec = 5;   /* 5 second timeout */
+      tv.tv_usec = 0;
+      setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+      setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+   }
+
    if (use_unix_socket && strlen(unix_socket_path) >= sizeof(serv_addr_un.sun_path)) {
       printf("Error: Unix socket path too long\n");
       free(response);
@@ -258,11 +327,12 @@ int client_connect(char *hostname, int port_num, const char *unix_socket_path, s
       }
    }
 
-   /* Now connect to the remote host */
-   if (connect(
+   /* Now connect to the remote host with timeout */
+   if (connect_with_timeout(
          sock,
          use_unix_socket ? (struct sockaddr *)&serv_addr_un : (struct sockaddr *) &serv_addr,
-         use_unix_socket ? sizeof(serv_addr_un) : sizeof(serv_addr)) < 0) {
+         use_unix_socket ? sizeof(serv_addr_un) : sizeof(serv_addr),
+         CLIENT_CONNECT_TIMEOUT_MS) < 0) {
       log_unexpected_event(
          LOG_ERR,
          "client-connect-failed unix=%i errno=%i",

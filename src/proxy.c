@@ -787,6 +787,9 @@ int proxy_pass_raw_cmd(int proxy_num, struct conn_state *client_conn, char *cmd)
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
    unsigned long long req_id = PROXY_REQ_ID();
 
+   /* Lazy initialization of proxy connections on first operation */
+   proxy_init_connections();
+
    bzero(response, BUF_SZ);
 
    if (proxy_num > proxy_list_count()) {
@@ -881,6 +884,9 @@ int proxy_pass_call_cmd_ex(
    int status_code = 0;
    int responded = 0;
    unsigned long long req_id = PROXY_REQ_ID();
+
+   /* Lazy initialization of proxy connections on first operation */
+   proxy_init_connections();
 
    if (iface_lookup == NULL)
       iface_lookup = "";
@@ -1136,6 +1142,9 @@ void proxy_print_ifaces(struct conn_state *state)
    size_t offset = 0;
    int is_first = 1;
 
+   /* Lazy initialization of proxy connections on first operation */
+   proxy_init_connections();
+
    proxy_append_format(line, sizeof(line), &offset, "200 JSON [");
 
    entry = proxy_iface_map;
@@ -1275,25 +1284,79 @@ void proxy_all_keepalive_conns()
 
 //void proxy_
 
+/* Track whether this process has initialized proxy connections */
+static int proxy_connections_initialized = 0;
+
+/**
+ * Initialize proxy connections for this process.
+ * Called after fork to establish isolated upstream connections.
+ *
+ * @param prewarm_spares  If true, pre-warm spare connections (prefork mode).
+ *                        If false, only fetch interfaces (fork mode).
+ */
+void proxy_init_connections_ex(int prewarm_spares)
+{
+   int i;
+
+   if (proxy_connections_initialized)
+      return;
+
+   proxy_connections_initialized = 1;
+
+   DEBUG_LOG("proxy-init-connections pid=%d proxy_count=%d prewarm=%d",
+      (int)getpid(), proxy_count, prewarm_spares);
+
+   for (i = 0; i < proxy_count; i++) {
+      if (prewarm_spares) {
+         /* Pre-warm spare connections (prefork mode) */
+         proxy_check_spare_conns(i);
+      }
+      /* Fetch interfaces from this backend (always needed for routing) */
+      proxy_fetch_interfaces(i);
+   }
+}
+
+/**
+ * Initialize proxy connections with default behavior based on worker model.
+ * - Prefork mode: pre-warm spare connections + fetch interfaces
+ * - Fork mode: fetch interfaces only
+ */
+void proxy_init_connections(void)
+{
+   proxy_init_connections_ex(var_worker_model == WORKER_MODEL_PREFORK);
+}
+
+/**
+ * Reset proxy connection state after fork.
+ * Called by child processes to ensure they start with fresh connections.
+ */
+void proxy_reset_after_fork(void)
+{
+   int i;
+
+   for (i = 0; i < proxy_count; i++) {
+      proxy_list[i].conn_count = 0;
+   }
+   proxy_connections_initialized = 0;
+}
+
 /**
  * Starts new proxy link
  * 
  */
 int proxy_start_new(const char *proxy_ip, int proxy_port, const char *unix_socket_path)
 {
-   int id, i;
+   int id;
 
    DEBUG_LOG("Starting proxy to %s",
       unix_socket_path ? unix_socket_path : proxy_ip);
 
-   // Add new proxy struct to the list
+   /* Only register the proxy backend - don't connect yet.
+    * Connections are established lazily after fork to ensure each
+    * process has its own isolated upstream connection pool. */
    id = proxy_list_add_new(proxy_ip, proxy_port, unix_socket_path);
 
-   for(i = 0; i < var_proxy_min_spare_conns; i++)
-      proxy_start_new_conn(id);
-
-   proxy_fetch_interfaces(id);
-   return 1;
+   return id >= 0 ? 1 : 0;
 }
 
 /**

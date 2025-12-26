@@ -53,6 +53,9 @@ extern int proxy_count;
 extern struct proxy_iface_entry *proxy_iface_map;
 
 int proxy_start(char *host_addresses);
+void proxy_init_connections(void);
+void proxy_init_connections_ex(int prewarm_spares);
+void proxy_reset_after_fork(void);
 void proxy_send_stats(int sock);
 int proxy_pass_call_cmd(char *iface, char *cmd, char *arg, struct conn_state *state);
 int proxy_pass_call_cmd_ex(
