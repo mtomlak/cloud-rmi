@@ -40,6 +40,7 @@ proxy_payload_test
 
 # PHP
 /php/cloudrmi/vendor/
+/php/ext/profiweb_cloudrmi/configure.ac
 
 # Build directories and artifacts
 *.tmp
