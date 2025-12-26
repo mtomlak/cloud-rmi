@@ -68,24 +68,9 @@ void show_help(char *this_cmd)
    printf("\nBuild Options: \n");   
    rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
    printf("\tprotocol extensions\t%s\n", caps_buf);   
-#ifdef ENABLE_LINUX_FEATURES
-   printf("\tkernel interfaces\tLinux\n");
-   #ifdef REUSE_WORKER_PROC
-   printf("\tworker model\t\tprefork [MIN_SPARE_WORKERS=%i; MAX_SPARE_WORKERS=%i]\n", MIN_SPARE_WORKERS, MAX_SPARE_WORKERS);
-   #else
-   printf("\tworker model\t\tfork\n");
-   #endif
-#else
    printf("\tkernel interfaces\tPOSIX\n");
    printf("\tworker model\t\tfork\n");
-#endif
    printf("\tbuild symbols\t\t");
-#ifdef ENABLE_LINUX_FEATURES
-   printf("ENABLE_LINUX_FEATURES ");
-#endif
-#ifdef REUSE_WORKER_PROC
-   printf("REUSE_WORKER_PROC ");
-#endif
 #ifdef PROXY_SUPPORT
    printf("PROXY_SUPPORT ");
 #endif

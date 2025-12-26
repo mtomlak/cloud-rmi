@@ -24,10 +24,6 @@ extern int var_debug_traffic;
 extern int var_port;
 extern int var_read_timeout;
 extern int var_start_delay;
-#ifdef REUSE_WORKER_PROC
-extern int var_min_spare_workers;
-extern int var_max_spare_workers;
-#endif
 extern char *var_config_file;
 extern char *var_recovery_token;
 extern char *var_context_name;

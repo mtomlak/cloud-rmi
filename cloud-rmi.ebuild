@@ -9,7 +9,7 @@ EGIT_COMMIT="v${PV}"
 LICENSE="GPL-3"
 SLOT="0"
 KEYWORDS="amd64"
-IUSE="+server +client proxy php linux debug"
+IUSE="+server +client proxy php debug"
 
 DEPEND="
     sys-libs/glibc
@@ -19,7 +19,6 @@ RDEPEND="${DEPEND}"
 
 src_compile() {
 	local cppflags=()
-	use linux && cppflags+=(-DENABLE_LINUX_FEATURES)
 	use debug && cppflags+=(-DENABLE_DEBUG_LOGGING)
 
 	use server && emake CPPFLAGS="${cppflags[*]}" server

@@ -416,9 +416,6 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       const char *kernel_label = "POSIX";
       const char *role_label = "server";
 
-#ifdef ENABLE_LINUX_FEATURES
-      kernel_label = "Linux";
-#endif
 #ifdef PROXY_SUPPORT
       if (var_proxy)
          role_label = "proxy";
@@ -512,9 +509,7 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
          items[idx++] = "DEBUG";
          items[idx++] = "RELOAD";
          items[idx++] = "SHUTDOWN";
-#ifdef REUSE_WORKER_PROC
          items[idx++] = "WORKERS";
-#endif
          json_array_write_line(state->sock, items, idx);
       } else {
          stream_writeln(state->sock, "400 Bad Request Arguments");
