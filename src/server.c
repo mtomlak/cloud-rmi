@@ -73,6 +73,7 @@ static void shutdown_handler(int signo)
 static void install_shutdown_handlers()
 {
    struct sigaction sa;
+   struct sigaction sa_ign;
 
    sa.sa_handler = shutdown_handler;
    sigemptyset(&sa.sa_mask);
@@ -80,6 +81,12 @@ static void install_shutdown_handlers()
 
    sigaction(SIGINT, &sa, NULL);
    sigaction(SIGTERM, &sa, NULL);
+
+   /* Prevent process termination on write() to a closed socket (e.g. readiness probes). */
+   sa_ign.sa_handler = SIG_IGN;
+   sigemptyset(&sa_ign.sa_mask);
+   sa_ign.sa_flags = 0;
+   sigaction(SIGPIPE, &sa_ign, NULL);
 }
 
 static void reap_children_handler(int signo)
@@ -117,6 +124,29 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
    int pid = 0;
 
    DEBUG_LOG("Creating new child proccess with POSIX fork() socket #%i", sock);
+
+   #ifdef PROXY_SUPPORT
+      if (var_proxy) {
+         log_unexpected_event(
+            LOG_WARNING,
+            "proxy-without-linux-features pid=%i",
+            (int) getpid());
+         /*
+          * IMPORTANT: In proxy mode, forking per-client while also maintaining an
+          * upstream connection pool in this process is unsafe: the child inherits
+          * the same upstream socket file descriptors, but does NOT share the
+          * in-memory busy/free bookkeeping with the parent. Multiple processes
+          * can then concurrently read/write the same upstream stream, violating
+          * strict framing (desync) and causing nondeterministic behavior.
+          *
+          * Without ENABLE_LINUX_FEATURES (clone + shared state), run proxy in a
+          * single-process accept loop to preserve correctness.
+          */
+         handle_connection(sock, is_unix_socket);
+         close(sock);
+         return 1;
+      }
+   #endif
 
    // start new proccess and continue execution below
    pid = fork();

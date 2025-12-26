@@ -75,6 +75,84 @@ static int proxy_write_all(int fd, const uint8_t *buf, size_t len)
    return 1;
 }
 
+#ifdef ENABLE_DEBUG_LOGGING
+#include <sys/ioctl.h>
+
+/* Monotonic request id for proxy->upstream operations (per-process). */
+static unsigned long long proxy_req_seq = 0;
+
+static unsigned long long proxy_next_req_id(void)
+{
+   proxy_req_seq++;
+   if (proxy_req_seq == 0) /* extremely defensive wrap */
+      proxy_req_seq = 1;
+   return proxy_req_seq;
+}
+
+static size_t proxy_fd_pending_bytes(int fd)
+{
+   int pending = 0;
+   if (fd < 0)
+      return 0;
+   if (ioctl(fd, FIONREAD, &pending) < 0)
+      return 0;
+   if (pending < 0)
+      pending = 0;
+   return (size_t)pending;
+}
+
+static void proxy_log_upstream_pending(
+   unsigned long long req_id,
+   const struct proxy_conn *conn,
+   const char *phase,
+   const char *iface,
+   const char *cmd,
+   int status_code,
+   unsigned long long expected_len,
+   unsigned long long read_len)
+{
+   if (conn == NULL)
+      return;
+
+   size_t pending = proxy_fd_pending_bytes(conn->client.sock);
+   if (pending == 0)
+      return;
+
+   log_unexpected_event(
+      LOG_ERR,
+      "proxy-upstream-pending req=%llu proxy_id=%i conn_id=%i fd=%i phase=%s iface=%s cmd=%s status=%i expected=%llu read=%llu pending=%zu",
+      req_id,
+      conn->proxy_id,
+      conn->conn_id,
+      conn->client.sock,
+      phase ? phase : "",
+      iface ? iface : "",
+      cmd ? cmd : "",
+      status_code,
+      expected_len,
+      read_len,
+      pending);
+}
+
+#define PROXY_REQ_ID() proxy_next_req_id()
+#define PROXY_LOG_UPSTREAM_PENDING(req_id, conn, phase, iface, cmd, status_code, expected_len, read_len) \
+   proxy_log_upstream_pending((req_id), (conn), (phase), (iface), (cmd), (status_code), (expected_len), (read_len))
+#else
+/* Compile-time no-op instrumentation when ENABLE_DEBUG_LOGGING is off. */
+#define PROXY_REQ_ID() 0ULL
+#define PROXY_LOG_UPSTREAM_PENDING(req_id, conn, phase, iface, cmd, status_code, expected_len, read_len) \
+   do {                                                                                                  \
+      (void)(req_id);                                                                                    \
+      (void)(conn);                                                                                      \
+      (void)(phase);                                                                                     \
+      (void)(iface);                                                                                     \
+      (void)(cmd);                                                                                       \
+      (void)(status_code);                                                                               \
+      (void)(expected_len);                                                                              \
+      (void)(read_len);                                                                                  \
+   } while (0)
+#endif
+
 static int proxy_discard_bytes(int fd, size_t len)
 {
    size_t consumed = 0;
@@ -707,6 +785,7 @@ int proxy_pass_raw_cmd(int proxy_num, struct conn_state *client_conn, char *cmd)
    struct proxy_conn *conn;
    struct proxy_server *proxy;
    char *response = malloc(sizeof(char) * (BUF_SZ + 1));
+   unsigned long long req_id = PROXY_REQ_ID();
 
    bzero(response, BUF_SZ);
 
@@ -728,6 +807,10 @@ int proxy_pass_raw_cmd(int proxy_num, struct conn_state *client_conn, char *cmd)
    }
 
    proxy_set_conn_busy(conn);
+
+   /* If anything is already readable here, we're desynchronized before issuing the command. */
+   PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "raw-before-send", "", cmd ? cmd : "", 0, 0, 0);
+
    status_code = client_raw_cmd(&conn->client, cmd, response);
 
    if (!status_code || status_code == 408) {  // 408 - request timeout
@@ -762,6 +845,15 @@ int proxy_pass_raw_cmd(int proxy_num, struct conn_state *client_conn, char *cmd)
       strcpy(response, "Service Unavailable");
 
    stream_writeln(client_conn->sock, "%i %s", status_code, response);
+   PROXY_LOG_UPSTREAM_PENDING(
+      req_id,
+      conn,
+      "raw-after-response",
+      "",
+      cmd ? cmd : "",
+      status_code,
+      0,
+      0);
    proxy_set_conn_free(conn);
 
    free(response);
@@ -788,6 +880,7 @@ int proxy_pass_call_cmd_ex(
    const char *iface_lookup = normalize_iface_name(iface);
    int status_code = 0;
    int responded = 0;
+   unsigned long long req_id = PROXY_REQ_ID();
 
    if (iface_lookup == NULL)
       iface_lookup = "";
@@ -831,6 +924,9 @@ int proxy_pass_call_cmd_ex(
    bzero(response, BUF_SZ);
    bzero(message, BUF_SZ);
 
+   /* If anything is already readable here, we're desynchronized before issuing CALL. */
+   PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-before-send", iface_lookup, cmd, 0, 0, 0);
+
    if (payload != NULL) {
       const char *enc_value = (encoding != NULL && encoding[0] != '\0') ? encoding : "NONE";
 
@@ -841,6 +937,7 @@ int proxy_pass_call_cmd_ex(
          responded = 1;
          stream_writeln(client_conn->sock, "%i %s", status_code, message);
          proxy_mark_failure(proxy, "call-send-failed");
+         PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-send-failed", iface_lookup, cmd, status_code, 0, 0);
          goto cleanup;
       }
 
@@ -851,6 +948,7 @@ int proxy_pass_call_cmd_ex(
          responded = 1;
          stream_writeln(client_conn->sock, "%i %s", status_code, message);
          proxy_mark_failure(proxy, "call-payload-write-failed");
+         PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-payload-write-failed", iface_lookup, cmd, status_code, 0, 0);
          goto cleanup;
       }
    } else {
@@ -861,6 +959,7 @@ int proxy_pass_call_cmd_ex(
          responded = 1;
          stream_writeln(client_conn->sock, "%i %s", status_code, message);
          proxy_mark_failure(proxy, "call-send-failed");
+         PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-send-failed", iface_lookup, cmd, status_code, 0, 0);
          goto cleanup;
       }
    }
@@ -872,6 +971,7 @@ int proxy_pass_call_cmd_ex(
       responded = 1;
       stream_writeln(client_conn->sock, "%i %s", status_code, message);
       proxy_mark_failure(proxy, "call-read-failed");
+      PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-read-failed", iface_lookup, cmd, status_code, 0, 0);
       goto cleanup;
    }
 
@@ -882,6 +982,7 @@ int proxy_pass_call_cmd_ex(
       responded = 1;
       stream_writeln(client_conn->sock, "%i %s", status_code, message);
       proxy_mark_failure(proxy, "call-parse-failed");
+      PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-parse-failed", iface_lookup, cmd, status_code, 0, 0);
       goto cleanup;
    }
 
@@ -919,6 +1020,7 @@ int proxy_pass_call_cmd_ex(
 
             if (payload_response == NULL) {
                ret = 0;
+               PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-payload-alloc-failed", iface_lookup, cmd, status_code, response_len, 0);
                goto cleanup;
             }
 
@@ -928,6 +1030,7 @@ int proxy_pass_call_cmd_ex(
 
                if (n < 0) {
                   ret = 0;
+                  PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-payload-read-error", iface_lookup, cmd, status_code, response_len, received);
                   goto cleanup;
                }
 
@@ -939,6 +1042,7 @@ int proxy_pass_call_cmd_ex(
 
             if (received < (size_t)response_len) {
                ret = 0;
+               PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-payload-short-read", iface_lookup, cmd, status_code, response_len, received);
                goto cleanup;
             }
 
@@ -978,6 +1082,16 @@ int proxy_pass_call_cmd_ex(
       stream_writeln(client_conn->sock, "%i %s", status_code, message);
       responded = 1;
    }
+
+   PROXY_LOG_UPSTREAM_PENDING(
+      req_id,
+      conn,
+      "call-after-response",
+      iface_lookup,
+      cmd,
+      status_code,
+      (unsigned long long)response_len,
+      is_payload_response ? (unsigned long long)response_len : 0ULL);
 
 cleanup:
    if (ret == 0 && status_code == 200)
