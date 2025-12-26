@@ -966,12 +966,6 @@ class CloudRMIServer
 		return $this->proc->join();
 	}
 
-	protected function checkCallCommand($args)
-	{
-
-		return null;
-	}
-
 	protected function handleAuthCommand($arg)
 	{
 		if ($this->isAuthenticated)
@@ -1332,22 +1326,6 @@ class CloudRMIServer
 	protected function writeCapsResponse($socket)
 	{
 		$this->writeJsonArrayResponse($socket, $this->getAdvertisedCapabilities());
-	}
-
-	protected function writeDebugResponse($socket)
-	{
-		$info = [
-			'build' => [
-				'language' => 'PHP ' . phpversion(),
-				'kernel' => $this->hasForkSupport() ? 'POSIX' : 'none',
-				'proxy' => 'NO',
-			],
-			'runtime' => [
-				'pid' => $this->serverPid,
-			],
-		];
-
-		$this->connWriteLn($socket, '200 JSON ' . json_encode($info));
 	}
 
 	protected function writeInfoResponse($socket)
@@ -1746,10 +1724,5 @@ class CloudRMIServer
 		posix_kill($pid, SIGKILL);
 		$this->doShutdown = true;
 		return $this->proc->join();
-	}
-
-	protected function checkStream(&$socket)
-	{
-
 	}
 }

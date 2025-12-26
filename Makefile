@@ -93,6 +93,20 @@ test: all
 	cd libcloudrmi/tests/unit && ./proxy_payload_test
 	$(MAKE) -C tests/integration test
 
+test-all: all
+	@echo "Running all test suites..."
+	@echo "=== C Library Unit Tests ==="
+	$(MAKE) -C libcloudrmi/tests/unit all
+	cd libcloudrmi/tests/unit && ./protocol_feed_test
+	cd libcloudrmi/tests/unit && ./semantics_test
+	cd libcloudrmi/tests/unit && ./proxy_payload_test
+	@echo ""
+	@echo "=== C Integration Tests ==="
+	$(MAKE) -C tests/integration test
+	@echo ""
+	@echo "=== PHP Tests ==="
+	$(MAKE) -C php test
+
 clean:
 	$(MAKE) -C libcloudrmi clean
 	$(MAKE) -C php clean
@@ -106,4 +120,4 @@ php_install:
 	$(MAKE) -C php build-ext
 	$(MAKE) -C php/ext/profiweb_cloudrmi install
 
-.PHONY: all update server client proxy server_install client_install proxy_install config_install install clean test app_version php php_install
+.PHONY: all update server client proxy server_install client_install proxy_install config_install install clean test test-all app_version php php_install

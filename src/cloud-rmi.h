@@ -113,8 +113,7 @@ extern struct spare_child_workers_list server_spare_children;
 #endif
 
 void die_err(char *errstr);
-int stream_write(int sock, char *format, ...);
-int stream_writeln(int sock, char *format, ...);        // TODO: now some code still uses write instead writeln
+int stream_writeln(int sock, char *format, ...);
 int stream_read(int sock, char* buf, int buf_size);
 int stream_readln(int sock, char* line, int max_size);
 int stream_readlns(int sock, char* line, int max_size);

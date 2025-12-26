@@ -49,34 +49,6 @@ void die_err(char *errstr)
  * Writes formatted string to the stream, similar usage as sprintf().
  * 
  */
-int stream_write(int sock, char *format, ...)
-{
-   char buf[(BUF_SZ + 1)];
-   int bytes;
-
-   va_list argptr;
-   va_start(argptr, format);
-
-   if (vsnprintf(buf, BUF_SZ, format, argptr) == -1) {
-      die_err("stream_write() -- vsnprintf() failed");
-   }
-   va_end(argptr);
-
-   bytes = write(sock, buf, strlen(buf));
-   
-   if (bytes < 0) {
-      printf("stream_write() -- ERROR writing to socket");
-      return -1;
-   }
-   DEBUG_STREAM('>', buf);
-
-   return bytes;
-}
-
-/**
- * Writes formatted string to the stream, similar usage as sprintf().
- * 
- */
 int stream_writeln(int sock, char *format, ...)
 {
    char buf[(BUF_SZ + 1)];
@@ -240,88 +212,6 @@ int stream_readlns(int sock, char* line, int max_size)
 void handle_error(const char *message) {
     perror(message);
     // Optionally, you can exit or handle the error differently
-}
-
-int stream_write(int sock, char *format, ...)
-{
-    char stack_buf[BUF_SZ + 1];
-    char *buf = stack_buf;
-    size_t buf_cap = BUF_SZ;
-    size_t to_write;
-    size_t written = 0;
-    va_list argptr;
-
-    va_start(argptr, format);
-    int ret = vsnprintf(buf, buf_cap, format, argptr);
-    va_end(argptr);
-
-    int rc = -1;
-
-    if (ret < 0) {
-        handle_error("stream_write() -- vsnprintf() failed or output truncated");
-        goto cleanup;
-    }
-
-    if ((size_t)ret >= buf_cap) {
-        size_t needed;
-
-        if (__builtin_add_overflow((size_t)ret, 1, &needed)) {
-            handle_error("stream_write() -- vsnprintf() failed or output truncated");
-            return -1;
-        }
-
-        buf = malloc(needed);
-        if (buf == NULL) {
-            handle_error("stream_write() -- vsnprintf() failed or output truncated");
-            goto cleanup;
-        }
-
-        buf_cap = needed;
-
-        va_start(argptr, format);
-        ret = vsnprintf(buf, buf_cap, format, argptr);
-        va_end(argptr);
-
-        if (ret < 0 || (size_t)ret >= buf_cap) {
-            handle_error("stream_write() -- vsnprintf() failed or output truncated");
-            goto cleanup;
-        }
-    }
-
-    to_write = (size_t)ret;
-
-    while (written < to_write) {
-        ssize_t bytes;
-
-        do {
-            bytes = write(sock, buf + written, to_write - written);
-        } while (bytes < 0 && errno == EINTR);
-
-        if (bytes < 0) {
-            // Sockets are expected to be blocking; treat EAGAIN/EWOULDBLOCK as fatal
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-                errno = EIO;
-            handle_error("stream_write() -- ERROR writing to socket");
-            goto cleanup;
-        }
-
-        if (bytes == 0) {
-            handle_error("stream_write() -- ERROR writing to socket");
-            goto cleanup;
-        }
-
-        written += (size_t)bytes;
-    }
-
-    DEBUG_STREAM('>', buf);
-
-    rc = (int)written;
-
-cleanup:
-    if (buf != stack_buf)
-        free(buf);
-
-    return rc;
 }
 
 int stream_writeln(int sock, char *format, ...)

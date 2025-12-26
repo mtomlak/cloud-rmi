@@ -286,14 +286,6 @@ struct proxy_server *proxy_list_get(int proxy_id)
    return &proxy_list[proxy_id];
 }
 
-void proxy_list_set(int proxy_id, struct proxy_server proxy)
-{
-     if (proxy_id > proxy_count)
-      die_err("Error: proxy_list_get(): Cannot load proxy from memory");
-
-   proxy_list[proxy_id] = proxy;
-}
-
 int proxy_list_add(struct proxy_server proxy)
 {
    int id = proxy_count;
@@ -1095,25 +1087,6 @@ struct proxy_child_entry *proxy_get_last_child_entry()
    }
 
    return cur;
-}
-
-struct proxy_child_entry *proxy_get_child_entry(int pid)
-{
-   struct proxy_child_entry *cur;
-
-   if (proxy_child_list == NULL)
-      return NULL;
-
-   cur = proxy_child_list;
-
-   while (cur != NULL) {
-      if (cur->pid == pid)
-         return cur;
-
-      cur = cur->next;
-   }
-
-   return NULL;
 }
 
 struct proxy_child_entry *new_proxy_child_entry()

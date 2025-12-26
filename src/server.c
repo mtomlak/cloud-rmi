@@ -905,11 +905,6 @@ void server_destroy_iface_entry(struct server_iface_entry *entry)
    free(entry);
 }
 
-void server_delete_iface_entry(char *iface_name)
-{
-   server_destroy_iface_entry(server_get_iface_entry(iface_name));
-}
-
 void server_wipe_iface_entries()
 {
    struct server_iface_entry *cur;
