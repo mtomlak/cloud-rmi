@@ -44,19 +44,6 @@
 #define LOG_ERR 3
 #endif
 
-#ifdef ENABLE_LINUX_FEATURES
-        #define CHILD_STACK_SZ          BUF_SZ * 24   // seems safe above BUF_SZ * 10 up to version 0.91
-
-        #ifndef DISABLE_WORKER_REUSE
-                /* These are just default values */
-                #define REUSE_WORKER_PROC       1
-                #define MIN_SPARE_WORKERS       3
-                #define MAX_SPARE_WORKERS       10
-                #define EXTRA_WORKER_TTL        60
-        #endif
-#endif
-
-
 // Struct type definitions
 struct conn_state{
    int sock;
@@ -73,44 +60,11 @@ struct server_iface_entry{
    struct server_iface_entry *prev;
 };
 
-#ifdef ENABLE_LINUX_FEATURES
-struct child_proc_state{
-   int sock;
-   int is_unix_socket;
-   void * stack;
-   int stack_size;
-};
-
-        #ifdef REUSE_WORKER_PROC
-struct helper_proc_state{
-   void * stack;
-   int stack_size;
-};
-
-struct spare_child_worker{
-   int pid;
-   int next_sock;
-   int stop_signal;
-   struct spare_child_worker *next;
-   struct spare_child_worker *prev;
-};
-
-struct spare_child_workers_list{
-   struct spare_child_worker *first;
-   struct spare_child_worker *last;
-   int count;
-};
-        #endif
-#endif
-
 // Globals that are not config variables
 extern int log_level;
 extern int var_server_start_time;
 extern struct server_iface_entry *var_server_iface_map;
 extern int var_run_as_daemon;
-#ifdef REUSE_WORKER_PROC
-extern struct spare_child_workers_list server_spare_children;
-#endif
 
 void die_err(char *errstr);
 int stream_writeln(int sock, char *format, ...);
@@ -152,9 +106,7 @@ int server_start(int port_num, const char *unix_socket_path);
 void server_add_iface_entry(char *iface_name, char *file_name);
 struct server_iface_entry *server_get_iface_entry(char *iface_name);
 int read_iface_config(char *config_file);
-struct helper_proc_state *new_helper_state(void *stack, int stack_size);
 void server_send_stats(int sock);
-void child_exit_self(void *stack, int stack_size);
 // protocol.c
 void handle_connection(int sock, int is_unix_socket);
 // handle_call.c

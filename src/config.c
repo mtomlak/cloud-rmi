@@ -32,10 +32,6 @@ int var_debug_traffic = 0;
 int var_port = 9500;
 int var_read_timeout = 10;
 int var_start_delay = 0;
-#ifdef REUSE_WORKER_PROC
-int var_min_spare_workers = MIN_SPARE_WORKERS;
-int var_max_spare_workers = MAX_SPARE_WORKERS;
-#endif
 char *var_recovery_token = NULL;
 char *var_context_name = "tst.rmi";
 char *var_script_exec_dir = "/usr/local/libexec/cloud-rmi";
@@ -214,22 +210,6 @@ int read_config(char *config_file)
             }
          }
       }
-#ifdef REUSE_WORKER_PROC
-      else if(strcasecmp(conf_name, "min_spare_workers") == 0) {
-         var_min_spare_workers = atoi(conf_value);
-
-         if(log_level > 0) {
-            log_event(LOG_INFO, "config:set min_spare_workers=\"%d\"", var_min_spare_workers);
-         }
-      }
-      else if(strcasecmp(conf_name, "max_spare_workers") == 0) {
-         var_max_spare_workers = atoi(conf_value);
-
-         if(log_level > 0) {
-            log_event(LOG_INFO, "config:set max_spare_workers=\"%d\"", var_max_spare_workers);
-         }
-      }
-#endif
       else if(strcasecmp(conf_name, "start_delay") == 0) {
          var_start_delay = atoi(conf_value);
 

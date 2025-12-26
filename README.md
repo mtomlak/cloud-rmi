@@ -56,12 +56,11 @@ Run tests from the repository root:
 - Added new gcc parameter "-lm" to link math library, in order for the code to work on modern systems
 
 #### Compile Options 
-Add after `gcc` command using `-D` argument (e.g. `gcc ... -D ENABLE_LINUX_FEATURES`)
+Add after `gcc` command using `-D` argument (e.g. `gcc ... -D PROXY_SUPPORT`)
  
-- ENABLE_LINUX_FEATURES	- use Linux glibc features
 - PROXY_SUPPORT			- enable proxy support for server
-- DISABLE_WORKER_REUSE	- don't use prefork frozen worker proccess manager
 - ENABLE_SYSLOG_TRACE   - enable syslog and `/tmp/rmi-server.log` writes (defaults to `1`)
+- ENABLE_DEBUG_LOGGING  - enable debug logging support
 
 ## Logging and debugging controls
 
@@ -78,7 +77,7 @@ Traffic summaries elide payload bytes and are bounded to protect protocol framin
 Works with standard gcc and make. Make sure to read Notes section before commiting any changes.
 
 ## Notes
-- CHILD_STACK_SZ 		- for versions until 0.9 value of `BUF_SZ * 10` is sufficient, increase and test well for possible segmentation faults when adding new variables! (Default value: BUF_SZ * 24)
+- The server uses a fork-per-connection worker model
 
 ## ProfiWeb VPN
 For development and testing there are these RMI ports currently available on ProfiWeb VPN:

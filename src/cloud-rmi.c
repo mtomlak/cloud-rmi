@@ -29,9 +29,6 @@ int log_level = 1;
 int var_server_start_time = 0;
 int var_run_as_daemon = 0;
 struct server_iface_entry *var_server_iface_map = NULL;
-#ifdef REUSE_WORKER_PROC
-struct spare_child_workers_list server_spare_children;
-#endif
 
 /**
  * Outputs an error message end exits program with the error status code

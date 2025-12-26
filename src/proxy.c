@@ -1,8 +1,3 @@
-#ifdef ENABLE_LINUX_FEATURES
-   #define _GNU_SOURCE             /* See feature_test_macros(7) */
-   #include <sched.h>
-   #include <math.h>
-#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <netdb.h>
@@ -1164,56 +1159,6 @@ void proxy_all_keepalive_conns()
    }
 }
 
-// When we have Linux clone() with shared memory, we can do the management more nicely
-#ifdef ENABLE_LINUX_FEATURES
-int start_proxy_manager(void *arg)
-{
-   int sec_passed = 0;
-   struct helper_proc_state *rcvd_state;
-   struct helper_proc_state state;
-
-   // we can copy the data and free target now
-   rcvd_state = (struct helper_proc_state *) arg;
-   state = *rcvd_state;
-   free(rcvd_state);
-
-   while (1) {
-      sleep(10);
-
-      if ((int) fmod(sec_passed, 60) == 0) { // do every minute
-         DEBUG_LOG("ProxyManager: Checking all connections");
-         proxy_all_keepalive_conns();  // send PING command to keep alive all connections
-         DEBUG_LOG("ProxyManager: Checking number of spare connections per each proxy");
-         proxy_all_check_spare_conns();    // check number of spare connections
-      }
-      sec_passed += 10;
-   }
-
-   child_exit_self(state.stack, state.stack_size);
-}
-
-int create_proxy_manager_proc()
-{
-   int pid = 0;
-   char *stack = malloc(CHILD_STACK_SZ + 1);
-   struct helper_proc_state *helper_state = new_helper_state(stack, CHILD_STACK_SZ);
-
-   DEBUG_LOG("Starting proxy proccess manager");
-   DEBUG_LOG("Creating new manager proccess with Linux clone() ...");
-
-   pid = clone(&start_proxy_manager, (char *)stack + CHILD_STACK_SZ, CLONE_VM|CLONE_FILES|CLONE_SIGHAND, helper_state);//CLONE_VM|CLONE_FS|CLONE_SIGHAND|
-
-   if (pid < 0) {
-      printf("Error: clone() failed");
-      return 0;
-   }
-
-   DEBUG_LOG("+ Started new manager proccess with PID %i", pid);
-
-   return pid;
-}
-#endif
-
 //void proxy_
 
 /**
@@ -1288,11 +1233,6 @@ reset_state:
       address[size] = host_addresses[byte];
       size++;
    }
-
-#ifdef ENABLE_LINUX_FEATURES
-   // Create proxy manager proccess
-   create_proxy_manager_proc();
-#endif
 
    free(hostname);
    free(address);
