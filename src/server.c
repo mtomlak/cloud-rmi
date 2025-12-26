@@ -739,7 +739,8 @@ void server_send_stats(int sock)
 {
    const char *model = var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork";
 
-   if (var_worker_model == WORKER_MODEL_PREFORK && prefork_worker_pids != NULL) {
+   /* Only parent process can enumerate workers. Workers report their model but empty list. */
+   if (var_worker_model == WORKER_MODEL_PREFORK && getpid() == server_owner_pid && prefork_worker_pids != NULL) {
       char workers_json[2048];
       size_t offset = 0;
       int first = 1;
@@ -764,7 +765,7 @@ void server_send_stats(int sock)
          "200 {\"worker_model\":\"%s\",\"workers\":%s,\"reuse_enabled\":false,\"total_spare\":%d,\"listed\":%d,\"trimmed\":false}",
          model, workers_json, active_count, active_count);
    } else {
-      /* Fork mode: include legacy fields for backwards compatibility */
+      /* Fork mode or worker process: include legacy fields for backwards compatibility */
       stream_writeln(sock,
          "200 {\"worker_model\":\"%s\",\"workers\":[],\"reuse_enabled\":false,\"total_spare\":0,\"listed\":0,\"trimmed\":false}",
          model);

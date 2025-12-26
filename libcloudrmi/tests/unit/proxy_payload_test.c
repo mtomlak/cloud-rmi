@@ -57,6 +57,7 @@ static void read_exact(int fd, uint8_t *buf, size_t len)
 
 static void test_payload_forwarding(void)
 {
+   fprintf(stderr, "test_payload_forwarding: starting\n");
    const uint8_t payload[] = { 'a', 'b', 'c' };
    const size_t payload_len = sizeof(payload);
    const char expected[] = "CALL demo method PAYLOAD JSON 3\nabc";
@@ -68,14 +69,17 @@ static void test_payload_forwarding(void)
    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, upstream) == 0);
    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, client_pair) == 0);
 
+   fprintf(stderr, "test_payload_forwarding: preparing proxy\n");
    prepare_proxy(upstream[1], "demo");
 
    struct conn_state client_state;
    client_state.sock = client_pair[1];
    client_state.is_authenticated = 1;
 
+   fprintf(stderr, "test_payload_forwarding: writing upstream response\n");
    assert(write(upstream[0], upstream_response, strlen(upstream_response)) == (ssize_t)strlen(upstream_response));
 
+   fprintf(stderr, "test_payload_forwarding: calling proxy_pass_call_cmd_ex\n");
    int result = proxy_pass_call_cmd_ex(
       "demo",
       "method",
@@ -84,25 +88,31 @@ static void test_payload_forwarding(void)
       payload_len,
       "JSON",
       &client_state);
+   fprintf(stderr, "test_payload_forwarding: proxy_pass_call_cmd_ex returned %d\n", result);
    assert(result == 1);
 
+   fprintf(stderr, "test_payload_forwarding: reading from upstream\n");
    uint8_t buffer[64];
    read_exact(upstream[0], buffer, expected_len);
    assert(memcmp(buffer, expected, expected_len) == 0);
 
+   fprintf(stderr, "test_payload_forwarding: reading from client\n");
    char response_buffer[16];
    read_exact(client_pair[0], (uint8_t *)response_buffer, strlen(upstream_response));
    response_buffer[strlen(upstream_response)] = '\0';
    assert(strcmp(response_buffer, upstream_response) == 0);
 
+   fprintf(stderr, "test_payload_forwarding: closing sockets\n");
    close(upstream[0]);
    close(upstream[1]);
    close(client_pair[0]);
    close(client_pair[1]);
+   fprintf(stderr, "test_payload_forwarding: completed\n");
 }
 
 static void test_legacy_forwarding(void)
 {
+   fprintf(stderr, "test_legacy_forwarding: starting\n");
    const char expected[] = "CALL demo method Zm9v\n";
    const size_t expected_len = sizeof(expected) - 1;
    const char upstream_response[] = "200 OK\n";
@@ -112,14 +122,17 @@ static void test_legacy_forwarding(void)
    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, upstream) == 0);
    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, client_pair) == 0);
 
+   fprintf(stderr, "test_legacy_forwarding: preparing proxy\n");
    prepare_proxy(upstream[1], "demo");
 
    struct conn_state client_state;
    client_state.sock = client_pair[1];
    client_state.is_authenticated = 1;
 
+   fprintf(stderr, "test_legacy_forwarding: writing upstream response\n");
    assert(write(upstream[0], upstream_response, strlen(upstream_response)) == (ssize_t)strlen(upstream_response));
 
+   fprintf(stderr, "test_legacy_forwarding: calling proxy_pass_call_cmd_ex\n");
    int result = proxy_pass_call_cmd_ex(
       "demo",
       "method",
@@ -128,27 +141,36 @@ static void test_legacy_forwarding(void)
       0,
       NULL,
       &client_state);
+   fprintf(stderr, "test_legacy_forwarding: proxy_pass_call_cmd_ex returned %d\n", result);
    assert(result == 1);
 
+   fprintf(stderr, "test_legacy_forwarding: reading from upstream\n");
    uint8_t buffer[64];
    read_exact(upstream[0], buffer, expected_len);
    assert(memcmp(buffer, expected, expected_len) == 0);
 
+   fprintf(stderr, "test_legacy_forwarding: reading from client\n");
    char response_buffer[16];
    read_exact(client_pair[0], (uint8_t *)response_buffer, strlen(upstream_response));
    response_buffer[strlen(upstream_response)] = '\0';
    assert(strcmp(response_buffer, upstream_response) == 0);
 
+   fprintf(stderr, "test_legacy_forwarding: closing sockets\n");
    close(upstream[0]);
    close(upstream[1]);
    close(client_pair[0]);
    close(client_pair[1]);
+   fprintf(stderr, "test_legacy_forwarding: completed\n");
 }
 
 int main(void)
 {
+   fprintf(stderr, "proxy_payload_test: starting\n");
    test_payload_forwarding();
+   fprintf(stderr, "proxy_payload_test: test_payload_forwarding passed\n");
    test_legacy_forwarding();
+   fprintf(stderr, "proxy_payload_test: test_legacy_forwarding passed\n");
    reset_proxy_state();
+   fprintf(stderr, "proxy_payload_test: all tests passed\n");
    return 0;
 }
