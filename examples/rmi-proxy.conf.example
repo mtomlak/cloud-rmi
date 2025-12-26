@@ -1,4 +1,4 @@
-# CloudRMI Server configuration
+# CloudRMI Proxy configuration
 context_name    = dev.services.rmi-proxy
 port            = 19515
 recovery_token  = czo0MzoicmVtb3RlIGNvb2xuZXNzIGZhY3RvciArMSA6IG9uZSwgdHdvLCB0aHJlZSI7
@@ -8,6 +8,13 @@ start_delay	= 0
 debug           = Off
 debug_traffic   = Off
 
-# For worker proccess reuse
-min_spare_workers = 2
-max_spare_workers = 4
+# Worker model settings
+# worker_model: fork (default) or prefork
+#   fork    - Fork per connection (default)
+#   prefork - Pre-fork worker pool (recommended for proxy with high concurrency)
+#             Each worker maintains its own upstream connection pool
+worker_model    = prefork
+
+# Number of worker processes for prefork mode (ignored in fork mode)
+# Range: 1-1024, default: 4
+prefork_workers = 4

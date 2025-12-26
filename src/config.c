@@ -41,6 +41,8 @@ char *var_unix_socket_path = NULL;
 int var_unix_socket_skip_auth = 0;
 char *var_interface_map_file = INTERFACE_MAP_FILE;
 size_t var_max_payload = RMI_DEFAULT_MAX_PAYLOAD;
+worker_model_t var_worker_model = WORKER_MODEL_FORK;
+int var_prefork_workers = PREFORK_WORKERS_DEFAULT;
 
 static void sanitize_script_base_namespace()
 {
@@ -215,6 +217,31 @@ int read_config(char *config_file)
 
          if(log_level > 0) {
             log_event(LOG_INFO, "config:set start_delay=\"%d\"", var_start_delay);
+         }
+      }
+      else if(strcasecmp(conf_name, "worker_model") == 0) {
+         if(strcasecmp(conf_value, "prefork") == 0) {
+            var_worker_model = WORKER_MODEL_PREFORK;
+         } else {
+            var_worker_model = WORKER_MODEL_FORK;
+         }
+
+         if(log_level > 0) {
+            log_event(LOG_INFO, "config:set worker_model=\"%s\"",
+               var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork");
+         }
+      }
+      else if(strcasecmp(conf_name, "prefork_workers") == 0) {
+         int workers = atoi(conf_value);
+         if(workers < PREFORK_WORKERS_MIN) {
+            workers = PREFORK_WORKERS_MIN;
+         } else if(workers > PREFORK_WORKERS_MAX) {
+            workers = PREFORK_WORKERS_MAX;
+         }
+         var_prefork_workers = workers;
+
+         if(log_level > 0) {
+            log_event(LOG_INFO, "config:set prefork_workers=\"%d\"", var_prefork_workers);
          }
       }
 #ifdef ENABLE_DEBUG_LOGGING

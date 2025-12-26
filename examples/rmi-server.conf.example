@@ -1,6 +1,6 @@
 ##
 # CloudRMI Server configuration file
-# Syntaxt: Config file (no inline comments)
+# Syntax: Config file (no inline comments)
 #
 ##
 
@@ -11,6 +11,16 @@ read_timeout    = 10
 unix_socket_skip_auth = Off
 debug           = Off
 debug_traffic   = Off
+
+# Worker model settings
+# worker_model: fork (default) or prefork
+#   fork    - Fork a new process per connection (default, good for low-concurrency)
+#   prefork - Pre-fork worker pool (good for high-concurrency, no per-connection fork overhead)
+worker_model    = fork
+
+# Number of worker processes for prefork mode (ignored in fork mode)
+# Range: 1-1024, default: 4
+prefork_workers = 4
 
 # Program execution settings
 script_exec_dir       = /usr/local/libexec/cloud-rmi

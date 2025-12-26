@@ -14,6 +14,9 @@
 #include <errno.h>
 #include "cloud-rmi.h"
 #include "config.h"
+#ifdef PROXY_SUPPORT
+#include "proxy.h"
+#endif
 #include <sys/wait.h>
 #include <time.h>
 //#include <syscall.h>
@@ -36,6 +39,11 @@ static char server_socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)] = {0
 static volatile sig_atomic_t server_should_run = 1;
 static int server_use_unix_socket = 0;
 static pid_t server_owner_pid = 0;
+
+/* Prefork worker tracking */
+static pid_t *prefork_worker_pids = NULL;
+static int prefork_worker_count = 0;
+static volatile sig_atomic_t prefork_shutdown_requested = 0;
 
 static void cleanup_listen_socket()
 {
@@ -109,6 +117,197 @@ static void install_reaper()
    sigaction(SIGCHLD, &sa, NULL);
 }
 
+/* Prefork mode: find worker slot by PID */
+static int prefork_find_worker_slot(pid_t pid)
+{
+   for (int i = 0; i < prefork_worker_count; i++) {
+      if (prefork_worker_pids[i] == pid)
+         return i;
+   }
+   return -1;
+}
+
+/* Prefork mode: spawn a single worker */
+static pid_t prefork_spawn_worker(int listen_fd, int is_unix_socket, int worker_index)
+{
+   pid_t pid = fork();
+
+   if (pid < 0) {
+      log_unexpected_event(LOG_ERR, "prefork-spawn-failed worker=%d errno=%d", worker_index, errno);
+      return -1;
+   }
+
+   if (pid == 0) {
+      /* Worker process */
+      struct sigaction sa_ign, sa_dfl;
+
+      /* Ignore SIGPIPE in worker */
+      sa_ign.sa_handler = SIG_IGN;
+      sigemptyset(&sa_ign.sa_mask);
+      sa_ign.sa_flags = 0;
+      sigaction(SIGPIPE, &sa_ign, NULL);
+
+      /* Reset SIGCHLD to default - worker may spawn grandchildren and uses
+       * explicit waitpid. Do NOT let parent's reaper interfere. */
+      sa_dfl.sa_handler = SIG_DFL;
+      sigemptyset(&sa_dfl.sa_mask);
+      sa_dfl.sa_flags = 0;
+      sigaction(SIGCHLD, &sa_dfl, NULL);
+
+      /* Worker needs to handle SIGTERM/SIGINT for clean shutdown */
+      sa_dfl.sa_handler = shutdown_handler;
+      sigemptyset(&sa_dfl.sa_mask);
+      sa_dfl.sa_flags = 0;
+      sigaction(SIGTERM, &sa_dfl, NULL);
+      sigaction(SIGINT, &sa_dfl, NULL);
+
+#ifdef PROXY_SUPPORT
+      /* In prefork mode with proxy, each worker must have its own upstream pool.
+       * Reset the proxy state so each worker initializes fresh connections lazily.
+       * The parent should NOT have opened any upstream connections. */
+      if (var_proxy) {
+         /* Clear upstream connection counts so worker starts fresh */
+         for (int p = 0; p < proxy_count; p++) {
+            proxy_list[p].conn_count = 0;
+         }
+      }
+#endif
+
+      log_event(LOG_INFO, "worker-start pid=%d worker=%d", (int)getpid(), worker_index);
+
+      /* Worker accept loop - does NOT fork per connection */
+      while (server_should_run) {
+         struct sockaddr_storage cli_addr;
+         socklen_t clilen = is_unix_socket ? sizeof(struct sockaddr_un) : sizeof(struct sockaddr_in);
+         int newsockfd;
+
+         newsockfd = accept(listen_fd, (struct sockaddr *)&cli_addr, &clilen);
+
+         if (newsockfd < 0) {
+            if (!server_should_run)
+               break;
+            if (errno == EINTR)
+               continue;
+            /* Socket was closed/shutdown by parent - exit cleanly */
+            if (errno == EBADF || errno == EINVAL || errno == ENOTSOCK) {
+               DEBUG_LOG("worker-socket-closed pid=%d errno=%d", (int)getpid(), errno);
+               break;
+            }
+            log_unexpected_event(LOG_ERR, "worker-accept-failed pid=%d errno=%d", (int)getpid(), errno);
+            continue;
+         }
+
+         /* Handle connection directly - no fork in prefork mode */
+         handle_connection(newsockfd, is_unix_socket);
+         close(newsockfd);
+      }
+
+      DEBUG_LOG("worker-exit pid=%d worker=%d", (int)getpid(), worker_index);
+      _exit(0);
+   }
+
+   /* Parent: log worker spawn */
+   log_event(LOG_INFO, "prefork-spawned worker=%d pid=%d", worker_index, (int)pid);
+   return pid;
+}
+
+/* Prefork mode: SIGCHLD handler that respawns dead workers */
+static void prefork_sigchld_handler(int signo)
+{
+   (void)signo;
+
+   if (prefork_shutdown_requested)
+      return;
+
+   pid_t pid;
+   int status;
+
+   while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+      int slot = prefork_find_worker_slot(pid);
+      if (slot >= 0) {
+         /* Worker died - mark slot as empty, will respawn in main loop */
+         prefork_worker_pids[slot] = 0;
+      }
+   }
+}
+
+/* Prefork mode: shutdown handler */
+static void prefork_shutdown_handler(int signo)
+{
+   (void)signo;
+
+   prefork_shutdown_requested = 1;
+   server_should_run = 0;
+
+   /* Close the listen socket to help workers exit accept() faster */
+   if (server_socket_fd >= 0) {
+      shutdown(server_socket_fd, SHUT_RDWR);
+   }
+}
+
+/* Prefork mode: install signal handlers for parent */
+static void install_prefork_handlers()
+{
+   struct sigaction sa_chld, sa_term, sa_ign;
+
+   /* SIGCHLD for reaping and respawning */
+   sa_chld.sa_handler = prefork_sigchld_handler;
+   sigemptyset(&sa_chld.sa_mask);
+   sa_chld.sa_flags = SA_RESTART;
+   sigaction(SIGCHLD, &sa_chld, NULL);
+
+   /* Shutdown handlers */
+   sa_term.sa_handler = prefork_shutdown_handler;
+   sigemptyset(&sa_term.sa_mask);
+   sa_term.sa_flags = 0;
+   sigaction(SIGTERM, &sa_term, NULL);
+   sigaction(SIGINT, &sa_term, NULL);
+
+   /* Ignore SIGPIPE */
+   sa_ign.sa_handler = SIG_IGN;
+   sigemptyset(&sa_ign.sa_mask);
+   sa_ign.sa_flags = 0;
+   sigaction(SIGPIPE, &sa_ign, NULL);
+}
+
+/* Prefork mode: terminate all workers */
+static void prefork_terminate_workers()
+{
+   int i;
+
+   for (i = 0; i < prefork_worker_count; i++) {
+      if (prefork_worker_pids[i] > 0) {
+         kill(prefork_worker_pids[i], SIGTERM);
+      }
+   }
+
+   /* Wait for all workers to exit */
+   for (i = 0; i < prefork_worker_count; i++) {
+      if (prefork_worker_pids[i] > 0) {
+         int status;
+         pid_t pid = waitpid(prefork_worker_pids[i], &status, 0);
+         if (pid > 0) {
+            log_event(LOG_INFO, "prefork-reaped worker=%d pid=%d", i, (int)pid);
+         }
+         prefork_worker_pids[i] = 0;
+      }
+   }
+}
+
+/* Prefork mode: respawn any dead workers */
+static void prefork_respawn_workers(int listen_fd, int is_unix_socket)
+{
+   for (int i = 0; i < prefork_worker_count; i++) {
+      if (prefork_worker_pids[i] == 0) {
+         pid_t new_pid = prefork_spawn_worker(listen_fd, is_unix_socket, i);
+         if (new_pid > 0) {
+            prefork_worker_pids[i] = new_pid;
+            log_event(LOG_INFO, "prefork-respawned worker=%d pid=%d", i, (int)new_pid);
+         }
+      }
+   }
+}
+
 /**
  * Creates a child proccess to handle new client connection.
  * The child proccess behaves like a forked proccess, having its own memory
@@ -127,21 +326,28 @@ int create_client_handler_proc(int sock, int server_sock, int is_unix_socket)
 
    #ifdef PROXY_SUPPORT
       if (var_proxy) {
-         log_unexpected_event(
-            LOG_WARNING,
-            "proxy-without-linux-features pid=%i",
-            (int) getpid());
          /*
-          * IMPORTANT: In proxy mode, forking per-client while also maintaining an
-          * upstream connection pool in this process is unsafe: the child inherits
-          * the same upstream socket file descriptors, but does NOT share the
-          * in-memory busy/free bookkeeping with the parent. Multiple processes
-          * can then concurrently read/write the same upstream stream, violating
-          * strict framing (desync) and causing nondeterministic behavior.
+          * IMPORTANT: In fork-per-connection mode with proxy, forking per client
+          * while maintaining an upstream connection pool is unsafe: the child
+          * inherits the same upstream socket FDs but does NOT share the in-memory
+          * busy/free bookkeeping with the parent. Multiple processes would then
+          * concurrently read/write the same upstream stream, violating strict
+          * framing (desync) and causing nondeterministic behavior.
           *
-          * Without ENABLE_LINUX_FEATURES (clone + shared state), run proxy in a
-          * single-process accept loop to preserve correctness.
+          * In fork mode, we fall back to single-process accept loop (no fork per
+          * connection) to preserve correctness. This limits concurrency but is safe.
+          *
+          * For production proxy use, use worker_model=prefork instead, where each
+          * worker has its own isolated upstream connection pool.
           */
+         static int proxy_fork_warning_logged = 0;
+         if (!proxy_fork_warning_logged) {
+            log_unexpected_event(
+               LOG_WARNING,
+               "proxy-fork-mode-single-process pid=%d (use worker_model=prefork for production)",
+               (int)getpid());
+            proxy_fork_warning_logged = 1;
+         }
          handle_connection(sock, is_unix_socket);
          close(sock);
          return 1;
@@ -257,7 +463,64 @@ int server_start(int port_num, const char *unix_socket_path)
     */
    
    listen(sockfd, 5);
-   
+
+   /* Log startup info */
+   log_event(LOG_INFO, "server-start worker_model=%s workers=%d pid=%d",
+      var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork",
+      var_worker_model == WORKER_MODEL_PREFORK ? var_prefork_workers : 0,
+      (int)getpid());
+
+   if (var_worker_model == WORKER_MODEL_PREFORK) {
+      /* Prefork mode: spawn workers before accepting connections */
+      int i;
+
+      prefork_worker_count = var_prefork_workers;
+      prefork_worker_pids = calloc(prefork_worker_count, sizeof(pid_t));
+      if (prefork_worker_pids == NULL)
+         die_err("Error: Failed to allocate prefork worker array");
+
+      /* Install prefork-specific signal handlers */
+      install_prefork_handlers();
+
+      /* Spawn initial workers */
+      for (i = 0; i < prefork_worker_count; i++) {
+         pid_t pid = prefork_spawn_worker(sockfd, use_unix_socket, i);
+         if (pid > 0) {
+            prefork_worker_pids[i] = pid;
+         } else {
+            prefork_worker_pids[i] = 0;
+         }
+      }
+
+      /* Parent does NOT accept connections in prefork mode.
+       * Just wait for signals and respawn dead workers.
+       * Use a simple polling loop with short sleeps to check for:
+       * - Shutdown signals (flags set by handler)
+       * - Dead workers that need respawning (via SIGCHLD -> flag in handler) */
+      while (!prefork_shutdown_requested) {
+         struct timespec ts = {0, 100000000};  /* 100ms */
+         nanosleep(&ts, NULL);  /* Interruptible by signals */
+
+         if (prefork_shutdown_requested)
+            break;
+
+         /* Respawn any dead workers */
+         prefork_respawn_workers(sockfd, use_unix_socket);
+      }
+
+      /* Shutdown: terminate all workers */
+      log_event(LOG_INFO, "prefork-shutdown pid=%d", (int)getpid());
+      prefork_terminate_workers();
+
+      free(prefork_worker_pids);
+      prefork_worker_pids = NULL;
+      prefork_worker_count = 0;
+
+      cleanup_listen_socket();
+      return 0;
+   }
+
+   /* Fork-per-connection mode (default) */
    while (server_should_run) {
       clilen = use_unix_socket ? sizeof(struct sockaddr_un) : sizeof(struct sockaddr_in);
       /* Wait for new connections */
@@ -483,5 +746,36 @@ int read_iface_config(char *config_file)
 
 void server_send_stats(int sock)
 {
-   stream_writeln(sock, "200 {\"worker_model\":\"fork\",\"workers\":[],\"reuse_enabled\":false,\"total_spare\":0,\"listed\":0,\"trimmed\":false}");
+   const char *model = var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork";
+
+   if (var_worker_model == WORKER_MODEL_PREFORK && prefork_worker_pids != NULL) {
+      char workers_json[2048];
+      size_t offset = 0;
+      int first = 1;
+      int active_count = 0;
+
+      offset += snprintf(workers_json + offset, sizeof(workers_json) - offset, "[");
+
+      for (int i = 0; i < prefork_worker_count && offset < sizeof(workers_json) - 50; i++) {
+         if (prefork_worker_pids[i] > 0) {
+            offset += snprintf(workers_json + offset, sizeof(workers_json) - offset,
+               "%s{\"index\":%d,\"pid\":%d}",
+               first ? "" : ",", i, (int)prefork_worker_pids[i]);
+            first = 0;
+            active_count++;
+         }
+      }
+
+      offset += snprintf(workers_json + offset, sizeof(workers_json) - offset, "]");
+
+      /* Include legacy fields for backwards compatibility */
+      stream_writeln(sock,
+         "200 {\"worker_model\":\"%s\",\"workers\":%s,\"reuse_enabled\":false,\"total_spare\":%d,\"listed\":%d,\"trimmed\":false}",
+         model, workers_json, active_count, active_count);
+   } else {
+      /* Fork mode: include legacy fields for backwards compatibility */
+      stream_writeln(sock,
+         "200 {\"worker_model\":\"%s\",\"workers\":[],\"reuse_enabled\":false,\"total_spare\":0,\"listed\":0,\"trimmed\":false}",
+         model);
+   }
 }

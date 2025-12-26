@@ -33,6 +33,19 @@ extern char *var_unix_socket_path;
 extern int var_unix_socket_skip_auth;
 extern char *var_interface_map_file;
 extern size_t var_max_payload;
+/* Worker model configuration */
+typedef enum {
+   WORKER_MODEL_FORK = 0,     /* Default: fork per connection */
+   WORKER_MODEL_PREFORK = 1   /* Prefork: pre-spawned worker pool */
+} worker_model_t;
+
+extern worker_model_t var_worker_model;
+extern int var_prefork_workers;
+
+#define PREFORK_WORKERS_DEFAULT 4
+#define PREFORK_WORKERS_MIN 1
+#define PREFORK_WORKERS_MAX 1024
+
 #ifdef PROXY_SUPPORT
 extern char *var_proxy;
 #endif

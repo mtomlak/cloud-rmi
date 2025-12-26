@@ -51,6 +51,9 @@ void show_help(char *this_cmd)
 	printf("\t-p set port number (default: %d)\n", var_port);
 	printf("\t-u set unix socket path (default: %s)\n", var_unix_socket_path ? var_unix_socket_path : "disabled");
 	printf("\t-t set authentication token\n");
+	printf("\t-w set worker model: fork or prefork (default: %s)\n",
+		var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork");
+	printf("\t-W set number of prefork workers (default: %d)\n", var_prefork_workers);
 #ifdef PROXY_SUPPORT
 	printf("\t-x enable proxy to given host (currently %s)\n", 
 		var_proxy ? var_proxy : "OFF"); 
@@ -69,7 +72,8 @@ void show_help(char *this_cmd)
    rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
    printf("\tprotocol extensions\t%s\n", caps_buf);   
    printf("\tkernel interfaces\tPOSIX\n");
-   printf("\tworker model\t\tfork\n");
+   printf("\tworker models\t\tfork, prefork\n");
+   printf("\tdefault model\t\tfork\n");
    printf("\tbuild symbols\t\t");
 #ifdef PROXY_SUPPORT
    printf("PROXY_SUPPORT ");
@@ -152,18 +156,22 @@ int main(int argc, char *argv[])
 #ifdef ENABLE_DEBUG_LOGGING
       static struct option long_options[] = {
          {"unix-socket", required_argument, 0, 'u'},
+         {"worker-model", required_argument, 0, 'w'},
+         {"workers", required_argument, 0, 'W'},
          {"help", no_argument, 0, 'h'},
          {"debug-traffic", no_argument, 0, 'T'},
          {0, 0, 0, 0}
       };
-      const char *optstring = "b:c:dD:he:m:n:p:t:u:vTx:";
+      const char *optstring = "b:c:dD:he:m:n:p:t:u:vTw:W:x:";
 #else
       static struct option long_options[] = {
          {"unix-socket", required_argument, 0, 'u'},
+         {"worker-model", required_argument, 0, 'w'},
+         {"workers", required_argument, 0, 'W'},
          {"help", no_argument, 0, 'h'},
          {0, 0, 0, 0}
       };
-      const char *optstring = "b:c:dD:he:m:n:p:t:u:x:";
+      const char *optstring = "b:c:dD:he:m:n:p:t:u:w:W:x:";
 #endif
       while((opt = getopt_long(argc, argv, optstring, long_options, NULL)) != -1) {
          switch(opt) {
@@ -235,6 +243,31 @@ int main(int argc, char *argv[])
                debug_traffic_set(1);
                break;
 #endif
+
+            case 'w':
+               if (strcasecmp(optarg, "prefork") == 0) {
+                  var_worker_model = WORKER_MODEL_PREFORK;
+               } else {
+                  var_worker_model = WORKER_MODEL_FORK;
+               }
+               if (debug_log_enabled())
+                  DEBUG_LOG("CLI override worker_model=%s",
+                     var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork");
+               break;
+
+            case 'W':
+               {
+                  int workers = atoi(optarg);
+                  if (workers < PREFORK_WORKERS_MIN) {
+                     workers = PREFORK_WORKERS_MIN;
+                  } else if (workers > PREFORK_WORKERS_MAX) {
+                     workers = PREFORK_WORKERS_MAX;
+                  }
+                  var_prefork_workers = workers;
+                  if (debug_log_enabled())
+                     DEBUG_LOG("CLI override prefork_workers=%d", var_prefork_workers);
+               }
+               break;
 
             case 'x':
 #ifdef PROXY_SUPPORT
