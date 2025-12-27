@@ -533,6 +533,7 @@ class TestResult:
     passed: bool
     message: str = ""
     traces: list[WireTrace] = field(default_factory=list)
+    duration: float = 0.0
 
 
 TestFunc = Callable[["IntegrationEnvironment"], TestResult]
@@ -572,6 +573,7 @@ class IntegrationRunner:
                 result.name = case.name
             outcome = "ok" if result.passed else "FAIL"
             elapsed = time.perf_counter() - start
+            result.duration = elapsed
             suffix = f" ({elapsed:.3f}s)" if verbose else ""
             print(f"{outcome}{suffix}")
             if verbose and result.traces:
@@ -589,4 +591,4 @@ class IntegrationRunner:
             self.logger.error("Test %s failed: %s", case.name, message)
             if verbose:
                 self.logger.exception("Exception during %s", case.name)
-            return TestResult(name=case.name, passed=False, message=message)
+            return TestResult(name=case.name, passed=False, message=message, duration=elapsed)
