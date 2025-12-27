@@ -230,7 +230,7 @@ def proxy_payload_downshift_encoding(env: IntegrationEnvironment) -> TestResult:
             [
                 str(env.proxy_bin),
                 "-c",
-                str(env.config_path),
+                str(env.proxy_config_path),
                 "-m",
                 str(env.interface_map),
                 "-p",
