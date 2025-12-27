@@ -275,3 +275,9 @@ Source: `src/proxy.c`
 - Unix socket transports always run in protocol v2 state and reject protocol
   downgrades below v2; TCP listeners retain the legacy default of v1 unless
   explicitly upgraded.
+- Adaptive worker pools (`worker_model=adaptive`) reuse the prefork worker
+  code path but keep the parent in control of pool size. The parent tracks
+  idle/busy transitions signaled over a per-worker pipe and scales between
+  `adaptive_min_workers` and `adaptive_max_workers` while maintaining
+  `adaptive_spare_workers` idle children. No forks occur on the accept/handle
+  hot path.

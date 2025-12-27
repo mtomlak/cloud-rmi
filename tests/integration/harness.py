@@ -355,10 +355,16 @@ class IntegrationEnvironment:
     upstream_unix_socket: str | None = None
     verbose: bool = False
     logger: logging.Logger = LOG
-    server_worker_model: str | None = None  # "fork" or "prefork"
+    server_worker_model: str | None = None  # "fork", "prefork", or "adaptive"
     server_prefork_workers: int | None = None  # Number of prefork workers
-    proxy_worker_model: str | None = None  # "fork" or "prefork"
+    server_adaptive_min_workers: int | None = None
+    server_adaptive_max_workers: int | None = None
+    server_adaptive_spare_workers: int | None = None
+    proxy_worker_model: str | None = None  # "fork", "prefork", or "adaptive"
     proxy_prefork_workers: int | None = None  # Number of prefork workers
+    proxy_adaptive_min_workers: int | None = None
+    proxy_adaptive_max_workers: int | None = None
+    proxy_adaptive_spare_workers: int | None = None
     _server: Optional[ProcessHandle] = field(default=None, init=False)
     _proxy: Optional[ProcessHandle] = field(default=None, init=False)
     _baseline_zombies: set[int] = field(default_factory=set, init=False)
@@ -414,6 +420,12 @@ class IntegrationEnvironment:
             command.extend(["-w", self.server_worker_model])
         if self.server_prefork_workers is not None:
             command.extend(["-W", str(self.server_prefork_workers)])
+        if self.server_adaptive_min_workers is not None:
+            command.extend(["-M", str(self.server_adaptive_min_workers)])
+        if self.server_adaptive_max_workers is not None:
+            command.extend(["-X", str(self.server_adaptive_max_workers)])
+        if self.server_adaptive_spare_workers is not None:
+            command.extend(["-S", str(self.server_adaptive_spare_workers)])
         command.extend([
             "-c",
             str(self.server_config_path),
@@ -454,6 +466,12 @@ class IntegrationEnvironment:
             command.extend(["-w", self.proxy_worker_model])
         if self.proxy_prefork_workers is not None:
             command.extend(["-W", str(self.proxy_prefork_workers)])
+        if self.proxy_adaptive_min_workers is not None:
+            command.extend(["-M", str(self.proxy_adaptive_min_workers)])
+        if self.proxy_adaptive_max_workers is not None:
+            command.extend(["-X", str(self.proxy_adaptive_max_workers)])
+        if self.proxy_adaptive_spare_workers is not None:
+            command.extend(["-S", str(self.proxy_adaptive_spare_workers)])
         command.extend([
             "-c",
             str(self.proxy_config_path),

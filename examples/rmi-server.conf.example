@@ -13,14 +13,20 @@ debug           = Off
 debug_traffic   = Off
 
 # Worker model settings
-# worker_model: fork (default) or prefork
-#   fork    - Fork a new process per connection (default, good for low-concurrency)
-#   prefork - Pre-fork worker pool (good for high-concurrency, no per-connection fork overhead)
+# worker_model: fork (default), prefork, or adaptive
+#   fork     - Fork a new process per connection (default, good for low-concurrency)
+#   prefork  - Pre-fork worker pool (good for high-concurrency, no per-connection fork overhead)
+#   adaptive - Adaptive prefork pool (dynamic workers with spare capacity target)
 worker_model    = fork
 
-# Number of worker processes for prefork mode (ignored in fork mode)
+# Number of worker processes for prefork mode (ignored in fork/adaptive modes)
 # Range: 1-1024, default: 4
 prefork_workers = 4
+
+# Adaptive pool configuration (ignored unless worker_model=adaptive)
+#adaptive_min_workers   = 2
+#adaptive_max_workers   = 8
+#adaptive_spare_workers = 2
 
 # Program execution settings
 script_exec_dir       = /usr/local/libexec/cloud-rmi

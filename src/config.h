@@ -36,15 +36,25 @@ extern size_t var_max_payload;
 /* Worker model configuration */
 typedef enum {
    WORKER_MODEL_FORK = 0,     /* Default: fork per connection */
-   WORKER_MODEL_PREFORK = 1   /* Prefork: pre-spawned worker pool */
+   WORKER_MODEL_PREFORK = 1,  /* Prefork: pre-spawned worker pool */
+   WORKER_MODEL_ADAPTIVE = 2  /* Adaptive: dynamic prefork pool */
 } worker_model_t;
 
 extern worker_model_t var_worker_model;
 extern int var_prefork_workers;
+extern int var_adaptive_min_workers;
+extern int var_adaptive_max_workers;
+extern int var_adaptive_spare_workers;
 
 #define PREFORK_WORKERS_DEFAULT 4
 #define PREFORK_WORKERS_MIN 1
 #define PREFORK_WORKERS_MAX 1024
+
+#define ADAPTIVE_MIN_WORKERS_DEFAULT 2
+#define ADAPTIVE_MAX_WORKERS_DEFAULT 8
+#define ADAPTIVE_SPARE_WORKERS_DEFAULT 2
+#define ADAPTIVE_WORKERS_MIN PREFORK_WORKERS_MIN
+#define ADAPTIVE_WORKERS_MAX PREFORK_WORKERS_MAX
 
 #ifdef PROXY_SUPPORT
 extern char *var_proxy;
@@ -55,3 +65,5 @@ char *firsttok(char **s, const char *delim);
 int read_config(char *config_file);
 int read_iface_config(char *config_file);
 void normalize_script_base_namespace();
+void normalize_worker_config();
+const char *worker_model_to_string(worker_model_t model);

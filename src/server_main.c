@@ -51,9 +51,12 @@ void show_help(char *this_cmd)
 	printf("\t-p set port number (default: %d)\n", var_port);
 	printf("\t-u set unix socket path (default: %s)\n", var_unix_socket_path ? var_unix_socket_path : "disabled");
 	printf("\t-t set authentication token\n");
-	printf("\t-w set worker model: fork or prefork (default: %s)\n",
-		var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork");
+	printf("\t-w set worker model: fork, prefork, or adaptive (default: %s)\n",
+		worker_model_to_string(var_worker_model));
 	printf("\t-W set number of prefork workers (default: %d)\n", var_prefork_workers);
+	printf("\t-M set minimum adaptive workers (default: %d)\n", var_adaptive_min_workers);
+	printf("\t-X set maximum adaptive workers (default: %d)\n", var_adaptive_max_workers);
+	printf("\t-S set desired adaptive spare workers (default: %d)\n", var_adaptive_spare_workers);
 #ifdef PROXY_SUPPORT
 	printf("\t-x enable proxy to given host (currently %s)\n", 
 		var_proxy ? var_proxy : "OFF"); 
@@ -72,7 +75,7 @@ void show_help(char *this_cmd)
    rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
    printf("\tprotocol extensions\t%s\n", caps_buf);   
    printf("\tkernel interfaces\tPOSIX\n");
-   printf("\tworker models\t\tfork, prefork\n");
+   printf("\tworker models\t\tfork, prefork, adaptive\n");
    printf("\tdefault model\t\tfork\n");
    printf("\tbuild symbols\t\t");
 #ifdef PROXY_SUPPORT
@@ -157,6 +160,9 @@ int main(int argc, char *argv[])
        {"unix-socket",  required_argument, 0, 'u'},
        {"worker-model", required_argument, 0, 'w'},
        {"workers",      required_argument, 0, 'W'},
+       {"adaptive-min", required_argument, 0, 'M'},
+       {"adaptive-max", required_argument, 0, 'X'},
+       {"adaptive-spare", required_argument, 0, 'S'},
        {"help",         no_argument,       0, 'h'},
 #ifdef ENABLE_DEBUG_LOGGING
        {"debug-traffic", no_argument,      0, 'T'},
@@ -166,9 +172,9 @@ int main(int argc, char *argv[])
 
    const char *optstring =
 #ifdef ENABLE_DEBUG_LOGGING
-       "b:c:dD:he:m:n:p:t:u:vTw:W:x:";
+       "b:c:dD:he:m:n:p:t:u:vTw:W:M:X:S:x:";
 #else
-       "b:c:dD:he:m:n:p:t:u:w:W:x:";
+       "b:c:dD:he:m:n:p:t:u:w:W:M:X:S:x:";
 #endif
 
       while((opt = getopt_long(argc, argv, optstring, long_options, NULL)) != -1) {
@@ -250,7 +256,9 @@ int main(int argc, char *argv[])
                if (strcasecmp(optarg, "prefork") == 0)
                   var_worker_model = WORKER_MODEL_PREFORK;
                else if (strcasecmp(optarg, "fork") == 0)
-                  var_worker_model = WORKER_MODEL_PREFORK;
+                  var_worker_model = WORKER_MODEL_FORK;
+               else if (strcasecmp(optarg, "adaptive") == 0)
+                  var_worker_model = WORKER_MODEL_ADAPTIVE;
                else
                   die_errf("Error: Unknown worker model %s", optarg);
 
@@ -266,6 +274,42 @@ int main(int argc, char *argv[])
                   }
                   var_prefork_workers = workers;
                   DEBUG_LOG("arg:set prefork_workers=%d", workers);
+               break;
+
+            case 'M': {
+                  int workers = atoi(optarg);
+                  if (workers < ADAPTIVE_WORKERS_MIN) {
+                     workers = ADAPTIVE_WORKERS_MIN;
+                  } else if (workers > ADAPTIVE_WORKERS_MAX) {
+                     workers = ADAPTIVE_WORKERS_MAX;
+                  }
+                  var_adaptive_min_workers = workers;
+                  DEBUG_LOG("arg:set adaptive_min_workers=%d", workers);
+               }
+               break;
+
+            case 'X': {
+                  int workers = atoi(optarg);
+                  if (workers < ADAPTIVE_WORKERS_MIN) {
+                     workers = ADAPTIVE_WORKERS_MIN;
+                  } else if (workers > ADAPTIVE_WORKERS_MAX) {
+                     workers = ADAPTIVE_WORKERS_MAX;
+                  }
+                  var_adaptive_max_workers = workers;
+                  DEBUG_LOG("arg:set adaptive_max_workers=%d", workers);
+               }
+               break;
+
+            case 'S': {
+                  int workers = atoi(optarg);
+                  if (workers < 0) {
+                     workers = 0;
+                  } else if (workers > ADAPTIVE_WORKERS_MAX) {
+                     workers = ADAPTIVE_WORKERS_MAX;
+                  }
+                  var_adaptive_spare_workers = workers;
+                  DEBUG_LOG("arg:set adaptive_spare_workers=%d", workers);
+               }
                break;
 
             case 'x':
@@ -286,6 +330,7 @@ int main(int argc, char *argv[])
 
    if (!read_iface_config(var_interface_map_file))
       die_err("Error: Failed to load interface map file");
+   normalize_worker_config();
 
    // Let's sleep a bit if we want to
    if (var_start_delay) {
