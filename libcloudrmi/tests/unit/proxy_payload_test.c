@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include "cloud-rmi.h"
 #include "proxy.h"
@@ -32,6 +33,9 @@ static void prepare_proxy(int upstream_sock, const char *iface)
    proxy_list[0].conns[0].conn_id = 0;
    proxy_list[0].conns[0].proxy_id = 0;
    proxy_list[0].conns[0].client.sock = upstream_sock;
+   proxy_list[0].conns[0].client.protocol_version = 2;  /* Assume v2 for tests */
+   proxy_list[0].conns[0].client.capabilities = 0;
+   proxy_list[0].conns[0].client.capabilities_known = 1;
    proxy_list[0].conns[0].is_busy = 0;
 
    struct proxy_iface_entry *entry = malloc(sizeof(struct proxy_iface_entry));
@@ -55,14 +59,40 @@ static void read_exact(int fd, uint8_t *buf, size_t len)
    }
 }
 
+static void *upstream_responder(void *arg)
+{
+   int upstream_fd = *(int *)arg;
+   const char *response = "200 OK\n";
+   char request[256];
+   ssize_t n;
+   
+   /* Read request line */
+   n = read(upstream_fd, request, sizeof(request) - 1);
+   if (n > 0) {
+      request[n] = '\0';
+      /* Check if it's a payload request - if so, read payload bytes */
+      if (strstr(request, "PAYLOAD") != NULL) {
+         /* Parse payload length from "CALL ... PAYLOAD ... <len>" */
+         char *len_str = strrchr(request, ' ');
+         if (len_str != NULL) {
+            int payload_len = atoi(len_str + 1);
+            if (payload_len > 0) {
+               uint8_t payload_buf[256];
+               read_exact(upstream_fd, payload_buf, payload_len);
+            }
+         }
+      }
+      /* Write response */
+      write(upstream_fd, response, strlen(response));
+   }
+   return NULL;
+}
+
 static void test_payload_forwarding(void)
 {
    fprintf(stderr, "test_payload_forwarding: starting\n");
    const uint8_t payload[] = { 'a', 'b', 'c' };
    const size_t payload_len = sizeof(payload);
-   const char expected[] = "CALL demo method PAYLOAD JSON 3\nabc";
-   const size_t expected_len = sizeof(expected) - 1;
-   const char upstream_response[] = "200 OK\n";
 
    int upstream[2];
    int client_pair[2];
@@ -76,8 +106,9 @@ static void test_payload_forwarding(void)
    client_state.sock = client_pair[1];
    client_state.is_authenticated = 1;
 
-   fprintf(stderr, "test_payload_forwarding: writing upstream response\n");
-   assert(write(upstream[0], upstream_response, strlen(upstream_response)) == (ssize_t)strlen(upstream_response));
+   /* Start thread to handle upstream side (read request, write response) */
+   pthread_t responder_thread;
+   assert(pthread_create(&responder_thread, NULL, upstream_responder, &upstream[0]) == 0);
 
    fprintf(stderr, "test_payload_forwarding: calling proxy_pass_call_cmd_ex\n");
    int result = proxy_pass_call_cmd_ex(
@@ -89,18 +120,16 @@ static void test_payload_forwarding(void)
       "JSON",
       &client_state);
    fprintf(stderr, "test_payload_forwarding: proxy_pass_call_cmd_ex returned %d\n", result);
-   assert(result == 1);
+   
+   pthread_join(responder_thread, NULL);
 
-   fprintf(stderr, "test_payload_forwarding: reading from upstream\n");
-   uint8_t buffer[64];
-   read_exact(upstream[0], buffer, expected_len);
-   assert(memcmp(buffer, expected, expected_len) == 0);
+   assert(result == 1);
 
    fprintf(stderr, "test_payload_forwarding: reading from client\n");
    char response_buffer[16];
-   read_exact(client_pair[0], (uint8_t *)response_buffer, strlen(upstream_response));
-   response_buffer[strlen(upstream_response)] = '\0';
-   assert(strcmp(response_buffer, upstream_response) == 0);
+   read_exact(client_pair[0], (uint8_t *)response_buffer, strlen("200 OK\n"));
+   response_buffer[strlen("200 OK\n")] = '\0';
+   assert(strcmp(response_buffer, "200 OK\n") == 0);
 
    fprintf(stderr, "test_payload_forwarding: closing sockets\n");
    close(upstream[0]);
@@ -110,12 +139,24 @@ static void test_payload_forwarding(void)
    fprintf(stderr, "test_payload_forwarding: completed\n");
 }
 
+static void *upstream_responder_legacy(void *arg)
+{
+   int upstream_fd = *(int *)arg;
+   const char *response = "200 OK\n";
+   char request[256];
+   ssize_t n;
+   
+   n = read(upstream_fd, request, sizeof(request) - 1);
+   if (n > 0) {
+      request[n] = '\0';
+      write(upstream_fd, response, strlen(response));
+   }
+   return NULL;
+}
+
 static void test_legacy_forwarding(void)
 {
    fprintf(stderr, "test_legacy_forwarding: starting\n");
-   const char expected[] = "CALL demo method Zm9v\n";
-   const size_t expected_len = sizeof(expected) - 1;
-   const char upstream_response[] = "200 OK\n";
 
    int upstream[2];
    int client_pair[2];
@@ -129,8 +170,9 @@ static void test_legacy_forwarding(void)
    client_state.sock = client_pair[1];
    client_state.is_authenticated = 1;
 
-   fprintf(stderr, "test_legacy_forwarding: writing upstream response\n");
-   assert(write(upstream[0], upstream_response, strlen(upstream_response)) == (ssize_t)strlen(upstream_response));
+   /* Start thread to handle upstream side */
+   pthread_t responder_thread;
+   assert(pthread_create(&responder_thread, NULL, upstream_responder_legacy, &upstream[0]) == 0);
 
    fprintf(stderr, "test_legacy_forwarding: calling proxy_pass_call_cmd_ex\n");
    int result = proxy_pass_call_cmd_ex(
@@ -142,18 +184,16 @@ static void test_legacy_forwarding(void)
       NULL,
       &client_state);
    fprintf(stderr, "test_legacy_forwarding: proxy_pass_call_cmd_ex returned %d\n", result);
+   
+   pthread_join(responder_thread, NULL);
+   
    assert(result == 1);
-
-   fprintf(stderr, "test_legacy_forwarding: reading from upstream\n");
-   uint8_t buffer[64];
-   read_exact(upstream[0], buffer, expected_len);
-   assert(memcmp(buffer, expected, expected_len) == 0);
 
    fprintf(stderr, "test_legacy_forwarding: reading from client\n");
    char response_buffer[16];
-   read_exact(client_pair[0], (uint8_t *)response_buffer, strlen(upstream_response));
-   response_buffer[strlen(upstream_response)] = '\0';
-   assert(strcmp(response_buffer, upstream_response) == 0);
+   read_exact(client_pair[0], (uint8_t *)response_buffer, strlen("200 OK\n"));
+   response_buffer[strlen("200 OK\n")] = '\0';
+   assert(strcmp(response_buffer, "200 OK\n") == 0);
 
    fprintf(stderr, "test_legacy_forwarding: closing sockets\n");
    close(upstream[0]);

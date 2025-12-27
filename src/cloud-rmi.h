@@ -67,6 +67,7 @@ extern struct server_iface_entry *var_server_iface_map;
 extern int var_run_as_daemon;
 
 void die_err(char *errstr);
+void die_errf(const char *fmt, ...);
 int stream_writeln(int sock, char *format, ...);
 int stream_read(int sock, char* buf, int buf_size);
 int stream_readln(int sock, char* line, int max_size);

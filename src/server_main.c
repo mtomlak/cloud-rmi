@@ -153,51 +153,49 @@ int main(int argc, char *argv[])
 
    if (argc > 1) { 
    // Overwrite some config variables
+   static struct option long_options[] = {
+       {"unix-socket",  required_argument, 0, 'u'},
+       {"worker-model", required_argument, 0, 'w'},
+       {"workers",      required_argument, 0, 'W'},
+       {"help",         no_argument,       0, 'h'},
 #ifdef ENABLE_DEBUG_LOGGING
-      static struct option long_options[] = {
-         {"unix-socket", required_argument, 0, 'u'},
-         {"worker-model", required_argument, 0, 'w'},
-         {"workers", required_argument, 0, 'W'},
-         {"help", no_argument, 0, 'h'},
-         {"debug-traffic", no_argument, 0, 'T'},
-         {0, 0, 0, 0}
-      };
-      const char *optstring = "b:c:dD:he:m:n:p:t:u:vTw:W:x:";
-#else
-      static struct option long_options[] = {
-         {"unix-socket", required_argument, 0, 'u'},
-         {"worker-model", required_argument, 0, 'w'},
-         {"workers", required_argument, 0, 'W'},
-         {"help", no_argument, 0, 'h'},
-         {0, 0, 0, 0}
-      };
-      const char *optstring = "b:c:dD:he:m:n:p:t:u:w:W:x:";
+       {"debug-traffic", no_argument,      0, 'T'},
 #endif
+       {0, 0, 0, 0}
+   };
+
+   const char *optstring =
+#ifdef ENABLE_DEBUG_LOGGING
+       "b:c:dD:he:m:n:p:t:u:vTw:W:x:";
+#else
+       "b:c:dD:he:m:n:p:t:u:w:W:x:";
+#endif
+
       while((opt = getopt_long(argc, argv, optstring, long_options, NULL)) != -1) {
          switch(opt) {
          	case 'b':
                var_script_base_namespace = strdup(optarg);
                normalize_script_base_namespace();
                read_iface_config(var_interface_map_file);
+               DEBUG_LOG("arg:set script_base_namespace=%s", var_script_base_namespace);
                break;
 
             case 'c':
                var_config_file = strdup(optarg);
-               if (!read_config(var_config_file)) {
-                  if (debug_log_enabled())
-                     DEBUG_LOG("Failed to load config override %s", var_config_file);
-               } else if (debug_log_enabled()) {
-                  DEBUG_LOG("Loaded config override %s", var_config_file);
-               }
+               if (!read_config(var_config_file))
+                  die_errf("Error: Failed to load config file %s", var_config_file);
+               DEBUG_LOG("arg:set config_file=%s", var_config_file);
                break;
 
             case 'd':
                daemon = 1;
                var_run_as_daemon = 1;
+               DEBUG_LOG("arg:daemonize");
                break;
 
             case 'D':
                var_start_delay = atoi(optarg);
+               DEBUG_LOG("arg:set start_delay=%d", var_start_delay);
                break;
 
             case 'h':
@@ -207,56 +205,59 @@ int main(int argc, char *argv[])
             case 'm':
                var_interface_map_file = strdup(optarg);
                read_iface_config(var_interface_map_file);
+               DEBUG_LOG("arg:set interface_map_file=%s", var_interface_map_file);
                break;
 
             case 'e':
                var_script_exec_dir = strdup(optarg);
                read_iface_config(var_interface_map_file);
-               if (debug_log_enabled())
-                  DEBUG_LOG("CLI override script_exec_dir=%s", var_script_exec_dir);
+               DEBUG_LOG("arg:set script_exec_dir=%s", var_script_exec_dir);
                break;
 
             case 'n':
                var_context_name = strdup(optarg);
+               DEBUG_LOG("arg:set context_name=%s", var_context_name);
                break;
 
             case 'p':
                var_port = atoi(optarg);
+               DEBUG_LOG("arg:set port=%d", var_port);
                break;
 
             case 'u':
                var_unix_socket_path = strdup(optarg);
+               DEBUG_LOG("arg:set unix_socket_path=%s", var_unix_socket_path);
                break;
 
             case 't':
                var_recovery_token = strdup(optarg);
+               DEBUG_LOG("arg:set recovery_token=%s", var_recovery_token);
                break;
 
 #ifdef ENABLE_DEBUG_LOGGING
             case 'v':
-               printf("Entering verbose mode\n");
                debug_log_set(1);
+               DEBUG_LOG("arg:verbose");
                break;
 
             case 'T':
-               printf("Enabling traffic debug logging\n");
                debug_traffic_set(1);
+               DEBUG_LOG("arg:debug_traffic");
                break;
 #endif
 
             case 'w':
-               if (strcasecmp(optarg, "prefork") == 0) {
+               if (strcasecmp(optarg, "prefork") == 0)
                   var_worker_model = WORKER_MODEL_PREFORK;
-               } else {
-                  var_worker_model = WORKER_MODEL_FORK;
-               }
-               if (debug_log_enabled())
-                  DEBUG_LOG("CLI override worker_model=%s",
-                     var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork");
+               else if (strcasecmp(optarg, "fork") == 0)
+                  var_worker_model = WORKER_MODEL_PREFORK;
+               else
+                  die_errf("Error: Unknown worker model %s", optarg);
+
+               DEBUG_LOG("arg:set worker_model=%s", optarg);
                break;
 
             case 'W':
-               {
                   int workers = atoi(optarg);
                   if (workers < PREFORK_WORKERS_MIN) {
                      workers = PREFORK_WORKERS_MIN;
@@ -264,9 +265,7 @@ int main(int argc, char *argv[])
                      workers = PREFORK_WORKERS_MAX;
                   }
                   var_prefork_workers = workers;
-                  if (debug_log_enabled())
-                     DEBUG_LOG("CLI override prefork_workers=%d", var_prefork_workers);
-               }
+                  DEBUG_LOG("arg:set prefork_workers=%d", workers);
                break;
 
             case 'x':
@@ -283,56 +282,43 @@ int main(int argc, char *argv[])
       }
    }
 
-   if (debug_log_enabled())
-      DEBUG_LOG("Configuration summary: unix_socket_skip_auth=%i, script_exec_dir=%s", var_unix_socket_skip_auth, var_script_exec_dir);
+   DEBUG_LOG("Arguments parsed; Configuration summary: unix_socket_skip_auth=%i, script_exec_dir=%s", var_unix_socket_skip_auth, var_script_exec_dir);
 
    if (!read_iface_config(var_interface_map_file))
       die_err("Error: Failed to load interface map file");
 
    // Let's sleep a bit if we want to
    if (var_start_delay) {
-      if (debug_log_enabled())
-         DEBUG_LOG("Delayed start set, starting in %i seconds ...", var_start_delay);
-
+      DEBUG_LOG("Delayed start set, starting in %i seconds ...", var_start_delay);
       fflush(stdout);   // make sure output is shown before sleep
       sleep(var_start_delay);
    }
 
+  const char *mode = daemon ? "daemon" : "foreground";
+
+   if (var_unix_socket_path)
+       printf("Starting %s server (%s) on unix socket %s\n",
+              APP_NAME, mode, var_unix_socket_path);
+   else
+       printf("Starting %s server (%s) on port %d\n",
+              APP_NAME, mode, var_port);
+
 	// Start the server, possibly in a background
-	if (daemon) {
-		if (var_unix_socket_path)
-			printf("Starting %s daemon on unix socket %s\n", APP_NAME, var_unix_socket_path);
-		else
-			printf("Starting %s daemon on port %d\n", APP_NAME, var_port);
+   if (daemon) {
+       pid = fork();
+       if (pid < 0)
+           die_err("Error: fork() failed");
 
-		pid = fork();
+       if (pid > 0)
+           exit(0);
+   }
 
-		if (pid < 0)
-			die_err("Error on fork");
+   // Child - daemon or foreground continues here
+   #ifdef PROXY_SUPPORT
+   if (var_proxy)
+       proxy_start(var_proxy);
+   #endif
 
-		if (pid == 0) {   // We are in child daemonized process
-#ifdef PROXY_SUPPORT
-			if (var_proxy) {
-				proxy_start(var_proxy);
-			}
-#endif
-			server_start(var_port, var_unix_socket_path);
-			exit(0);
-		}
-
-	} else {
-		if (var_unix_socket_path)
-			printf("Starting %s on unix socket %s\n", APP_NAME, var_unix_socket_path);
-		else
-			printf("Starting %s on port %d\n", APP_NAME, var_port);
-#ifdef PROXY_SUPPORT
-		if (var_proxy) {
-				proxy_start(var_proxy);
-		}
-#endif
-		server_start(var_port, var_unix_socket_path);
-	}
-
-	//waitpid(-1, chldsig, WNOHANG); done in server loop
-	exit(0);
+   server_start(var_port, var_unix_socket_path);   // TODO: also in pproxy mode?
+   exit(0);
 }

@@ -399,6 +399,13 @@ class IntegrationEnvironment:
             return
         command = [
             str(self.server_bin),
+        ]
+        # Worker model args must come BEFORE -c to ensure they override config file
+        if self.server_worker_model:
+            command.extend(["-w", self.server_worker_model])
+        if self.server_prefork_workers is not None:
+            command.extend(["-W", str(self.server_prefork_workers)])
+        command.extend([
             "-c",
             str(self.config_path),
             "-m",
@@ -411,14 +418,10 @@ class IntegrationEnvironment:
             self.namespace,
             "-t",
             self.token,
-        ]
+        ])
         if self.server_unix_socket:
             Path(self.server_unix_socket).parent.mkdir(parents=True, exist_ok=True)
             command.extend(["-u", self.server_unix_socket])
-        if self.server_worker_model:
-            command.extend(["-w", self.server_worker_model])
-        if self.server_prefork_workers is not None:
-            command.extend(["-W", str(self.server_prefork_workers)])
         self.logger.debug("Starting server: %s", " ".join(command))
         self._server = launch_process("rmi-server", command, self.logger, self.verbose)
         if self.server_unix_socket:
@@ -436,6 +439,13 @@ class IntegrationEnvironment:
         )
         command = [
             str(self.proxy_bin),
+        ]
+        # Worker model args must come BEFORE -c to ensure they override config file
+        if self.proxy_worker_model:
+            command.extend(["-w", self.proxy_worker_model])
+        if self.proxy_prefork_workers is not None:
+            command.extend(["-W", str(self.proxy_prefork_workers)])
+        command.extend([
             "-c",
             str(self.config_path),
             "-m",
@@ -446,14 +456,10 @@ class IntegrationEnvironment:
             upstream_target,
             "-t",
             self.token,
-        ]
+        ])
         if self.proxy_unix_socket:
             Path(self.proxy_unix_socket).parent.mkdir(parents=True, exist_ok=True)
             command.extend(["-u", self.proxy_unix_socket])
-        if self.proxy_worker_model:
-            command.extend(["-w", self.proxy_worker_model])
-        if self.proxy_prefork_workers is not None:
-            command.extend(["-W", str(self.proxy_prefork_workers)])
         self.logger.debug("Starting proxy: %s", " ".join(command))
         self._proxy = launch_process("rmi-proxy", command, self.logger, self.verbose)
         if self.proxy_unix_socket:

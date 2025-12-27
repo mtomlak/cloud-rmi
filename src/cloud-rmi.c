@@ -41,6 +41,25 @@ void die_err(char *errstr)
    exit(1);
 }
 
+/**
+ * Same as aboce but supports formating
+ * 
+ * @param char* fmt
+ * @param
+ */
+void die_errf(const char *fmt, ...)
+{
+    char buf[1024];
+    va_list ap;
+
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+    perror(buf);
+    exit(1);
+}
+
 #ifdef LEGACY_STREAM
 /**
  * Writes formatted string to the stream, similar usage as sprintf().

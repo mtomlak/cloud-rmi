@@ -1303,6 +1303,10 @@ void proxy_init_connections_ex(int prewarm_spares)
 
    proxy_connections_initialized = 1;
 
+   /* Skip if interfaces are already loaded (e.g., in unit tests) */
+   //if (proxy_iface_map != NULL)
+   //   return;
+
    DEBUG_LOG("proxy-init-connections pid=%d proxy_count=%d prewarm=%d",
       (int)getpid(), proxy_count, prewarm_spares);
 
