@@ -12,6 +12,8 @@
 #include <syslog.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <poll.h>
+#include <fcntl.h>
 #include "cloud-rmi.h"
 #include "config.h"
 #ifdef PROXY_SUPPORT
@@ -43,7 +45,22 @@ static pid_t server_owner_pid = 0;
 /* Prefork worker tracking */
 static pid_t *prefork_worker_pids = NULL;
 static int prefork_worker_count = 0;
-static volatile sig_atomic_t prefork_shutdown_requested = 0;
+static volatile sig_atomic_t worker_pool_shutdown_requested = 0;
+
+typedef struct {
+   pid_t pid;
+   int control_fd;      /* Read end of worker control pipe */
+   int idle_reported;   /* Whether worker reported idle */
+   int terminating;     /* Whether worker is being trimmed */
+} adaptive_worker_slot_t;
+
+static adaptive_worker_slot_t *adaptive_workers = NULL;
+static int adaptive_worker_capacity = 0;
+static int adaptive_idle_workers = 0;
+
+/* Forward declarations for adaptive helpers */
+static int adaptive_find_worker_slot(pid_t pid);
+static void adaptive_clear_slot(int index);
 
 static void cleanup_listen_socket()
 {
@@ -128,7 +145,16 @@ static int prefork_find_worker_slot(pid_t pid)
 }
 
 /* Prefork mode: spawn a single worker */
-static pid_t prefork_spawn_worker(int listen_fd, int is_unix_socket, int worker_index)
+static void worker_send_state(int control_fd, char state)
+{
+   if (control_fd < 0)
+      return;
+
+   /* Best-effort; failures are ignored to avoid interfering with hot path. */
+   (void)write(control_fd, &state, 1);
+}
+
+static pid_t prefork_spawn_worker(int listen_fd, int is_unix_socket, int worker_index, int control_fd_write, int control_fd_read, int adaptive_mode)
 {
    pid_t pid = fork();
 
@@ -161,6 +187,9 @@ static pid_t prefork_spawn_worker(int listen_fd, int is_unix_socket, int worker_
       sigaction(SIGTERM, &sa_dfl, NULL);
       sigaction(SIGINT, &sa_dfl, NULL);
 
+      if (control_fd_read >= 0)
+         close(control_fd_read);
+
 #ifdef PROXY_SUPPORT
       /* In prefork mode with proxy, each worker must have its own upstream pool.
        * Reset and initialize connections before accepting clients.
@@ -173,11 +202,18 @@ static pid_t prefork_spawn_worker(int listen_fd, int is_unix_socket, int worker_
 
       log_event(LOG_INFO, "worker-start pid=%d worker=%d", (int)getpid(), worker_index);
 
+      int reported_idle = 0;
+
       /* Worker accept loop - does NOT fork per connection */
       while (server_should_run) {
          struct sockaddr_storage cli_addr;
          socklen_t clilen = is_unix_socket ? sizeof(struct sockaddr_un) : sizeof(struct sockaddr_in);
          int newsockfd;
+
+         if (adaptive_mode && !reported_idle) {
+            worker_send_state(control_fd_write, 'I');
+            reported_idle = 1;
+         }
 
          newsockfd = accept(listen_fd, (struct sockaddr *)&cli_addr, &clilen);
 
@@ -195,17 +231,29 @@ static pid_t prefork_spawn_worker(int listen_fd, int is_unix_socket, int worker_
             continue;
          }
 
+         if (adaptive_mode && reported_idle) {
+            worker_send_state(control_fd_write, 'B');
+            reported_idle = 0;
+         }
+
          /* Handle connection directly - no fork in prefork mode */
          handle_connection(newsockfd, is_unix_socket);
          close(newsockfd);
       }
+
+      if (adaptive_mode && reported_idle) {
+         worker_send_state(control_fd_write, 'B');
+      }
+      if (control_fd_write >= 0)
+         close(control_fd_write);
 
       DEBUG_LOG("worker-exit pid=%d worker=%d", (int)getpid(), worker_index);
       _exit(0);
    }
 
    /* Parent: log worker spawn */
-   log_event(LOG_INFO, "prefork-spawned worker=%d pid=%d", worker_index, (int)pid);
+   log_event(LOG_INFO, "%s-spawned worker=%d pid=%d",
+      adaptive_mode ? "adaptive" : "prefork", worker_index, (int)pid);
    return pid;
 }
 
@@ -214,7 +262,7 @@ static void prefork_sigchld_handler(int signo)
 {
    (void)signo;
 
-   if (prefork_shutdown_requested)
+   if (worker_pool_shutdown_requested)
       return;
 
    pid_t pid;
@@ -230,11 +278,11 @@ static void prefork_sigchld_handler(int signo)
 }
 
 /* Prefork mode: shutdown handler */
-static void prefork_shutdown_handler(int signo)
+static void worker_pool_shutdown_handler(int signo)
 {
    (void)signo;
 
-   prefork_shutdown_requested = 1;
+   worker_pool_shutdown_requested = 1;
    server_should_run = 0;
 
    /* Close the listen socket to help workers exit accept() faster */
@@ -255,13 +303,52 @@ static void install_prefork_handlers()
    sigaction(SIGCHLD, &sa_chld, NULL);
 
    /* Shutdown handlers */
-   sa_term.sa_handler = prefork_shutdown_handler;
+   sa_term.sa_handler = worker_pool_shutdown_handler;
    sigemptyset(&sa_term.sa_mask);
    sa_term.sa_flags = 0;
    sigaction(SIGTERM, &sa_term, NULL);
    sigaction(SIGINT, &sa_term, NULL);
 
    /* Ignore SIGPIPE */
+   sa_ign.sa_handler = SIG_IGN;
+   sigemptyset(&sa_ign.sa_mask);
+   sa_ign.sa_flags = 0;
+   sigaction(SIGPIPE, &sa_ign, NULL);
+}
+
+static void adaptive_sigchld_handler(int signo)
+{
+   (void)signo;
+
+   if (worker_pool_shutdown_requested)
+      return;
+
+   pid_t pid;
+   int status;
+
+   while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+      int slot = adaptive_find_worker_slot(pid);
+      if (slot >= 0) {
+         adaptive_clear_slot(slot);
+      }
+   }
+}
+
+static void install_adaptive_handlers()
+{
+   struct sigaction sa_chld, sa_term, sa_ign;
+
+   sa_chld.sa_handler = adaptive_sigchld_handler;
+   sigemptyset(&sa_chld.sa_mask);
+   sa_chld.sa_flags = SA_RESTART;
+   sigaction(SIGCHLD, &sa_chld, NULL);
+
+   sa_term.sa_handler = worker_pool_shutdown_handler;
+   sigemptyset(&sa_term.sa_mask);
+   sa_term.sa_flags = 0;
+   sigaction(SIGTERM, &sa_term, NULL);
+   sigaction(SIGINT, &sa_term, NULL);
+
    sa_ign.sa_handler = SIG_IGN;
    sigemptyset(&sa_ign.sa_mask);
    sa_ign.sa_flags = 0;
@@ -297,11 +384,201 @@ static void prefork_respawn_workers(int listen_fd, int is_unix_socket)
 {
    for (int i = 0; i < prefork_worker_count; i++) {
       if (prefork_worker_pids[i] == 0) {
-         pid_t new_pid = prefork_spawn_worker(listen_fd, is_unix_socket, i);
+         pid_t new_pid = prefork_spawn_worker(listen_fd, is_unix_socket, i, -1, -1, 0);
          if (new_pid > 0) {
             prefork_worker_pids[i] = new_pid;
             log_event(LOG_INFO, "prefork-respawned worker=%d pid=%d", i, (int)new_pid);
          }
+      }
+   }
+}
+
+/* Adaptive pool helpers */
+static int adaptive_find_worker_slot(pid_t pid)
+{
+   for (int i = 0; i < adaptive_worker_capacity; i++) {
+      if (adaptive_workers[i].pid == pid)
+         return i;
+   }
+   return -1;
+}
+
+static void adaptive_clear_slot(int index)
+{
+   if (index < 0 || index >= adaptive_worker_capacity)
+      return;
+
+   if (adaptive_workers[index].idle_reported && adaptive_idle_workers > 0)
+      adaptive_idle_workers--;
+
+   if (adaptive_workers[index].control_fd >= 0)
+      close(adaptive_workers[index].control_fd);
+
+   adaptive_workers[index].pid = 0;
+   adaptive_workers[index].control_fd = -1;
+   adaptive_workers[index].idle_reported = 0;
+   adaptive_workers[index].terminating = 0;
+}
+
+static void adaptive_update_worker_state(int index, char state)
+{
+   if (index < 0 || index >= adaptive_worker_capacity)
+      return;
+
+   if (state == 'I') {
+      if (!adaptive_workers[index].idle_reported) {
+         adaptive_workers[index].idle_reported = 1;
+         adaptive_idle_workers++;
+      }
+   } else if (state == 'B') {
+      if (adaptive_workers[index].idle_reported) {
+         adaptive_workers[index].idle_reported = 0;
+         if (adaptive_idle_workers > 0)
+            adaptive_idle_workers--;
+      }
+   }
+}
+
+static void adaptive_process_control_fd(int index)
+{
+   int fd = adaptive_workers[index].control_fd;
+   char buf[64];
+   ssize_t rd;
+
+   if (fd < 0)
+      return;
+
+   while ((rd = read(fd, buf, sizeof(buf))) > 0) {
+      for (ssize_t i = 0; i < rd; i++) {
+         adaptive_update_worker_state(index, buf[i]);
+      }
+   }
+
+   if (rd < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+      log_unexpected_event(LOG_DEBUG, "adaptive-control-read-failed idx=%d errno=%d", index, errno);
+   }
+}
+
+static void adaptive_poll_worker_states()
+{
+   if (adaptive_worker_capacity == 0)
+      return;
+
+   struct pollfd pfds[ADAPTIVE_WORKERS_MAX];
+   int slot_map[ADAPTIVE_WORKERS_MAX];
+   int nfds = 0;
+
+   for (int i = 0; i < adaptive_worker_capacity && nfds < ADAPTIVE_WORKERS_MAX; i++) {
+      if (adaptive_workers[i].pid > 0 && adaptive_workers[i].control_fd >= 0) {
+         pfds[nfds].fd = adaptive_workers[i].control_fd;
+         pfds[nfds].events = POLLIN;
+         slot_map[nfds] = i;
+         nfds++;
+      }
+   }
+
+   if (nfds == 0)
+      return;
+
+   int ret = poll(pfds, nfds, 250);
+   if (ret <= 0) {
+      return;
+   }
+
+   for (int i = 0; i < nfds; i++) {
+      if (pfds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+         adaptive_clear_slot(slot_map[i]);
+         continue;
+      }
+
+      if (pfds[i].revents & POLLIN) {
+         adaptive_process_control_fd(slot_map[i]);
+      }
+   }
+}
+
+static int adaptive_active_workers()
+{
+   int count = 0;
+   for (int i = 0; i < adaptive_worker_capacity; i++) {
+      if (adaptive_workers[i].pid > 0)
+         count++;
+   }
+   return count;
+}
+
+static int adaptive_find_free_slot()
+{
+   for (int i = 0; i < adaptive_worker_capacity; i++) {
+      if (adaptive_workers[i].pid == 0 && !adaptive_workers[i].terminating)
+         return i;
+   }
+   return -1;
+}
+
+static void adaptive_trim_idle_worker()
+{
+   for (int i = 0; i < adaptive_worker_capacity; i++) {
+      if (adaptive_workers[i].pid > 0 && adaptive_workers[i].idle_reported && !adaptive_workers[i].terminating) {
+         adaptive_workers[i].terminating = 1;
+         if (adaptive_workers[i].idle_reported && adaptive_idle_workers > 0) {
+            adaptive_idle_workers--;
+            adaptive_workers[i].idle_reported = 0;
+         }
+         kill(adaptive_workers[i].pid, SIGTERM);
+         log_event(LOG_INFO, "adaptive-trim worker=%d pid=%d", i, (int)adaptive_workers[i].pid);
+         return;
+      }
+   }
+}
+
+static pid_t adaptive_spawn_worker(int listen_fd, int is_unix_socket, int worker_index)
+{
+   int pipefd[2];
+
+   if (pipe(pipefd) < 0) {
+      log_unexpected_event(LOG_ERR, "adaptive-pipe-failed worker=%d errno=%d", worker_index, errno);
+      return -1;
+   }
+
+   if (fcntl(pipefd[0], F_SETFL, O_NONBLOCK) < 0) {
+      log_unexpected_event(LOG_ERR, "adaptive-pipe-nonblock-failed worker=%d errno=%d", worker_index, errno);
+   }
+   fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
+   fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
+
+   pid_t pid = prefork_spawn_worker(listen_fd, is_unix_socket, worker_index, pipefd[1], pipefd[0], 1);
+
+   if (pid < 0) {
+      close(pipefd[0]);
+      close(pipefd[1]);
+      return -1;
+   }
+
+   close(pipefd[1]);
+   adaptive_workers[worker_index].pid = pid;
+   adaptive_workers[worker_index].control_fd = pipefd[0];
+   adaptive_workers[worker_index].idle_reported = 0;
+   adaptive_workers[worker_index].terminating = 0;
+   return pid;
+}
+
+static void adaptive_terminate_workers()
+{
+   for (int i = 0; i < adaptive_worker_capacity; i++) {
+      if (adaptive_workers[i].pid > 0) {
+         kill(adaptive_workers[i].pid, SIGTERM);
+      }
+   }
+
+   for (int i = 0; i < adaptive_worker_capacity; i++) {
+      if (adaptive_workers[i].pid > 0) {
+         int status;
+         pid_t pid = waitpid(adaptive_workers[i].pid, &status, 0);
+         if (pid > 0) {
+            log_event(LOG_INFO, "adaptive-reaped worker=%d pid=%d", i, (int)pid);
+         }
+         adaptive_clear_slot(i);
       }
    }
 }
@@ -397,6 +674,7 @@ int server_start(int port_num, const char *unix_socket_path)
    server_socket_fd = -1;
    server_socket_path[0] = '\0';
    server_use_unix_socket = use_unix_socket;
+   worker_pool_shutdown_requested = 0;
 
    install_reaper();
    install_shutdown_handlers();
@@ -456,9 +734,15 @@ int server_start(int port_num, const char *unix_socket_path)
    listen(sockfd, 5);
 
    /* Log startup info */
+   int worker_log_count = 0;
+   if (var_worker_model == WORKER_MODEL_PREFORK)
+      worker_log_count = var_prefork_workers;
+   else if (var_worker_model == WORKER_MODEL_ADAPTIVE)
+      worker_log_count = var_adaptive_max_workers;
+
    log_event(LOG_INFO, "server-start worker_model=%s workers=%d pid=%d",
-      var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork",
-      var_worker_model == WORKER_MODEL_PREFORK ? var_prefork_workers : 0,
+      worker_model_to_string(var_worker_model),
+      worker_log_count,
       (int)getpid());
 
    if (var_worker_model == WORKER_MODEL_PREFORK) {
@@ -475,7 +759,7 @@ int server_start(int port_num, const char *unix_socket_path)
 
       /* Spawn initial workers */
       for (i = 0; i < prefork_worker_count; i++) {
-         pid_t pid = prefork_spawn_worker(sockfd, use_unix_socket, i);
+         pid_t pid = prefork_spawn_worker(sockfd, use_unix_socket, i, -1, -1, 0);
          if (pid > 0) {
             prefork_worker_pids[i] = pid;
          } else {
@@ -488,11 +772,11 @@ int server_start(int port_num, const char *unix_socket_path)
        * Use a simple polling loop with short sleeps to check for:
        * - Shutdown signals (flags set by handler)
        * - Dead workers that need respawning (via SIGCHLD -> flag in handler) */
-      while (!prefork_shutdown_requested) {
+      while (!worker_pool_shutdown_requested) {
          struct timespec ts = {0, 100000000};  /* 100ms */
          nanosleep(&ts, NULL);  /* Interruptible by signals */
 
-         if (prefork_shutdown_requested)
+         if (worker_pool_shutdown_requested)
             break;
 
          /* Respawn any dead workers */
@@ -506,6 +790,73 @@ int server_start(int port_num, const char *unix_socket_path)
       free(prefork_worker_pids);
       prefork_worker_pids = NULL;
       prefork_worker_count = 0;
+
+      cleanup_listen_socket();
+      return 0;
+   }
+   else if (var_worker_model == WORKER_MODEL_ADAPTIVE) {
+      int i;
+
+      adaptive_worker_capacity = var_adaptive_max_workers;
+      adaptive_workers = calloc(adaptive_worker_capacity, sizeof(adaptive_worker_slot_t));
+      if (adaptive_workers == NULL)
+         die_err("Error: Failed to allocate adaptive worker array");
+
+      for (i = 0; i < adaptive_worker_capacity; i++) {
+         adaptive_workers[i].control_fd = -1;
+      }
+
+      worker_pool_shutdown_requested = 0;
+
+      install_adaptive_handlers();
+
+      for (i = 0; i < var_adaptive_min_workers; i++) {
+         int slot = adaptive_find_free_slot();
+         if (slot < 0)
+            break;
+         pid_t pid = adaptive_spawn_worker(sockfd, use_unix_socket, slot);
+         if (pid <= 0) {
+            adaptive_clear_slot(slot);
+         }
+      }
+
+      while (!worker_pool_shutdown_requested) {
+         adaptive_poll_worker_states();
+
+         int active = adaptive_active_workers();
+
+         if (active < var_adaptive_min_workers) {
+            int needed = var_adaptive_min_workers - active;
+            for (i = 0; i < needed && !worker_pool_shutdown_requested; i++) {
+               int slot = adaptive_find_free_slot();
+               if (slot < 0)
+                  break;
+               pid_t pid = adaptive_spawn_worker(sockfd, use_unix_socket, slot);
+               if (pid <= 0)
+                  adaptive_clear_slot(slot);
+            }
+         } else if (adaptive_idle_workers < var_adaptive_spare_workers && active < var_adaptive_max_workers) {
+            int slot = adaptive_find_free_slot();
+            if (slot >= 0) {
+               pid_t pid = adaptive_spawn_worker(sockfd, use_unix_socket, slot);
+               if (pid <= 0)
+                  adaptive_clear_slot(slot);
+            }
+         } else if (adaptive_idle_workers > var_adaptive_spare_workers && active > var_adaptive_min_workers) {
+            adaptive_trim_idle_worker();
+         }
+
+         struct timespec ts = {0, 100000000};  /* 100ms */
+         nanosleep(&ts, NULL);  /* Interruptible by signals */
+      }
+
+      log_event(LOG_INFO, "adaptive-shutdown pid=%d", (int)getpid());
+      adaptive_terminate_workers();
+
+      free(adaptive_workers);
+      adaptive_workers = NULL;
+      adaptive_worker_capacity = 0;
+      adaptive_idle_workers = 0;
 
       cleanup_listen_socket();
       return 0;
@@ -737,7 +1088,7 @@ int read_iface_config(char *config_file)
 
 void server_send_stats(int sock)
 {
-   const char *model = var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork";
+   const char *model = worker_model_to_string(var_worker_model);
 
    /* Only parent process can enumerate workers. Workers report their model but empty list. */
    if (var_worker_model == WORKER_MODEL_PREFORK && getpid() == server_owner_pid && prefork_worker_pids != NULL) {
@@ -764,6 +1115,30 @@ void server_send_stats(int sock)
       stream_writeln(sock,
          "200 {\"worker_model\":\"%s\",\"workers\":%s,\"reuse_enabled\":false,\"total_spare\":%d,\"listed\":%d,\"trimmed\":false}",
          model, workers_json, active_count, active_count);
+   } else if (var_worker_model == WORKER_MODEL_ADAPTIVE && getpid() == server_owner_pid && adaptive_workers != NULL) {
+      char workers_json[2048];
+      size_t offset = 0;
+      int first = 1;
+      int active_count = 0;
+      int spare = adaptive_idle_workers;
+
+      offset += snprintf(workers_json + offset, sizeof(workers_json) - offset, "[");
+
+      for (int i = 0; i < adaptive_worker_capacity && offset < sizeof(workers_json) - 50; i++) {
+         if (adaptive_workers[i].pid > 0) {
+            offset += snprintf(workers_json + offset, sizeof(workers_json) - offset,
+               "%s{\"index\":%d,\"pid\":%d}",
+               first ? "" : ",", i, (int)adaptive_workers[i].pid);
+            first = 0;
+            active_count++;
+         }
+      }
+
+      offset += snprintf(workers_json + offset, sizeof(workers_json) - offset, "]");
+
+      stream_writeln(sock,
+         "200 {\"worker_model\":\"%s\",\"workers\":%s,\"reuse_enabled\":false,\"total_spare\":%d,\"listed\":%d,\"trimmed\":false}",
+         model, workers_json, spare, active_count);
    } else {
       /* Fork mode or worker process: include legacy fields for backwards compatibility */
       stream_writeln(sock,

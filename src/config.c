@@ -43,6 +43,9 @@ char *var_interface_map_file = INTERFACE_MAP_FILE;
 size_t var_max_payload = RMI_DEFAULT_MAX_PAYLOAD;
 worker_model_t var_worker_model = WORKER_MODEL_FORK;
 int var_prefork_workers = PREFORK_WORKERS_DEFAULT;
+int var_adaptive_min_workers = ADAPTIVE_MIN_WORKERS_DEFAULT;
+int var_adaptive_max_workers = ADAPTIVE_MAX_WORKERS_DEFAULT;
+int var_adaptive_spare_workers = ADAPTIVE_SPARE_WORKERS_DEFAULT;
 
 static void sanitize_script_base_namespace()
 {
@@ -226,10 +229,13 @@ int read_config(char *config_file)
          else if (strcasecmp(conf_value, "prefork") == 0) {
             var_worker_model = WORKER_MODEL_PREFORK;
          }
+         else if (strcasecmp(conf_value, "adaptive") == 0) {
+            var_worker_model = WORKER_MODEL_ADAPTIVE;
+         }
          else {
             log_unexpected_event(
                LOG_WARNING,
-               "config: invalid worker_model=\"%s\" (expected fork|prefork)",
+               "config: invalid worker_model=\"%s\" (expected fork|prefork|adaptive)",
                conf_value
             );
             /* keep default */
@@ -239,7 +245,8 @@ int read_config(char *config_file)
             log_event(
                LOG_INFO,
                "config:set worker_model=\"%s\"",
-               var_worker_model == WORKER_MODEL_PREFORK ? "prefork" : "fork"
+               var_worker_model == WORKER_MODEL_PREFORK ? "prefork" :
+               var_worker_model == WORKER_MODEL_ADAPTIVE ? "adaptive" : "fork"
             );
          }
       }
@@ -254,6 +261,45 @@ int read_config(char *config_file)
 
          if(log_level > 0) {
             log_event(LOG_INFO, "config:set prefork_workers=\"%d\"", var_prefork_workers);
+         }
+      }
+      else if (strcasecmp(conf_name, "adaptive_min_workers") == 0) {
+         int workers = atoi(conf_value);
+         if (workers < ADAPTIVE_WORKERS_MIN) {
+            workers = ADAPTIVE_WORKERS_MIN;
+         } else if (workers > ADAPTIVE_WORKERS_MAX) {
+            workers = ADAPTIVE_WORKERS_MAX;
+         }
+         var_adaptive_min_workers = workers;
+
+         if (log_level > 0) {
+            log_event(LOG_INFO, "config:set adaptive_min_workers=\"%d\"", var_adaptive_min_workers);
+         }
+      }
+      else if (strcasecmp(conf_name, "adaptive_max_workers") == 0) {
+         int workers = atoi(conf_value);
+         if (workers < ADAPTIVE_WORKERS_MIN) {
+            workers = ADAPTIVE_WORKERS_MIN;
+         } else if (workers > ADAPTIVE_WORKERS_MAX) {
+            workers = ADAPTIVE_WORKERS_MAX;
+         }
+         var_adaptive_max_workers = workers;
+
+         if (log_level > 0) {
+            log_event(LOG_INFO, "config:set adaptive_max_workers=\"%d\"", var_adaptive_max_workers);
+         }
+      }
+      else if (strcasecmp(conf_name, "adaptive_spare_workers") == 0) {
+         int workers = atoi(conf_value);
+         if (workers < 0) {
+            workers = 0;
+         } else if (workers > ADAPTIVE_WORKERS_MAX) {
+            workers = ADAPTIVE_WORKERS_MAX;
+         }
+         var_adaptive_spare_workers = workers;
+
+         if (log_level > 0) {
+            log_event(LOG_INFO, "config:set adaptive_spare_workers=\"%d\"", var_adaptive_spare_workers);
          }
       }
 #ifdef ENABLE_DEBUG_LOGGING
@@ -296,10 +342,54 @@ int read_config(char *config_file)
    if (debug_log_enabled())
       DEBUG_LOG("Configuration loaded (unix_socket_skip_auth=%i, script_exec_dir=%s)", var_unix_socket_skip_auth, var_script_exec_dir);
 
+   normalize_worker_config();
+
    return 1;
 }
 
 void normalize_script_base_namespace()
 {
    sanitize_script_base_namespace();
+}
+
+void normalize_worker_config()
+{
+   if (var_prefork_workers < PREFORK_WORKERS_MIN)
+      var_prefork_workers = PREFORK_WORKERS_MIN;
+   else if (var_prefork_workers > PREFORK_WORKERS_MAX)
+      var_prefork_workers = PREFORK_WORKERS_MAX;
+
+   if (var_adaptive_min_workers < ADAPTIVE_WORKERS_MIN)
+      var_adaptive_min_workers = ADAPTIVE_WORKERS_MIN;
+   else if (var_adaptive_min_workers > ADAPTIVE_WORKERS_MAX)
+      var_adaptive_min_workers = ADAPTIVE_WORKERS_MAX;
+
+   if (var_adaptive_max_workers < ADAPTIVE_WORKERS_MIN)
+      var_adaptive_max_workers = ADAPTIVE_WORKERS_MIN;
+   else if (var_adaptive_max_workers > ADAPTIVE_WORKERS_MAX)
+      var_adaptive_max_workers = ADAPTIVE_WORKERS_MAX;
+
+   if (var_adaptive_min_workers > var_adaptive_max_workers)
+      var_adaptive_min_workers = var_adaptive_max_workers;
+
+   if (var_adaptive_spare_workers < 0)
+      var_adaptive_spare_workers = 0;
+   else if (var_adaptive_spare_workers > ADAPTIVE_WORKERS_MAX)
+      var_adaptive_spare_workers = ADAPTIVE_WORKERS_MAX;
+
+   if (var_adaptive_spare_workers > var_adaptive_max_workers)
+      var_adaptive_spare_workers = var_adaptive_max_workers;
+}
+
+const char *worker_model_to_string(worker_model_t model)
+{
+   switch (model) {
+      case WORKER_MODEL_PREFORK:
+         return "prefork";
+      case WORKER_MODEL_ADAPTIVE:
+         return "adaptive";
+      case WORKER_MODEL_FORK:
+      default:
+         return "fork";
+   }
 }

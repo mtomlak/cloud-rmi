@@ -1327,7 +1327,9 @@ void proxy_init_connections_ex(int prewarm_spares)
  */
 void proxy_init_connections(void)
 {
-   proxy_init_connections_ex(var_worker_model == WORKER_MODEL_PREFORK);
+   proxy_init_connections_ex(
+      var_worker_model == WORKER_MODEL_PREFORK ||
+      var_worker_model == WORKER_MODEL_ADAPTIVE);
 }
 
 /**

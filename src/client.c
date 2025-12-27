@@ -20,9 +20,9 @@
 #include <cloudrmi/semantics.h>
 
 /**
- * Simple RMI client in C
+ * CloudRMI client in C
  *
- * @copyright Copyright (C) 2016 ProfiWeb sro (http://profiweb.biz/).
+ * @copyright Copyright (C) 2016-2025 ProfiWeb, s.r.o (https://profiweb.biz/).
  * @author Marian Tomlak
  * @license BSD
  */

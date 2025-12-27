@@ -9,12 +9,18 @@ debug           = Off
 debug_traffic   = Off
 
 # Worker model settings
-# worker_model: fork (default) or prefork
-#   fork    - Fork per connection (default)
-#   prefork - Pre-fork worker pool (recommended for proxy with high concurrency)
-#             Each worker maintains its own upstream connection pool
+# worker_model: fork (default), prefork, or adaptive
+#   fork     - Fork per connection (default)
+#   prefork  - Pre-fork worker pool (recommended for proxy with high concurrency)
+#              Each worker maintains its own upstream connection pool
+#   adaptive - Adaptive prefork pool (dynamic workers with spare capacity target)
 worker_model    = prefork
 
-# Number of worker processes for prefork mode (ignored in fork mode)
+# Number of worker processes for prefork mode (ignored in fork/adaptive modes)
 # Range: 1-1024, default: 4
 prefork_workers = 4
+
+# Adaptive pool configuration (ignored unless worker_model=adaptive)
+#adaptive_min_workers   = 2
+#adaptive_max_workers   = 8
+#adaptive_spare_workers = 2

@@ -23,7 +23,7 @@
 /**
  * Handles Cloud Simple RMI protocol and server side communication.
  *
- * @copyright Copyright (C) 2016 ProfiWeb sro (http://profiweb.biz/).
+ * @copyright Copyright (C) 2016-2025 ProfiWeb sro (http://profiweb.biz/).
  * @project cloud-rmi
  * @author Marian Tomlak
  * @license BSD

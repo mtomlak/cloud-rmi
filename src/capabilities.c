@@ -5,6 +5,16 @@
 #include "capabilities.h"
 #include "cloud-rmi.h"
 
+/**
+ * CloudRMI
+ * 
+ * Capabilities implementation
+ *
+ * @copyright Copyright (C) 2016-2025 ProfiWeb, s.r.o (https://profiweb.biz/).
+ * @author Marian Tomlak
+ * @license BSD
+ */
+
 struct capability_def {
    uint32_t bit;
    const char *token;
