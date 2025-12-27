@@ -375,8 +375,17 @@ class IntegrationEnvironment:
         return "127.0.0.1"
 
     @property
-    def config_path(self) -> Path:
+    def server_config_path(self) -> Path:
         return self.root / "tests" / "integration" / "fixtures" / "rmi-server.conf"
+
+    @property
+    def proxy_config_path(self) -> Path:
+        return self.root / "tests" / "integration" / "fixtures" / "rmi-proxy.conf"
+
+    @property
+    def config_path(self) -> Path:
+        # Backward compatibility alias for server_config_path
+        return self.server_config_path
 
     @property
     def interface_map(self) -> Path:
@@ -407,7 +416,7 @@ class IntegrationEnvironment:
             command.extend(["-W", str(self.server_prefork_workers)])
         command.extend([
             "-c",
-            str(self.config_path),
+            str(self.server_config_path),
             "-m",
             str(self.interface_map),
             "-p",
@@ -447,7 +456,7 @@ class IntegrationEnvironment:
             command.extend(["-W", str(self.proxy_prefork_workers)])
         command.extend([
             "-c",
-            str(self.config_path),
+            str(self.proxy_config_path),
             "-m",
             str(self.interface_map),
             "-p",
