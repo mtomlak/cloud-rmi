@@ -6,10 +6,24 @@ import logging
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from harness import IntegrationEnvironment, IntegrationRunner
 from test_cases import DIRECT_CASES, PROXY_CASES, UNIX_CASES, WORKER_MODEL_CASES
+
+
+@dataclass
+class SuitePlan:
+    name: str
+    env: IntegrationEnvironment
+    cases: list
+
+
+@dataclass
+class SuiteResult:
+    name: str
+    results: list
 
 
 def bootstrap_venv(venv_path: Path) -> None:
@@ -64,6 +78,28 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args(remaining)
 
 
+def prepare_unix_paths(args: argparse.Namespace, suffix: str) -> tuple[str, str, str]:
+    server_socket = Path(args.unix_server_socket)
+    proxy_socket = Path(args.unix_proxy_socket)
+    upstream_socket = Path(args.unix_upstream_socket) if args.unix_upstream_socket else server_socket
+
+    def add_suffix(path: Path) -> Path:
+        return path.parent / f"{path.stem}-{suffix}{path.suffix}"
+
+    server_socket = add_suffix(server_socket)
+    proxy_socket = add_suffix(proxy_socket)
+    upstream_socket = add_suffix(upstream_socket)
+
+    for sock in (server_socket, proxy_socket, upstream_socket):
+        sock.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            sock.unlink()
+        except FileNotFoundError:
+            pass
+
+    return str(server_socket), str(proxy_socket), str(upstream_socket)
+
+
 def main() -> int:
     args = parse_args()
 
@@ -75,58 +111,93 @@ def main() -> int:
     logging.basicConfig(level=log_level, format="%(asctime)s %(levelname)s %(message)s")
 
     root = Path(__file__).resolve().parents[2]
-    suites: list[tuple[IntegrationEnvironment, list]] = []
+    suites: list[SuitePlan] = []
 
     base_cases = DIRECT_CASES + PROXY_CASES
     if args.filter:
         base_cases = [case for case in base_cases if args.filter in case.name]
 
-    if base_cases:
-        suites.append(
-            (
-                IntegrationEnvironment(
-                    root=root,
-                    server_port=args.server_port,
-                    proxy_port=args.proxy_port,
-                    token=args.token,
-                    namespace=args.namespace,
-                    verbose=args.verbose > 0,
-                ),
-                base_cases,
-            )
-        )
-
     unix_cases = UNIX_CASES
     if args.filter:
         unix_cases = [case for case in unix_cases if args.filter in case.name]
 
+    all_cases = base_cases + ([] if args.skip_unix else unix_cases)
+
+    def add_suite(name: str, env: IntegrationEnvironment, cases: list) -> None:
+        if cases:
+            suites.append(SuitePlan(name=name, env=env, cases=cases))
+
+    # Default run with the configured worker model (from binary defaults)
+    default_server_socket = default_proxy_socket = default_upstream_socket = None
     if not args.skip_unix and unix_cases:
-        server_socket = Path(args.unix_server_socket)
-        proxy_socket = Path(args.unix_proxy_socket)
-        upstream_socket = Path(args.unix_upstream_socket) if args.unix_upstream_socket else server_socket
+        default_server_socket, default_proxy_socket, default_upstream_socket = prepare_unix_paths(args, "default")
 
-        for sock in (server_socket, proxy_socket, upstream_socket):
-            sock.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                sock.unlink()
-            except FileNotFoundError:
-                pass
+    add_suite(
+        "default",
+        IntegrationEnvironment(
+            root=root,
+            server_port=args.server_port,
+            proxy_port=args.proxy_port,
+            token=args.token,
+            namespace=args.namespace,
+            server_unix_socket=default_server_socket,
+            proxy_unix_socket=default_proxy_socket,
+            upstream_unix_socket=default_upstream_socket,
+            verbose=args.verbose > 0,
+        ),
+        all_cases,
+    )
 
-        suites.append(
-            (
-                IntegrationEnvironment(
-                    root=root,
-                    server_port=args.server_port,
-                    proxy_port=args.proxy_port,
-                    token=args.token,
-                    namespace=args.namespace,
-                    server_unix_socket=str(server_socket),
-                    proxy_unix_socket=str(proxy_socket),
-                    upstream_unix_socket=str(upstream_socket),
-                    verbose=args.verbose > 0,
-                ),
-                unix_cases,
-            )
+    # Run the full suite for each worker model variant
+    worker_variants = [
+        ("fork", {"server_worker_model": "fork", "proxy_worker_model": "fork"}),
+        (
+            "prefork",
+            {
+                "server_worker_model": "prefork",
+                "proxy_worker_model": "prefork",
+                "server_prefork_workers": 2,
+                "proxy_prefork_workers": 2,
+            },
+        ),
+        (
+            "adaptive",
+            {
+                "server_worker_model": "adaptive",
+                "proxy_worker_model": "adaptive",
+                "server_adaptive_min_workers": 1,
+                "server_adaptive_max_workers": 4,
+                "server_adaptive_spare_workers": 1,
+                "proxy_adaptive_min_workers": 1,
+                "proxy_adaptive_max_workers": 4,
+                "proxy_adaptive_spare_workers": 1,
+            },
+        ),
+    ]
+
+    for variant_name, variant_overrides in worker_variants:
+        if not all_cases:
+            continue
+
+        server_socket = proxy_socket = upstream_socket = None
+        if not args.skip_unix and unix_cases:
+            server_socket, proxy_socket, upstream_socket = prepare_unix_paths(args, variant_name)
+
+        add_suite(
+            f"{variant_name}-worker-model",
+            IntegrationEnvironment(
+                root=root,
+                server_port=args.server_port,
+                proxy_port=args.proxy_port,
+                token=args.token,
+                namespace=args.namespace,
+                server_unix_socket=server_socket,
+                proxy_unix_socket=proxy_socket,
+                upstream_unix_socket=upstream_socket,
+                verbose=args.verbose > 0,
+                **variant_overrides,
+            ),
+            all_cases,
         )
 
     # Worker model tests (fork vs prefork)
@@ -134,34 +205,43 @@ def main() -> int:
     if args.filter:
         worker_model_cases = [case for case in worker_model_cases if args.filter in case.name]
 
-    if worker_model_cases:
-        suites.append(
-            (
-                IntegrationEnvironment(
-                    root=root,
-                    server_port=args.server_port,
-                    proxy_port=args.proxy_port,
-                    token=args.token,
-                    namespace=args.namespace,
-                    verbose=args.verbose > 0,
-                ),
-                worker_model_cases,
-            )
-        )
+    add_suite(
+        "worker-model-specific",
+        IntegrationEnvironment(
+            root=root,
+            server_port=args.server_port,
+            proxy_port=args.proxy_port,
+            token=args.token,
+            namespace=args.namespace,
+            verbose=args.verbose > 0,
+        ),
+        worker_model_cases,
+    )
 
     if not suites:
         print("No tests matched the provided filter.")
         return 1
 
-    results = []
-    for env, cases in suites:
-        runner = IntegrationRunner(env)
+    results: list = []
+    suite_results: list[SuiteResult] = []
+    for suite in suites:
+        runner = IntegrationRunner(suite.env)
         try:
-            results.extend(runner.run(cases, verbose=args.verbose > 0))
+            suite_run = runner.run(suite.cases, verbose=args.verbose > 0)
+            suite_results.append(SuiteResult(name=suite.name, results=suite_run))
+            results.extend(suite_run)
         except Exception as exc:  # pragma: no cover - integration only
             logging.exception("Integration harness failed")
             print(f"Integration harness failed: {exc}")
             return 1
+
+    if suite_results:
+        print("\nTiming summary:")
+        for summary in suite_results:
+            total = sum(result.duration for result in summary.results)
+            print(f"- {summary.name}: {total:.3f}s total")
+            for result in summary.results:
+                print(f"  - {result.name}: {result.duration:.3f}s")
 
     failures = [result for result in results if not result.passed]
     if failures:
