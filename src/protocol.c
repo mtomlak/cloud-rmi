@@ -401,8 +401,23 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
 
 #ifdef PROXY_SUPPORT
    case RMI_EVENT_PROXY:
-      if (strcmp(event->arg1, "stats") == 0) {
+      if (!var_proxy) {
+         stream_writeln(state->sock, "404 Unsupported");
+         break;
+      }
+
+      if (strcasecmp(event->arg1, "help") == 0) {
+         const char *items[4];
+         size_t idx = 0;
+
+         items[idx++] = "CONNECTIONS";
+         items[idx++] = "WORKERS";
+         items[idx++] = "STATS";
+         json_array_write_line(state->sock, items, idx);
+      } else if (strcasecmp(event->arg1, "connections") == 0 || strcasecmp(event->arg1, "stats") == 0) {
          proxy_send_stats(state->sock);
+      } else if (strcasecmp(event->arg1, "workers") == 0) {
+         server_send_stats(state->sock);
       } else {
          stream_writeln(state->sock, "400 Bad Request Arguments");
       }
@@ -418,6 +433,9 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
       const char *language_label = "C";
       const char *kernel_label = "POSIX";
       const char *role_label = "server";
+      worker_snapshot_view_t worker_view;
+      memset(&worker_view, 0, sizeof(worker_view));
+      worker_snapshot_read(&worker_view);
 
 #ifdef PROXY_SUPPORT
       if (var_proxy)
@@ -444,12 +462,30 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
          line,
          sizeof(line),
          &offset,
-         "],\"build\":{\"language\":\"%s\",\"kernel\":\"%s\",\"version\":\"%s\"},\"runtime\":{\"pid\":%i,\"uptime\":%i}}",
+         "],\"build\":{\"language\":\"%s\",\"kernel\":\"%s\",\"version\":\"%s\"},\"runtime\":{\"pid\":%i,\"uptime\":%i}",
          language_label,
          kernel_label,
          CLOUDRMI_LIBRARY_VERSION,
          (int)getpid(),
          uptime);
+
+      if (worker_view.available) {
+         append_format(
+            line,
+            sizeof(line),
+            &offset,
+            ",\"workers\":{\"model\":\"%s\",\"active\":%d,\"idle\":%d,\"prefork_workers\":%d,"
+            "\"adaptive_min\":%d,\"adaptive_max\":%d,\"adaptive_spare\":%d}",
+            worker_model_to_string((worker_model_t)worker_view.model),
+            worker_view.active_workers,
+            worker_view.idle_workers,
+            worker_view.prefork_workers,
+            worker_view.adaptive_min_workers,
+            worker_view.adaptive_max_workers,
+            worker_view.adaptive_spare_workers);
+      }
+
+      append_format(line, sizeof(line), &offset, "}");
 
       stream_writeln(state->sock, "%s", line);
       break;
@@ -470,6 +506,7 @@ static int handle_command_event(rmi_event_t *event, struct conn_state *state, rm
             stream_writeln(state->sock, "200 Reloading configuration");
             read_config(CONFIGURATION_FILE);
             read_iface_config(INTERFACE_MAP_FILE);
+            worker_snapshot_refresh_config();
          } else {
             stream_writeln(state->sock, "401 Unauthorized");
          }
