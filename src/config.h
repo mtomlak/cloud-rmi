@@ -33,11 +33,11 @@ extern char *var_unix_socket_path;
 extern int var_unix_socket_skip_auth;
 extern char *var_interface_map_file;
 extern size_t var_max_payload;
-/* Worker model configuration */
+
 typedef enum {
-   WORKER_MODEL_FORK = 0,     /* Default: fork per connection */
-   WORKER_MODEL_PREFORK = 1,  /* Prefork: pre-spawned worker pool */
-   WORKER_MODEL_ADAPTIVE = 2  /* Adaptive: dynamic prefork pool */
+   WORKER_MODEL_FORK = 0,
+   WORKER_MODEL_PREFORK = 1, 
+   WORKER_MODEL_ADAPTIVE = 2 
 } worker_model_t;
 
 extern worker_model_t var_worker_model;
@@ -45,16 +45,6 @@ extern int var_prefork_workers;
 extern int var_adaptive_min_workers;
 extern int var_adaptive_max_workers;
 extern int var_adaptive_spare_workers;
-
-#define PREFORK_WORKERS_DEFAULT 4
-#define PREFORK_WORKERS_MIN 1
-#define PREFORK_WORKERS_MAX 1024
-
-#define ADAPTIVE_MIN_WORKERS_DEFAULT 2
-#define ADAPTIVE_MAX_WORKERS_DEFAULT 8
-#define ADAPTIVE_SPARE_WORKERS_DEFAULT 2
-#define ADAPTIVE_WORKERS_MIN PREFORK_WORKERS_MIN
-#define ADAPTIVE_WORKERS_MAX PREFORK_WORKERS_MAX
 
 #ifdef PROXY_SUPPORT
 extern char *var_proxy;
@@ -67,3 +57,24 @@ int read_iface_config(char *config_file);
 void normalize_script_base_namespace();
 void normalize_worker_config();
 const char *worker_model_to_string(worker_model_t model);
+
+// Default values
+#define DEFAULT_PORT 9500
+#define DEFAULT_READ_TIMEOUT 10
+#define DEFAULT_START_DELAY 0
+
+#define DEFAULT_CONTEXT_NAME "default.rmi"
+#define DEFAULT_SCRIPT_EXEC_DIR "/usr/local/libexec/cloud-rmi"
+#define DEFAULT_SCRIPT_BASE_NS "ProfiWeb\\Cloud\\Interfaces\\RMI"
+
+#define DEFAULT_WORKER_MODEL WORKER_MODEL_FORK
+
+#define DEFAULT_PREFORK_WORKERS 4
+#define PREFORK_WORKERS_MIN 1
+#define PREFORK_WORKERS_MAX 1024
+
+#define DEFAULT_ADAPTIVE_MIN_WORKERS 2
+#define DEFAULT_ADAPTIVE_MAX_WORKERS 8
+#define DEFAULT_ADAPTIVE_SPARE_WORKERS 2
+#define ADAPTIVE_WORKERS_MIN PREFORK_WORKERS_MIN
+#define ADAPTIVE_WORKERS_MAX PREFORK_WORKERS_MAX
