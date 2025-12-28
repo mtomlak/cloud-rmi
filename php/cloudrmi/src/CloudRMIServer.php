@@ -16,6 +16,7 @@ class CloudRMIServer
 {
 	protected const DEFAULT_MAX_LINE = 8192;
 	protected const PROTOCOL_V1_MAX_LINE = 262144;
+	protected const DEFAULT_READ_TIMEOUT = 10;
 
 	protected $serverSocket;
 	// Configuration parameters
@@ -34,9 +35,7 @@ class CloudRMIServer
 	protected $doShutdown = false;
 	protected $isAuthenticated = false;
 	protected $username = null;
-	protected $readTimeout = 300;
-	protected $highReadTimeout = 300;
-	protected $noForkReadTimeout = 300;
+	protected $readTimeout = self::DEFAULT_READ_TIMEOUT;
 	protected $unixSocketPath = null;
 	protected $bindings;
 	protected $startedAt;
@@ -199,8 +198,10 @@ class CloudRMIServer
 
 	protected function applyReadTimeoutPolicy()
 	{
-		if ($this->workerModel === self::WORKER_MODEL_SINGLE || !$this->isForkingEnabled())
-			$this->readTimeout = min($this->readTimeout, $this->noForkReadTimeout);
+		$this->readTimeout = (int) $this->readTimeout;
+
+		if ($this->readTimeout <= 0)
+			$this->readTimeout = self::DEFAULT_READ_TIMEOUT;
 	}
 
 	protected function serveSingleModel()
@@ -238,7 +239,6 @@ class CloudRMIServer
 			if ($pid === 0) {
 				$this->isWorkerProcess = true;
 				$this->handleConnection($conn, $this->isUnixSocket());
-				$this->closeServerSocket();
 				exit;
 			}
 
@@ -315,7 +315,6 @@ class CloudRMIServer
 			$this->isWorkerProcess = true;
 			$this->installSignalHandlers();
 			$this->runWorkerLoop();
-			$this->closeServerSocket();
 			exit;
 		}
 
@@ -388,7 +387,6 @@ class CloudRMIServer
 			stream_set_blocking($pair[1], false);
 			$this->runWorkerLoop($pair[1]);
 			$this->closeSocket($pair[1]);
-			$this->closeServerSocket();
 			exit;
 		}
 
@@ -919,12 +917,10 @@ class CloudRMIServer
 				break;
 
 			case RMI_EVENT_IFACES:
-				$this->readTimeout = $this->highReadTimeout;
 				$this->writeIfacesResponse($socket);
 				break;
 
 		case RMI_EVENT_PING:
-			$this->readTimeout = $this->highReadTimeout;
 			$pingEcho = (isset($event['arg1']) && $event['arg1'] !== '') ? (' ' . $event['arg1']) : '';
 			$this->connWriteLn($socket, "200 PONG" . $pingEcho);
 			break;
@@ -1400,7 +1396,6 @@ class CloudRMIServer
 					$this->connWriteLn($socket, '401 Unauthorized');
 					return;
 				}
-				$this->readTimeout = $this->highReadTimeout;
 				$arg = isset($event['arg2']) ? strtolower(trim((string) $event['arg2'])) : '';
 				if ($arg === 'on') {
 					$this->connWriteLn($socket, "200 Debug logging ON");
@@ -1454,7 +1449,6 @@ class CloudRMIServer
 					$this->connWriteLn($socket, '401 Unauthorized');
 					return;
 				}
-				$this->readTimeout = $this->highReadTimeout;
 				$debugArg = strtolower(trim($subarg));
 				if ($debugArg === 'on') {
 					$this->connWriteLn($socket, "200 Debug logging ON");

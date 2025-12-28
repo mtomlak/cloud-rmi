@@ -77,7 +77,6 @@ class TestRMIServer extends CloudRMIServer
 		$this->setMaxProtocolVersion($maxProto);
 		$this->setRequireAuth(false);
 		$this->readTimeout = 5;
-		$this->highReadTimeout = 5;
 		$this->setUnixSocketPath($unixSocketPath);
 	}
 }
