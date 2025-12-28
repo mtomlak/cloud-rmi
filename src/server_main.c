@@ -138,13 +138,12 @@ int find_and_load_configs(char *command)
          success = 0;
    }
 
-   if (debug_log_enabled()) {  // args are not parsed yet, this is for testing - can be set inside config
-      if (success) {
-         DEBUG_LOG("Loaded configuration file %s", var_config_file);
-         DEBUG_LOG("Loaded interface map file %s", var_interface_map_file);
-      } else
-         DEBUG_LOG("Failed to load some configuration files");
-   } 
+   if (success) {
+      DEBUG_LOG("Loaded configuration file %s", var_config_file);
+      DEBUG_LOG("Loaded interface map file %s", var_interface_map_file);
+   } else {
+      DEBUG_LOG("Failed to load some configuration files");
+   }
 
    return success;
 }
