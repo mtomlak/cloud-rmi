@@ -102,12 +102,24 @@ static inline void log_traffic_event(const struct conn_state *state, const char 
 void substring(char *string, char *sub, int start, int len);
 void split_host_addr(char *host, char *ip, int *port);
 char *get_ip_addr(char *hostname);
+typedef struct {
+   int available;
+   int model;
+   int prefork_workers;
+   int adaptive_min_workers;
+   int adaptive_max_workers;
+   int adaptive_spare_workers;
+   int active_workers;
+   int idle_workers;
+} worker_snapshot_view_t;
 // server.c
 int server_start(int port_num, const char *unix_socket_path);
 void server_add_iface_entry(char *iface_name, char *file_name);
 struct server_iface_entry *server_get_iface_entry(char *iface_name);
 int read_iface_config(char *config_file);
 void server_send_stats(int sock);
+int worker_snapshot_read(worker_snapshot_view_t *out);
+void worker_snapshot_refresh_config(void);
 // protocol.c
 void handle_connection(int sock, int is_unix_socket);
 // handle_call.c
