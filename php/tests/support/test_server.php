@@ -72,6 +72,7 @@ class TestRMIServer extends CloudRMIServer
 		$this->host = $host;
 		$this->port = $port;
 		$this->disableFork = !$enableFork;
+		$this->setWorkerModel($enableFork ? self::WORKER_MODEL_FORK : self::WORKER_MODEL_SINGLE);
 		$this->enableAsyncCapability = $enableFork;
 		$this->setMaxProtocolVersion($maxProto);
 		$this->setRequireAuth(false);

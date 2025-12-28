@@ -25,26 +25,21 @@ class CloudRMIServer
 	protected $contextName = 'dev.rmi';
 	protected $crashlog = '/var/log/cloud.{contextName}.crash.log';
 	protected $disableFork = false;
+	protected $workerModel = self::WORKER_MODEL_FORK;
+	protected $preforkWorkers = 4;
+	protected $adaptiveMinWorkers = 2;
+	protected $adaptiveMaxWorkers = 8;
+	protected $adaptiveSpareWorkers = 2;
 	// Other properties
-	protected $pid;
-	protected $severSocket = null;
 	protected $doShutdown = false;
 	protected $isAuthenticated = false;
 	protected $username = null;
 	protected $readTimeout = 300;
 	protected $highReadTimeout = 300;
 	protected $noForkReadTimeout = 300;
-	protected $childTimeout = 3600;	// default is 6h, use short one for web-facing servers
-	protected $childThrottle = false;
-	protected $childNicenessThrottle = [30 => 5, 35 => 10, 40 => 15, 45 => 20];	// X => Y: sets child niceness to Y at Xth second
-	protected $childIoNicenessThrottle = [30 => 2, 45 => 3];	// see "man ionice"
-	protected $throttleTimeout = false;
-	protected $throttleDuration = 0.01;
-	protected $connStarted = null;
 	protected $unixSocketPath = null;
 	protected $bindings;
 	protected $startedAt;
-	protected $proc;
 	protected $serverPid;
 	protected $requireAuth = true;
 	protected $enableAsyncCapability = true;
@@ -54,14 +49,19 @@ class CloudRMIServer
 	protected $protocolVersion = 1;
 	protected $maxProtocolVersion = 2;
 	protected $maxPayload = null;
+	protected $workerPids = [];
+	protected $adaptiveWorkers = [];
+	protected $isWorkerProcess = false;
 
 	public function __construct()
 	{
 		$this->bindings = array();
-
-		if (!$this->hasForkSupport())
-			$this->readTimeout = $this->noForkReadTimeout;
 	}
+
+	public const WORKER_MODEL_SINGLE = 'single';
+	public const WORKER_MODEL_FORK = 'fork';
+	public const WORKER_MODEL_PREFORK = 'prefork';
+	public const WORKER_MODEL_ADAPTIVE = 'adaptive';
 
 	public function setUnixSocketPath($path)
 	{
@@ -71,6 +71,34 @@ class CloudRMIServer
 	public function setUnixSocketSkipAuth($skip)
 	{
 		$this->unixSocketSkipAuth = (bool) $skip;
+	}
+
+	public function setWorkerModel($model)
+	{
+		$model = strtolower((string) $model);
+		$allowed = [
+			self::WORKER_MODEL_SINGLE,
+			self::WORKER_MODEL_FORK,
+			self::WORKER_MODEL_PREFORK,
+			self::WORKER_MODEL_ADAPTIVE,
+		];
+
+		if (!in_array($model, $allowed, true))
+			$model = self::WORKER_MODEL_FORK;
+
+		$this->workerModel = $model;
+	}
+
+	public function setPreforkWorkers($count)
+	{
+		$this->preforkWorkers = max(1, (int) $count);
+	}
+
+	public function setAdaptiveWorkerBounds($min, $max, $spare)
+	{
+		$this->adaptiveMinWorkers = max(1, (int) $min);
+		$this->adaptiveMaxWorkers = max($this->adaptiveMinWorkers, (int) $max);
+		$this->adaptiveSpareWorkers = max(0, (int) $spare);
 	}
 
 	public function setMaxProtocolVersion($version)
@@ -94,31 +122,462 @@ class CloudRMIServer
 
 	public function start()
 	{
-		// note that the loop will work even without fork support
 		$this->registerShutdownHandler();
+		$this->resolveWorkerModel();
+		$this->installSignalHandlers();
 		$this->openServerSocket();
+		$this->applyReadTimeoutPolicy();
 		$this->startedAt = time();
 		$this->serverPid = posix_getpid();
-		$this->log($this->contextName . " service ready on " . $this->describeEndpoint() 
-			. " [ composer cloudrmi | libcloudrmi " . RMI_LIBRARY_VERSION . " ]");
+		$this->log($this->contextName . " service ready on " . $this->describeEndpoint()
+			. " [ composer cloudrmi | libcloudrmi " . RMI_LIBRARY_VERSION . " | worker_model " . $this->workerModel . " ]");
 
-		if ($this->hasForkSupport())
-			$this->proc = new ProcessFork();
+		switch ($this->workerModel) {
+			case self::WORKER_MODEL_SINGLE:
+				$this->serveSingleModel();
+				break;
 
-		// main program loop
-		while (!$this->doShutdown) {
-			$this->acceptNewConnections();
+			case self::WORKER_MODEL_PREFORK:
+				$this->servePreforkModel();
+				break;
 
-			if ($this->hasForkSupport() && $this->proc instanceof ProcessFork) {
-				if (version_compare(PHP_VERSION, '7.1.0', '<'))
-					$this->proc->dispatchSignals();
+			case self::WORKER_MODEL_ADAPTIVE:
+				$this->serveAdaptiveModel();
+				break;
 
-				$this->proc->collectChildren();
-			}
+			default:
+				$this->serveForkModel();
 		}
 
 		$this->closeServerSocket();
 		$this->doShutdown = false; // in case it will be started again
+	}
+
+	protected function resolveWorkerModel()
+	{
+		$this->workerModel = strtolower((string) $this->workerModel);
+		$allowed = [
+			self::WORKER_MODEL_SINGLE,
+			self::WORKER_MODEL_FORK,
+			self::WORKER_MODEL_PREFORK,
+			self::WORKER_MODEL_ADAPTIVE,
+		];
+
+		if (!in_array($this->workerModel, $allowed, true))
+			$this->workerModel = self::WORKER_MODEL_FORK;
+
+		if ($this->disableFork)
+			$this->workerModel = self::WORKER_MODEL_SINGLE;
+
+		if (!$this->hasForkSupport() && $this->workerModel !== self::WORKER_MODEL_SINGLE) {
+			$this->workerModel = self::WORKER_MODEL_SINGLE;
+			$this->disableFork = true;
+		}
+
+		if ($this->workerModel === self::WORKER_MODEL_ADAPTIVE) {
+			$this->adaptiveMaxWorkers = max($this->adaptiveMinWorkers, $this->adaptiveMaxWorkers);
+			$this->adaptiveSpareWorkers = min($this->adaptiveMaxWorkers, $this->adaptiveSpareWorkers);
+		}
+	}
+
+	protected function installSignalHandlers()
+	{
+		if (!function_exists('pcntl_signal'))
+			return;
+
+		pcntl_signal(SIGTERM, [$this, 'handleSignalShutdown']);
+		pcntl_signal(SIGINT, [$this, 'handleSignalShutdown']);
+
+		if (function_exists('pcntl_async_signals'))
+			pcntl_async_signals(true);
+	}
+
+	public function handleSignalShutdown()
+	{
+		$this->doShutdown = true;
+	}
+
+	protected function applyReadTimeoutPolicy()
+	{
+		if ($this->workerModel === self::WORKER_MODEL_SINGLE || !$this->isForkingEnabled())
+			$this->readTimeout = min($this->readTimeout, $this->noForkReadTimeout);
+	}
+
+	protected function serveSingleModel()
+	{
+		while (!$this->doShutdown) {
+			$conn = $this->acceptClientConnection();
+
+			if (!is_resource($conn)) {
+				$this->dispatchPendingSignals();
+				continue;
+			}
+
+			$this->handleConnection($conn, $this->isUnixSocket());
+		}
+	}
+
+	protected function serveForkModel()
+	{
+		while (!$this->doShutdown) {
+			$conn = $this->acceptClientConnection();
+
+			if (!is_resource($conn)) {
+				$this->dispatchPendingSignals();
+				$this->collectExitedChildren();
+				continue;
+			}
+
+			$pid = pcntl_fork();
+
+			if ($pid === -1) {
+				$this->closeSocket($conn);
+				continue;
+			}
+
+			if ($pid === 0) {
+				$this->isWorkerProcess = true;
+				$this->handleConnection($conn, $this->isUnixSocket());
+				$this->closeServerSocket();
+				exit;
+			}
+
+			$this->workerPids[$pid] = $pid;
+			$this->closeSocket($conn);
+			$this->collectExitedChildren();
+		}
+
+		$this->terminateWorkers($this->workerPids);
+	}
+
+	protected function servePreforkModel()
+	{
+		$this->workerPids = [];
+
+		for ($i = 0; $i < $this->preforkWorkers; $i++) {
+			$this->spawnWorkerProcess();
+		}
+
+		while (!$this->doShutdown) {
+			$this->dispatchPendingSignals();
+			$this->respawnMissingWorkers();
+			usleep(100000);
+		}
+
+		$this->terminateWorkers($this->workerPids);
+	}
+
+	protected function serveAdaptiveModel()
+	{
+		$this->adaptiveWorkers = [];
+
+		for ($i = 0; $i < $this->adaptiveMinWorkers; $i++)
+			$this->spawnAdaptiveWorker();
+
+		while (!$this->doShutdown) {
+			$this->dispatchPendingSignals();
+			$this->pollAdaptiveWorkers();
+			$this->collectExitedAdaptiveWorkers();
+			$this->scaleAdaptivePool();
+			usleep(100000);
+		}
+
+		$this->terminateWorkers(array_column($this->adaptiveWorkers, 'pid'));
+	}
+
+	protected function dispatchPendingSignals()
+	{
+		if (function_exists('pcntl_signal_dispatch'))
+			pcntl_signal_dispatch();
+	}
+
+	protected function acceptClientConnection($timeout = 0.25)
+	{
+		if (!is_resource($this->serverSocket)) {
+			$this->doShutdown = true;
+			return false;
+		}
+
+		return @stream_socket_accept($this->serverSocket, $timeout);
+	}
+
+	protected function spawnWorkerProcess()
+	{
+		if (!$this->isForkingEnabled())
+			return;
+
+		$pid = pcntl_fork();
+
+		if ($pid === -1)
+			return;
+
+		if ($pid === 0) {
+			$this->isWorkerProcess = true;
+			$this->installSignalHandlers();
+			$this->runWorkerLoop();
+			$this->closeServerSocket();
+			exit;
+		}
+
+		$this->workerPids[$pid] = $pid;
+	}
+
+	protected function respawnMissingWorkers()
+	{
+		$this->collectExitedChildren();
+
+		while (count($this->workerPids) < $this->preforkWorkers && !$this->doShutdown) {
+			$this->spawnWorkerProcess();
+		}
+	}
+
+	protected function runWorkerLoop($stateSocket = null)
+	{
+		stream_set_blocking($this->serverSocket, true);
+		$lastState = null;
+
+		while (!$this->doShutdown) {
+			if (is_resource($stateSocket) && $lastState !== 'idle') {
+				$this->sendWorkerState($stateSocket, 'I');
+				$lastState = 'idle';
+			}
+
+			$conn = $this->acceptClientConnection(1);
+
+			if (!is_resource($conn)) {
+				continue;
+			}
+
+			if (is_resource($stateSocket)) {
+				$this->sendWorkerState($stateSocket, 'B');
+				$lastState = 'busy';
+			}
+
+			$this->handleConnection($conn, $this->isUnixSocket());
+		}
+
+		if (is_resource($stateSocket))
+			$this->sendWorkerState($stateSocket, 'X');
+	}
+
+	protected function spawnAdaptiveWorker()
+	{
+		if (!$this->isForkingEnabled())
+			return;
+
+		if (count($this->adaptiveWorkers) >= $this->adaptiveMaxWorkers)
+			return;
+
+		$pair = [];
+
+		if (!@stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP, $pair))
+			return;
+
+		$pid = pcntl_fork();
+
+		if ($pid === -1) {
+			foreach ($pair as $socket)
+				$this->closeSocket($socket);
+			return;
+		}
+
+		if ($pid === 0) {
+			$this->isWorkerProcess = true;
+			$this->installSignalHandlers();
+			$this->closeSocket($pair[0]);
+			stream_set_blocking($pair[1], false);
+			$this->runWorkerLoop($pair[1]);
+			$this->closeSocket($pair[1]);
+			$this->closeServerSocket();
+			exit;
+		}
+
+		$this->closeSocket($pair[1]);
+		stream_set_blocking($pair[0], false);
+		$this->adaptiveWorkers[$pid] = [
+			'pid' => $pid,
+			'control' => $pair[0],
+			'state' => 'starting',
+			'last' => microtime(true),
+		];
+	}
+
+	protected function pollAdaptiveWorkers()
+	{
+		if (empty($this->adaptiveWorkers))
+			return;
+
+		$read = [];
+		$pidByStream = [];
+
+		foreach ($this->adaptiveWorkers as $pid => $worker) {
+			if (isset($worker['control']) && is_resource($worker['control'])) {
+				$read[] = $worker['control'];
+				$pidByStream[(int) $worker['control']] = $pid;
+			}
+		}
+
+		if (empty($read))
+			return;
+
+		$write = $except = [];
+		$count = @stream_select($read, $write, $except, 0, 0);
+
+		if ($count === false || $count === 0)
+			return;
+
+		foreach ($read as $stream) {
+			$message = @stream_get_contents($stream);
+
+			if ($message === '' || $message === false)
+				continue;
+
+			$pid = $pidByStream[(int) $stream];
+
+			foreach (str_split($message) as $signal)
+				$this->updateAdaptiveState($pid, $signal);
+		}
+	}
+
+	protected function updateAdaptiveState($pid, $signal)
+	{
+		if (!isset($this->adaptiveWorkers[$pid]))
+			return;
+
+		switch ($signal) {
+			case 'I':
+				$this->adaptiveWorkers[$pid]['state'] = 'idle';
+				break;
+
+			case 'B':
+				$this->adaptiveWorkers[$pid]['state'] = 'busy';
+				break;
+
+			case 'X':
+				$this->adaptiveWorkers[$pid]['state'] = 'stopped';
+				break;
+		}
+
+		$this->adaptiveWorkers[$pid]['last'] = microtime(true);
+	}
+
+	protected function collectExitedChildren()
+	{
+		if (!function_exists('pcntl_waitpid'))
+			return;
+
+		while (($pid = pcntl_waitpid(-1, $status, WNOHANG)) > 0) {
+			if (isset($this->adaptiveWorkers[$pid]['control']))
+				$this->closeSocket($this->adaptiveWorkers[$pid]['control']);
+			unset($this->workerPids[$pid]);
+			unset($this->adaptiveWorkers[$pid]);
+		}
+	}
+
+	protected function collectExitedAdaptiveWorkers()
+	{
+		$this->collectExitedChildren();
+
+		foreach ($this->adaptiveWorkers as $pid => $worker) {
+			if (!@posix_kill($pid, 0)) {
+				$this->closeSocket($worker['control']);
+				unset($this->adaptiveWorkers[$pid]);
+			}
+		}
+	}
+
+	protected function scaleAdaptivePool()
+	{
+		$active = count($this->adaptiveWorkers);
+		$idle = 0;
+
+		foreach ($this->adaptiveWorkers as $worker) {
+			if ($worker['state'] === 'idle')
+				$idle++;
+		}
+
+		if ($active < $this->adaptiveMinWorkers) {
+			for ($i = $active; $i < $this->adaptiveMinWorkers; $i++)
+				$this->spawnAdaptiveWorker();
+			return;
+		}
+
+		if ($idle < $this->adaptiveSpareWorkers && $active < $this->adaptiveMaxWorkers) {
+			$this->spawnAdaptiveWorker();
+			return;
+		}
+
+		if ($idle > $this->adaptiveSpareWorkers && $active > $this->adaptiveMinWorkers) {
+			$this->trimIdleAdaptiveWorker();
+		}
+	}
+
+	protected function trimIdleAdaptiveWorker()
+	{
+		foreach ($this->adaptiveWorkers as $pid => $worker) {
+			if ($worker['state'] === 'idle') {
+				$this->terminateWorkers([$pid]);
+				return;
+			}
+		}
+	}
+
+	protected function countAdaptiveIdleWorkers()
+	{
+		$idle = 0;
+
+		foreach ($this->adaptiveWorkers as $worker) {
+			if ($worker['state'] === 'idle')
+				$idle++;
+		}
+
+		return $idle;
+	}
+
+	protected function writeWorkersResponse($socket)
+	{
+		$workers = [];
+
+		if ($this->workerModel === self::WORKER_MODEL_PREFORK) {
+			foreach (array_keys($this->workerPids) as $pid)
+				$workers[] = ['pid' => $pid, 'state' => 'listening'];
+		} elseif ($this->workerModel === self::WORKER_MODEL_ADAPTIVE) {
+			foreach ($this->adaptiveWorkers as $worker)
+				$workers[] = ['pid' => $worker['pid'], 'state' => $worker['state']];
+		}
+
+		$payload = [
+			'reuse_enabled' => false,
+			'worker_model' => $this->workerModel,
+			'workers' => $workers,
+			'total_spare' => ($this->workerModel === self::WORKER_MODEL_ADAPTIVE) ? $this->countAdaptiveIdleWorkers() : 0,
+		];
+
+		$this->connWriteLn($socket, '200 JSON ' . json_encode($payload));
+	}
+
+	protected function terminateWorkers(array $pids)
+	{
+		foreach ($pids as $pid) {
+			if (isset($this->adaptiveWorkers[$pid]['control']))
+				$this->closeSocket($this->adaptiveWorkers[$pid]['control']);
+
+			unset($this->adaptiveWorkers[$pid]);
+			unset($this->workerPids[$pid]);
+
+			if ($pid && @posix_kill($pid, 0))
+				@posix_kill($pid, SIGTERM);
+		}
+
+		$this->collectExitedChildren();
+	}
+
+	protected function sendWorkerState($socket, $state)
+	{
+		if (!is_resource($socket))
+			return;
+
+		@fwrite($socket, $state);
 	}
 
 	public function bind($interface, &$objectRef) 
@@ -138,18 +597,11 @@ class CloudRMIServer
 
 	public function handleProccessShutdown()
 	{
-		if (($this->proc && $this->proc->isParent()) || !$this->hasForkSupport()) {
+		if (!$this->isWorkerProcess)
 			$this->closeServerSocket();
-		}
 
-		if (!$this->doShutdown)
+		if (!$this->doShutdown && !$this->isWorkerProcess)
 			$this->handleCrash();
-	}
-
-	protected function acceptNewConnections()
-	{
-		if ($conn = @stream_socket_accept($this->serverSocket))
-			$this->handleConnection($conn, $this->isUnixSocket());
 	}
 
 	protected function isUnixSocket()
@@ -276,34 +728,17 @@ class CloudRMIServer
 
 	protected function isAsyncCapabilityAdvertised()
 	{
-		return ($this->enableAsyncCapability && $this->hasForkSupport());
+		return ($this->enableAsyncCapability && $this->isForkingEnabled());
 	}
 
 	protected function handleConnection($socket, $isUnixSocket = false)
 	{
-		if ($this->hasForkSupport()) {
-			//$this->proc = new ProcessFork();
-			$pid = $this->proc->fork();
-
-			if ($this->proc->isParent()) {
-				$this->log("Forked new child proccess with PID $pid");
-				$this->closeSocket($socket);
-				return;
-
-			}
-
-			if (!$watchdogPid = $this->forkChildWatchdog(getmypid()))
-				return;		// we're the watchdog proccess, end here
-		} else
-			$this->log("Warning: Fork support is not enabled");
-
 		stream_set_timeout($socket, $this->readTimeout);
 		stream_set_blocking($socket, true);
 		$this->connWriteLn($socket, $this->buildBannerLine());
 		$this->protocolVersion = $isUnixSocket ? $this->getMinProtocolVersion() : 1;
 		$this->isAuthenticated = ($isUnixSocket && $this->unixSocketSkipAuth) || !$this->requireAuth;
 		$this->username = ($this->isAuthenticated && $isUnixSocket && $this->unixSocketSkipAuth) ? 'UnixSocket' : null;
-		$this->connStarted = time();
 
 		$protocolCtx = cloudrmi_protocol_create();
 		cloudrmi_protocol_set_max_payload($protocolCtx, $this->getMaxPayloadLength());
@@ -366,13 +801,6 @@ class CloudRMIServer
 
 		cloudrmi_protocol_destroy($protocolCtx);
 		$this->closeSocket($socket);
-
-		if ($this->hasForkSupport()) {
-			posix_kill($watchdogPid, SIGTERM);
-			$this->log("Shutting child proccess " . getmypid());
-			$this->doShutdown = true;
-			return $this->proc->join();	// exit child proccess
-		}
 	}
 
 	protected function getBinding($interface)
@@ -388,98 +816,6 @@ class CloudRMIServer
 			throw new \InvalidArgumentException("Undefined interface $interface");
 
 		return get_class_methods($interface);
-	}
-
-	/**
-	 * Handles a command. Should return false when we want to close connection.
-	 * 
-	 */
-	protected function handleCommand(&$socket, $commandStr)
-	{
-		$parts = explode(' ', $commandStr, 2);
-
-		$command = $parts[0];
-		$arg = (isset($parts[1])) ? $parts[1] : null;
-		
-		switch(strtolower($command)) {
-			case 'auth':
-				if (!$result = $this->handleAuthCommand($arg)) {
-					$this->connWriteLn($socket, '401 Unauthorized');	
-
-					return false;
-				}
-
-				$this->connWriteLn($socket, $result);
-				break;
-
-			case 'call':
-				$this->handleCallCommand($socket, $arg);
-				break;
-
-		case 'acall':	// async call
-			$this->handleACallCommand($socket, $arg);
-			break;
-
-		case 'proto':
-			list($ok, $version) = $this->parseProtoCommand($arg);
-
-			if (!$ok) {
-				$this->connWriteLn($socket, "400 Bad Request");
-				break;
-			}
-
-			$this->protocolVersion = $version;
-			$this->connWriteLn($socket, "200 PROTO $version");
-			break;
-
-		case 'caps':
-			$this->writeCapsResponse($socket);
-			break;
-
-		case 'help':
-			$this->writeHelpResponse($socket);
-			break;
-
-			// list of supported extensions - interfaces
-			case 'ifaces':
-				$this->readTimeout = $this->highReadTimeout;
-				$this->writeIfacesResponse($socket);
-				break;
-
-		case 'ping':
-			$this->readTimeout = $this->highReadTimeout;
-			$pingEcho = (isset($parts[1]) && $parts[1] !== '') ? (' ' . trim($parts[1])) : '';
-			$this->connWriteLn($socket, "200 PONG" . $pingEcho);
-			break;
-
-		case 'info':
-			$this->writeInfoResponse($socket);
-			break;
-
-		case 'server':
-			$this->handleServerCommand($socket, $arg);
-			break;
-
-			case 'quit':
-			case 'exit':
-				$this->connWriteLn($socket, "221 Bye");
-
-				return false;
-
-			case '__timeout':
-				$this->connWriteLn($socket, "408 Request Timeout");
-
-				return false;
-
-			case '':
-				break;
-
-			default:
-				$this->connWriteLn($socket, "400 Bad Request");
-				break;
-		}
-
-		return null;
 	}
 
 	protected function normalizeInboundLine($line)
@@ -710,7 +1046,7 @@ class CloudRMIServer
 				return;
 			}
 
-			if (!$this->hasForkSupport()) {
+			if (!$this->isForkingEnabled()) {
 				$this->connWriteLn($socket, '405 Method Not Allowed: No fork support');
 				return;
 			}
@@ -724,9 +1060,6 @@ class CloudRMIServer
 				return;
 			}
 
-			if (!$watchdogPid = $this->forkChildWatchdog(getmypid()))
-				return;
-
 			try {
 				$this->executeCall($binding, $request);
 			} catch (\Throwable $e) {
@@ -735,8 +1068,7 @@ class CloudRMIServer
 
 			$this->log("Finished handling async call: " . $request['iface'] . '::' . $request['method']);
 
-			$this->doShutdown = true;
-			return $this->proc->join();
+			return $proc->join();
 		}
 
 		$outcome = $this->executeCall($binding, $request);
@@ -820,307 +1152,6 @@ class CloudRMIServer
 		}
 
 		$result['params'] = $this->decodeMethodArgs($event['arg3']);
-
-		return $result;
-	}
-
-	protected function handleCallCommand(&$socket, $arg)
-	{
-		if ($this->requireAuth && !$this->isAuthenticated) {
-			$this->connWriteLn($socket, '401 Unauthorized');
-			return;
-		}
-
-		$request = $this->parseCallArguments($socket, $arg);
-
-		if ($request['error'] === 'timeout') {
-			$this->connWriteLn($socket, '408 Request Timeout');
-			return;
-		}
-
-		if ($request['error'] === 'bad_request') {
-			$this->connWriteLn($socket, '400 Bad Request');
-			return;
-		}
-
-		if ($request['error'] === 'bad_args') {
-			$this->connWriteLn($socket, "400 Bad Request Arguments");
-			return;
-		}
-
-		if ($request['iface'] === null || $request['method'] === null) {
-			$this->connWriteLn($socket, "400 Bad Request Arguments");
-			return;
-		}
-
-		if ($request['payload'] && !$this->canHandlePayloadRequests()) {
-			$this->connWriteLn($socket, '400 Bad Request');
-			return;
-		}
-
-		if (!$binding = $this->getBinding($request['iface'])) {
-			$this->connWriteLn($socket, "404 Not Found");
-			return;
-		}
-
-		if (!in_array($request['method'], $this->getBindingMethods($request['iface']))) {
-			$this->connWriteLn($socket, "405 Method Not Allowed");
-			return;
-		}
-
-		$outcome = $this->executeCall($binding, $request);
-		$canSendPayloadResponses = ($this->protocolVersion >= 2 && $this->canHandlePayloadRequests());
-
-		if ($outcome['payload'] && $canSendPayloadResponses) {
-			$this->sendPayloadResponse($socket, $outcome['code'], $outcome['data'], $request['encoding']);
-			return;
-		}
-
-		try {
-			$encodedResult = $this->encodePayload($outcome['data']);
-
-		} catch (\Throwable $e) {
-			$this->connWriteLn($socket, "500 Unable to transmit result: " . $request['iface'] . '::' . $request['method'] . ': ' . $e->getMessage());
-			return;
-		}
-
-		$inlineLength = strlen($outcome['code'] . " " . $encodedResult) + 1;
-
-		if ($inlineLength >= $this->getMaxLineLength()) {
-			if ($canSendPayloadResponses) {
-				$this->sendPayloadResponse($socket, $outcome['code'], $outcome['data'], $request['encoding']);
-			} else {
-				$this->connWriteLn($socket, "500 Unable to transmit result inline (exceeds max line length)");
-			}
-			return;
-		}
-
-		$this->connWriteLn($socket, $outcome['code'] . " " . $encodedResult);
-	}
-
-	protected function handleACallCommand(&$socket, $arg)
-	{
-		if ($this->requireAuth && !$this->isAuthenticated) {
-			$this->connWriteLn($socket, '401 Unauthorized');
-			return;
-		}
-
-		if (!$this->isAsyncCapabilityAdvertised()) {
-			$this->connWriteLn($socket, '405 Method Not Allowed');
-			return;
-		}
-
-		$request = $this->parseCallArguments($socket, $arg);
-
-		if ($request['error'] === 'timeout') {
-			$this->connWriteLn($socket, '408 Request Timeout');
-			return;
-		}
-
-		if ($request['iface'] === null || $request['method'] === null) {
-			$this->connWriteLn($socket, "400 Bad Request Arguments");
-			return;
-		}
-
-		if ($request['payload'] && !$this->canHandlePayloadRequests()) {
-			$this->connWriteLn($socket, '400 Bad Request');
-			return;
-		}
-
-		if (!$binding = $this->getBinding($request['iface'])) {
-			$this->connWriteLn($socket, "404 Not Found");
-			return;
-		}
-
-		if (!in_array($request['method'], $this->getBindingMethods($request['iface']))) {
-			$this->connWriteLn($socket, "405 Method Not Allowed: " . $request['method'] . ': ' . implode(', ', $this->getBindingMethods($request['iface'])));
-			return;
-		}
-
-		if (!$this->hasForkSupport()) {
-			$this->connWriteLn($socket, '405 Method Not Allowed: No fork support');
-			return;
-		}
-
-		$proc = new ProcessFork();
-		$pid = $proc->fork();
-
-		if ($proc->isParent()) {
-			$this->log("Forked new async child proccess with PID $pid");
-			$this->connWriteLn($socket, "200 " . $this->encodePayload('Call Executed'));
-			return;
-		}
-
-		if (!$watchdogPid = $this->forkChildWatchdog(getmypid()))
-			return;
-
-		try {
-			$this->executeCall($binding, $request);
-		} catch (\Throwable $e) {
-			$this->log(' ! ' . get_class($e) . ': ' . $e->getMessage());
-		}
-
-		$this->log("Finished handling async call: $arg");
-
-		$this->doShutdown = true;
-		return $this->proc->join();
-	}
-
-	protected function handleAuthCommand($arg)
-	{
-		if ($this->isAuthenticated)
-			return '200 Already logged in as: ' . $this->username;
-
-		$args = explode(' ', trim($arg), 2);
-
-		if (count($args) < 2)
-			return "400 Bad Request: Supported AUTH methods: TOKEN, LOGIN";	// . serialize($args);
-
-		list($method, $parameter) = $args;
-
-		// todo: refractor this
-		switch(strtolower($method)) {
-			case 'token':
-				$token = trim($parameter);
-				// rapid development - debug purposes
-				if (!empty($this->recoveryToken) && $this->recoveryToken == $token) {
-					$this->isAuthenticated = true;
-					$this->username = 'RecoveryUser';
-
-					return "200 Hello " . $this->username;
-				} else
-					return false;
-
-			case 'login':
-				if (trim($parameter) == 'debug debug123') {
-					$this->isAuthenticated = true;
-					$this->username = 'DebugUser';
-
-					return "200 Hello " . $this->username;
-				} else
-					return false;
-
-			default:
-				return "400 Bad Request: Unsupported AUTH method";	
-		}
-
-		return "400 Bad Request:";
-	}
-
-	protected function parseProtoCommand($arg)
-	{
-		if (is_null($arg))
-			return [false, 1];
-
-		$parts = explode(' ', trim((string) $arg), 2);
-
-		if (!isset($parts[0]) || !is_numeric($parts[0]))
-			return [false, $this->protocolVersion];
-
-		$version = (int) $parts[0];
-
-		if ($version < $this->getMinProtocolVersion() || $version > 2)
-			return [false, $this->protocolVersion];
-
-		if ($version > $this->getMaxProtocolVersion())
-			$version = $this->getMaxProtocolVersion();
-
-		return [true, $version];
-	}
-
-	protected function parseCallArguments(&$socket, $arg)
-	{
-		$result = [
-			'iface' => null,
-			'method' => null,
-			'params' => null,
-			'payload' => false,
-			'encoding' => null,
-			'error' => null,
-		];
-
-		$arg = trim((string) $arg);
-
-		if ($this->protocolVersion >= 2) {
-			$parts = preg_split('/\s+/', $arg, 5);
-
-			if (count($parts) >= 5 && strcasecmp($parts[2], 'PAYLOAD') === 0) {
-				if (!$this->canHandlePayloadRequests()) {
-					$result['error'] = 'bad_request';
-					return $result;
-				}
-
-				list($iface, $method, , $enc, $lenStr) = $parts;
-
-				if (!ctype_digit((string) $lenStr)) {
-					$result['error'] = 'bad_request';
-					return $result;
-				}
-
-				$len = (int) $lenStr;
-
-				if ($len < 0 || $len > $this->getMaxPayloadLength()) {
-					$this->discardBytes($socket, $len);
-					$result['error'] = 'bad_request';
-					return $result;
-				}
-
-				if ($iface && $iface[0] != '\\')
-					$iface = "\\$iface";
-
-				$payload = ($len > 0) ? $this->connReadExact($socket, $len) : '';
-
-				if ($payload === '__timeout') {
-					$result['error'] = 'timeout';
-					return $result;
-				}
-
-				if ($payload === false || !is_string($payload) || strlen($payload) != $len) {
-					$result['error'] = 'bad_request';
-					return $result;
-				}
-
-				try {
-					$params = $this->decodePayloadBytes($enc, $payload);
-				} catch (\Throwable $e) {
-					$result['error'] = 'bad_request';
-					return $result;
-				}
-
-				$result['iface'] = $iface;
-				$result['method'] = $method;
-				$result['params'] = $params;
-				$result['payload'] = true;
-				$result['encoding'] = $enc;
-
-				return $result;
-			} elseif (count($parts) >= 3 && strcasecmp($parts[2], 'PAYLOAD') === 0) {
-				$result['error'] = 'bad_args';
-				return $result;
-			}
-		} else {
-			$tokens = preg_split('/\s+/', $arg, 4);
-			if (count($tokens) >= 3 && strcasecmp($tokens[2], 'PAYLOAD') === 0) {
-				$result['error'] = 'bad_request';
-				return $result;
-			}
-		}
-
-		$args = explode(' ', $arg, 3);
-
-		if (count($args) != 3) {
-			$result['error'] = 'bad_args';
-			return $result;
-		}
-
-		list($iface, $method, $vars) = $args;
-
-		if ($iface && $iface[0] != '\\')
-			$iface = "\\$iface";
-
-		$result['iface'] = $iface;
-		$result['method'] = $method;
-		$result['params'] = $this->decodeMethodArgs($vars);
 
 		return $result;
 	}
@@ -1269,7 +1300,7 @@ class CloudRMIServer
 				return false;
 
 			if ($chunk === '') {
-				$this->connCheckThrottle();
+				$this->waitForIo();
 				continue;
 			}
 
@@ -1288,7 +1319,7 @@ class CloudRMIServer
 			$data = stream_get_contents($stream, $chunk);
 
 			if ($data === false || $data === '') {
-				$this->connCheckThrottle();
+				$this->waitForIo();
 				break;
 			}
 
@@ -1342,6 +1373,7 @@ class CloudRMIServer
 			'runtime' => [
 				'pid' => $this->serverPid,
 				'uptime' => $uptime,
+				'worker_model' => $this->workerModel,
 			],
 		];
 
@@ -1388,7 +1420,7 @@ class CloudRMIServer
 				break;
 
 			case 'workers':
-				$this->connWriteLn($socket, '200 JSON {"reuse_enabled":false,"workers":[]}');
+				$this->writeWorkersResponse($socket);
 				break;
 
 			case 'help':
@@ -1442,7 +1474,7 @@ class CloudRMIServer
 				break;
 
 			case 'workers':
-				$this->connWriteLn($socket, '200 JSON {"reuse_enabled":false,"workers":[]}');
+				$this->writeWorkersResponse($socket);
 				break;
 
 			case 'help':
@@ -1458,15 +1490,14 @@ class CloudRMIServer
 	protected function connWriteLn(&$stream, $line)
 	{
 		if (feof($stream) || feof($stream)) {
-			//syslog($errorSeverity, "CloudRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket unavailable");
-			return false;//$this->proc->join();
+			return false;
 		}
 
 		$info = stream_get_meta_data($stream);
 
 		if ($info['timed_out']) {
 			syslog(LOG_DEBUG, "CloudRMIServer::connWriteLn(): Exiting worker " .  getmypid() . ": socket native timeout");
-			return false;//$this->proc->join();
+			return false;
 		}
 
 		return fwrite($stream, "$line\n");
@@ -1491,12 +1522,12 @@ class CloudRMIServer
 			$chunk = fgets($stream, $remaining);
 
 			if ($chunk === false) {
-				$this->connCheckThrottle();
+				$this->waitForIo();
 				continue;
 			}
 
 			if ($chunk === '') {
-				$this->connCheckThrottle();
+				$this->waitForIo();
 				continue;
 			}
 
@@ -1591,8 +1622,7 @@ class CloudRMIServer
 		if (!$this->serverSocket)
 		  throw new \Exception("$errstr ($errno)");
 
-		// non-blocking socket to be able to handle child signals
-		stream_set_blocking($this->serverSocket, false);
+		stream_set_blocking($this->serverSocket, true);
 	}
 
 	protected function closeServerSocket()
@@ -1637,7 +1667,12 @@ class CloudRMIServer
 
 	protected function hasForkSupport()
 	{
-		return (function_exists('pcntl_fork') && !$this->disableFork);
+		return function_exists('pcntl_fork');
+	}
+
+	protected function isForkingEnabled()
+	{
+		return ($this->hasForkSupport() && !$this->disableFork && $this->workerModel !== self::WORKER_MODEL_SINGLE);
 	}
 
 	protected function log($msg)
@@ -1651,78 +1686,8 @@ class CloudRMIServer
 			array($this, 'handleProccessShutdown'));
 	}
 
-	protected function connCheckThrottle()
+	protected function waitForIo()
 	{
-		if ($this->throttleTimeout === false || !$this->connStarted || !$this->hasForkSupport() || $this->proc->isParent())
-			return;
-
-		$maxDuration = 0.5;
-
-		if (time() - $this->connStarted > $this->throttleTimeout) {
-			// Slowly increase up to maximum limit
-			if ($this->throttleDuration * 2 > $maxDuration)
-				$this->throttleDuration = $maxDuration;
-
-			elseif ($this->throttleDuration < $maxDuration)
-				$this->throttleDuration *= 2;
-
-			usleep($this->throttleDuration * 1000000);
-			$this->log('Throttling ' . $this->throttleDuration . 's');
-		}
-	}
-
-	protected function forkChildWatchdog($pid)
-	{
-		$pidWatchdog = $this->proc->fork();
-
-		if ($pidWatchdog) {
-			$this->log("Forked watchdog with PID $pidWatchdog for child with PID $pid");
-			return $pidWatchdog;
-		}
-
-		for ($i = 0; $i < $this->childTimeout; $i++) {
-			sleep(1);
-
-			// check if child is alive eg. receives signals
-			if (!posix_kill($pid, 0)) {	
-				$this->log("Shutting watchdog procces for child $pid");
-				$this->doShutdown = true;
-				return $this->proc->join();
-			}
-
-			// throttle niceness if proccess runs too long
-			if ($this->childThrottle && isset($this->childNicenessThrottle[$i])) {
-				$nice = $this->childNicenessThrottle[$i];
-
-				$this->log("Setting niceness for child $pid to $nice");
-				
-				try {
-					@system("renice $nice -p $pid");
-				} catch(\Throwable $e) {
-					$this->log("Failed to change niceness of child $pid to $nice: " . $e->getMessage());
-				}
-			}
-
-			// change IO niceness if child runs over 30 seconds
-			if ($this->childThrottle && isset($this->childIoNicenessThrottle[$i])) {
-				$ionice = $this->childIoNicenessThrottle[$i];
-
-				$this->log("Setting I/O niceness for child $pid to $ionice");
-				
-				try {
-					@system("ionice -p $pid -c $ionice");
-					@system("ionice -p $pid");
-				} catch(\Throwable $e) {
-					$this->log("Failed to change I/O niceness of child $pid to $ionice: " . $e->getMessage());
-				}
-			}
-		}
-
-		// Timed out, need to kill the child
-		$this->log("Terminating unresponsive child $pid");
-		syslog(LOG_CRIT, "CloudRMIServer: Detected unresponsive child $pid");
-		posix_kill($pid, SIGKILL);
-		$this->doShutdown = true;
-		return $this->proc->join();
+		usleep(10000);
 	}
 }
