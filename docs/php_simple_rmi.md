@@ -30,4 +30,10 @@ The PHP reference client/server pair (`ProfiWeb\CloudRMI\CloudRMIClient`, `Profi
 - `$enableAsyncCapability` controls the `ACALL` capability as described above.
 - `setMaxProtocolVersion()` clamps to the supported range (v1–v2) and drives banner negotiation.
 
+## Worker models
+
+- `CloudRMIServer` supports the worker models used by the C server: `fork` (per-connection forks), `prefork` (a fixed worker pool), and `adaptive` (a dynamically sized prefork pool). A `single` model is also available to keep legacy behavior when forking is disabled.
+- `setWorkerModel()` selects the model; `setPreforkWorkers()` tunes the prefork pool size, and `setAdaptiveWorkerBounds($min, $max, $spare)` controls adaptive scaling.
+- When `pcntl_fork()` is unavailable or `$disableFork` is set, the server automatically falls back to the `single` model and stops advertising `ACALL`.
+
 These behaviors are covered by the PHP integration tests under `php/tests/integration`, including payload negotiation, legacy clients, and ACALL capability coverage.
