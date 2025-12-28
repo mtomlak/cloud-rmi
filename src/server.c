@@ -14,7 +14,11 @@
 #include <errno.h>
 #include <poll.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include "cloud-rmi.h"
+#ifndef MAP_ANON
+#define MAP_ANON MAP_ANONYMOUS
+#endif
 #include "config.h"
 #ifdef PROXY_SUPPORT
 #include "proxy.h"
@@ -42,6 +46,28 @@ static volatile sig_atomic_t server_should_run = 1;
 static int server_use_unix_socket = 0;
 static pid_t server_owner_pid = 0;
 
+/* Shared snapshot for worker metadata to make WORKERS introspection available in worker processes. */
+typedef struct {
+   pid_t pid;
+   int idle;
+   int terminating;
+} worker_snapshot_slot_t;
+
+typedef struct {
+   int initialized;
+   pid_t owner_pid;
+   worker_model_t model;
+   int prefork_workers;
+   int adaptive_min_workers;
+   int adaptive_max_workers;
+   int adaptive_spare_workers;
+   int active_workers;
+   int idle_workers;
+   worker_snapshot_slot_t slots[ADAPTIVE_WORKERS_MAX];
+} worker_snapshot_t;
+
+static worker_snapshot_t *worker_snapshot = NULL;
+
 /* Prefork worker tracking */
 static pid_t *prefork_worker_pids = NULL;
 static int prefork_worker_count = 0;
@@ -61,6 +87,140 @@ static int adaptive_idle_workers = 0;
 /* Forward declarations for adaptive helpers */
 static int adaptive_find_worker_slot(pid_t pid);
 static void adaptive_clear_slot(int index);
+
+static void worker_snapshot_recalc(void)
+{
+   if (worker_snapshot == NULL)
+      return;
+
+   int active = 0;
+   int idle = 0;
+
+   for (int i = 0; i < ADAPTIVE_WORKERS_MAX; i++) {
+      if (worker_snapshot->slots[i].pid > 0) {
+         active++;
+         if (worker_snapshot->slots[i].idle)
+            idle++;
+      }
+   }
+
+   worker_snapshot->active_workers = active;
+   worker_snapshot->idle_workers = idle;
+}
+
+static void worker_snapshot_init(void)
+{
+   if (worker_snapshot != NULL)
+      return;
+
+   worker_snapshot = mmap(NULL, sizeof(worker_snapshot_t), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+   if (worker_snapshot == MAP_FAILED) {
+      worker_snapshot = NULL;
+      log_unexpected_event(LOG_WARNING, "worker-snapshot-init-failed errno=%d", errno);
+      return;
+   }
+
+   memset(worker_snapshot, 0, sizeof(worker_snapshot_t));
+}
+
+static void worker_snapshot_seed_config(void)
+{
+   if (worker_snapshot == NULL)
+      return;
+
+   worker_snapshot->initialized = 1;
+   worker_snapshot->owner_pid = server_owner_pid;
+   worker_snapshot->model = var_worker_model;
+   worker_snapshot->prefork_workers = var_prefork_workers;
+   worker_snapshot->adaptive_min_workers = var_adaptive_min_workers;
+   worker_snapshot->adaptive_max_workers = var_adaptive_max_workers;
+   worker_snapshot->adaptive_spare_workers = var_adaptive_spare_workers;
+   worker_snapshot_recalc();
+}
+
+void worker_snapshot_refresh_config(void)
+{
+   worker_snapshot_seed_config();
+}
+
+int worker_snapshot_read(worker_snapshot_view_t *out)
+{
+   if (out == NULL)
+      return 0;
+
+   memset(out, 0, sizeof(*out));
+
+   if (worker_snapshot == NULL || !worker_snapshot->initialized)
+      goto fallback;
+
+   out->available = 1;
+   out->model = worker_snapshot->model;
+   out->prefork_workers = worker_snapshot->prefork_workers;
+   out->adaptive_min_workers = worker_snapshot->adaptive_min_workers;
+   out->adaptive_max_workers = worker_snapshot->adaptive_max_workers;
+   out->adaptive_spare_workers = worker_snapshot->adaptive_spare_workers;
+   out->active_workers = worker_snapshot->active_workers;
+   out->idle_workers = worker_snapshot->idle_workers;
+   return 1;
+
+fallback:
+   if (getpid() == server_owner_pid) {
+      int active = 0;
+
+      out->available = 1;
+      out->model = var_worker_model;
+      out->prefork_workers = var_prefork_workers;
+      out->adaptive_min_workers = var_adaptive_min_workers;
+      out->adaptive_max_workers = var_adaptive_max_workers;
+      out->adaptive_spare_workers = var_adaptive_spare_workers;
+
+      if (var_worker_model == WORKER_MODEL_PREFORK && prefork_worker_pids != NULL) {
+         for (int i = 0; i < prefork_worker_count; i++) {
+            if (prefork_worker_pids[i] > 0)
+               active++;
+         }
+      } else if (var_worker_model == WORKER_MODEL_ADAPTIVE && adaptive_workers != NULL) {
+         for (int i = 0; i < adaptive_worker_capacity; i++) {
+            if (adaptive_workers[i].pid > 0)
+               active++;
+         }
+         out->idle_workers = adaptive_idle_workers;
+      }
+
+      out->active_workers = active;
+      return 1;
+   }
+
+   return 0;
+}
+
+static void worker_snapshot_set_slot(int index, pid_t pid)
+{
+   if (worker_snapshot == NULL || index < 0 || index >= ADAPTIVE_WORKERS_MAX)
+      return;
+
+   worker_snapshot->slots[index].pid = pid;
+   worker_snapshot->slots[index].idle = 0;
+   worker_snapshot->slots[index].terminating = 0;
+   worker_snapshot_recalc();
+}
+
+static void worker_snapshot_set_idle(int index, int idle)
+{
+   if (worker_snapshot == NULL || index < 0 || index >= ADAPTIVE_WORKERS_MAX)
+      return;
+
+   worker_snapshot->slots[index].idle = idle ? 1 : 0;
+   worker_snapshot_recalc();
+}
+
+static void worker_snapshot_set_terminating(int index, int terminating)
+{
+   if (worker_snapshot == NULL || index < 0 || index >= ADAPTIVE_WORKERS_MAX)
+      return;
+
+   worker_snapshot->slots[index].terminating = terminating ? 1 : 0;
+}
 
 static void cleanup_listen_socket()
 {
@@ -237,7 +397,7 @@ static pid_t prefork_spawn_worker(int listen_fd, int is_unix_socket, int worker_
                DEBUG_LOG("worker-socket-closed pid=%d errno=%d", (int)getpid(), errno);
                break;
             }
-            log_unexpected_event(LOG_ERR, "worker-accept-failed pid=%d errno=%d", (int)getpid(), errno);
+      log_unexpected_event(LOG_ERR, "worker-accept-failed pid=%d errno=%d", (int)getpid(), errno);
             continue;
          }
 
@@ -266,6 +426,7 @@ static pid_t prefork_spawn_worker(int listen_fd, int is_unix_socket, int worker_
       adaptive_mode ? "adaptive" : "prefork", worker_index, (int)pid);
    DEBUG_LOG("+ %s-worker-spawn worker=%d pid=%d",
       adaptive_mode ? "adaptive" : "prefork", worker_index, (int)pid);
+   worker_snapshot_set_slot(worker_index, pid);
    return pid;
 }
 
@@ -285,6 +446,7 @@ static void prefork_sigchld_handler(int signo)
       if (slot >= 0) {
          /* Worker died - mark slot as empty, will respawn in main loop */
          prefork_worker_pids[slot] = 0;
+         worker_snapshot_set_slot(slot, 0);
       }
    }
 }
@@ -387,6 +549,7 @@ static void prefork_terminate_workers()
             log_event(LOG_INFO, "prefork-reaped worker=%d pid=%d", i, (int)pid);
          }
          prefork_worker_pids[i] = 0;
+         worker_snapshot_set_slot(i, 0);
       }
    }
 }
@@ -401,6 +564,7 @@ static void prefork_respawn_workers(int listen_fd, int is_unix_socket)
             prefork_worker_pids[i] = new_pid;
             log_event(LOG_INFO, "prefork-respawned worker=%d pid=%d", i, (int)new_pid);
             DEBUG_LOG("+ prefork-worker-respawn worker=%d pid=%d", i, (int)new_pid);
+            worker_snapshot_set_slot(i, new_pid);
          }
       }
    }
@@ -433,6 +597,7 @@ static void adaptive_clear_slot(int index)
    adaptive_workers[index].control_fd = -1;
    adaptive_workers[index].idle_reported = 0;
    adaptive_workers[index].terminating = 0;
+   worker_snapshot_set_slot(index, 0);
 }
 
 static void adaptive_update_worker_state(int index, char state)
@@ -446,6 +611,7 @@ static void adaptive_update_worker_state(int index, char state)
          adaptive_idle_workers++;
          DEBUG_LOG("= adaptive-worker-idle idx=%d pid=%d idle_total=%d",
             index, (int)adaptive_workers[index].pid, adaptive_idle_workers);
+         worker_snapshot_set_idle(index, 1);
       }
    } else if (state == 'B') {
       if (adaptive_workers[index].idle_reported) {
@@ -454,6 +620,7 @@ static void adaptive_update_worker_state(int index, char state)
             adaptive_idle_workers--;
          DEBUG_LOG("= adaptive-worker-busy idx=%d pid=%d idle_total=%d",
             index, (int)adaptive_workers[index].pid, adaptive_idle_workers);
+         worker_snapshot_set_idle(index, 0);
       }
    }
 }
@@ -549,6 +716,7 @@ static void adaptive_trim_idle_worker()
          log_event(LOG_INFO, "adaptive-trim worker=%d pid=%d", i, (int)adaptive_workers[i].pid);
          DEBUG_LOG("- adaptive-trim-request worker=%d pid=%d idle_total=%d",
             i, (int)adaptive_workers[i].pid, adaptive_idle_workers);
+         worker_snapshot_set_terminating(i, 1);
          return;
       }
    }
@@ -584,6 +752,7 @@ static pid_t adaptive_spawn_worker(int listen_fd, int is_unix_socket, int worker
    adaptive_workers[worker_index].terminating = 0;
    DEBUG_LOG("+ adaptive-worker-spawn idx=%d pid=%d ctrl_fd=%d capacity=%d",
       worker_index, (int)pid, pipefd[0], adaptive_worker_capacity);
+   worker_snapshot_set_slot(worker_index, pid);
    return pid;
 }
 
@@ -699,6 +868,8 @@ int server_start(int port_num, const char *unix_socket_path)
    server_socket_path[0] = '\0';
    server_use_unix_socket = use_unix_socket;
    worker_pool_shutdown_requested = 0;
+   worker_snapshot_init();
+   worker_snapshot_refresh_config();
 
    install_reaper();
    install_shutdown_handlers();
@@ -1118,61 +1289,113 @@ int read_iface_config(char *config_file)
 
 void server_send_stats(int sock)
 {
-   const char *model = worker_model_to_string(var_worker_model);
+   const worker_snapshot_t *snap = worker_snapshot;
+   worker_snapshot_view_t view;
+   memset(&view, 0, sizeof(view));
+   worker_snapshot_read(&view);
+   const char *model = worker_model_to_string(view.available ? view.model : var_worker_model);
+   char workers_json[2048];
+   size_t offset = 0;
+   int trimmed = 0;
+   int listed = 0;
+   int total_spare = view.available && view.model == WORKER_MODEL_ADAPTIVE ? view.idle_workers : 0;
+   int capacity = 0;
 
-   /* Only parent process can enumerate workers. Workers report their model but empty list. */
-   if (var_worker_model == WORKER_MODEL_PREFORK && getpid() == server_owner_pid && prefork_worker_pids != NULL) {
-      char workers_json[2048];
-      size_t offset = 0;
-      int first = 1;
-      int active_count = 0;
-
-      offset += snprintf(workers_json + offset, sizeof(workers_json) - offset, "[");
-
-      for (int i = 0; i < prefork_worker_count && offset < sizeof(workers_json) - 50; i++) {
-         if (prefork_worker_pids[i] > 0) {
-            offset += snprintf(workers_json + offset, sizeof(workers_json) - offset,
-               "%s{\"index\":%d,\"pid\":%d}",
-               first ? "" : ",", i, (int)prefork_worker_pids[i]);
-            first = 0;
-            active_count++;
-         }
-      }
-
-      offset += snprintf(workers_json + offset, sizeof(workers_json) - offset, "]");
-
-      /* Include legacy fields for backwards compatibility */
-      stream_writeln(sock,
-         "200 {\"worker_model\":\"%s\",\"workers\":%s,\"reuse_enabled\":false,\"total_spare\":%d,\"listed\":%d,\"trimmed\":false}",
-         model, workers_json, active_count, active_count);
-   } else if (var_worker_model == WORKER_MODEL_ADAPTIVE && getpid() == server_owner_pid && adaptive_workers != NULL) {
-      char workers_json[2048];
-      size_t offset = 0;
-      int first = 1;
-      int active_count = 0;
-      int spare = adaptive_idle_workers;
-
-      offset += snprintf(workers_json + offset, sizeof(workers_json) - offset, "[");
-
-      for (int i = 0; i < adaptive_worker_capacity && offset < sizeof(workers_json) - 50; i++) {
-         if (adaptive_workers[i].pid > 0) {
-            offset += snprintf(workers_json + offset, sizeof(workers_json) - offset,
-               "%s{\"index\":%d,\"pid\":%d}",
-               first ? "" : ",", i, (int)adaptive_workers[i].pid);
-            first = 0;
-            active_count++;
-         }
-      }
-
-      offset += snprintf(workers_json + offset, sizeof(workers_json) - offset, "]");
-
-      stream_writeln(sock,
-         "200 {\"worker_model\":\"%s\",\"workers\":%s,\"reuse_enabled\":false,\"total_spare\":%d,\"listed\":%d,\"trimmed\":false}",
-         model, workers_json, spare, active_count);
-   } else {
-      /* Fork mode or worker process: include legacy fields for backwards compatibility */
-      stream_writeln(sock,
-         "200 {\"worker_model\":\"%s\",\"workers\":[],\"reuse_enabled\":false,\"total_spare\":0,\"listed\":0,\"trimmed\":false}",
-         model);
+   if (view.available) {
+      if (view.model == WORKER_MODEL_PREFORK)
+         capacity = view.prefork_workers;
+      else if (view.model == WORKER_MODEL_ADAPTIVE)
+         capacity = view.adaptive_max_workers;
    }
+
+   if (capacity < 0)
+      capacity = 0;
+   if (capacity > ADAPTIVE_WORKERS_MAX)
+      capacity = ADAPTIVE_WORKERS_MAX;
+
+   offset += snprintf(workers_json + offset, sizeof(workers_json) - offset, "[");
+
+   if (snap != NULL && snap->initialized) {
+      for (int i = 0; i < capacity && offset < sizeof(workers_json) - 80; i++) {
+         if (snap->slots[i].pid > 0) {
+            offset += snprintf(
+               workers_json + offset,
+               sizeof(workers_json) - offset,
+               "%s{\"index\":%d,\"pid\":%d",
+               (listed == 0) ? "" : ",",
+               i,
+               (int)snap->slots[i].pid);
+
+            if (snap->model == WORKER_MODEL_ADAPTIVE)
+               offset += snprintf(
+                  workers_json + offset,
+                  sizeof(workers_json) - offset,
+                  ",\"idle\":%s",
+                  snap->slots[i].idle ? "true" : "false");
+
+            if (snap->slots[i].terminating)
+               offset += snprintf(workers_json + offset, sizeof(workers_json) - offset, ",\"terminating\":true");
+
+            offset += snprintf(workers_json + offset, sizeof(workers_json) - offset, "}");
+            listed++;
+         }
+      }
+
+      if (listed < snap->active_workers && offset >= sizeof(workers_json) - 80)
+         trimmed = 1;
+      else if (snap->active_workers > listed)
+         trimmed = 1;
+   } else if (view.available && getpid() == server_owner_pid) {
+      if (var_worker_model == WORKER_MODEL_PREFORK && prefork_worker_pids != NULL) {
+         for (int i = 0; i < prefork_worker_count && offset < sizeof(workers_json) - 50; i++) {
+            if (prefork_worker_pids[i] > 0) {
+               offset += snprintf(
+                  workers_json + offset,
+                  sizeof(workers_json) - offset,
+                  "%s{\"index\":%d,\"pid\":%d}",
+                  (listed == 0) ? "" : ",",
+                  i,
+                  (int)prefork_worker_pids[i]);
+               listed++;
+            }
+         }
+         if (view.active_workers > listed)
+            trimmed = 1;
+      } else if (var_worker_model == WORKER_MODEL_ADAPTIVE && adaptive_workers != NULL) {
+         for (int i = 0; i < adaptive_worker_capacity && offset < sizeof(workers_json) - 80; i++) {
+            if (adaptive_workers[i].pid > 0) {
+               offset += snprintf(
+                  workers_json + offset,
+                  sizeof(workers_json) - offset,
+                  "%s{\"index\":%d,\"pid\":%d,\"idle\":%s}",
+                  (listed == 0) ? "" : ",",
+                  i,
+                  (int)adaptive_workers[i].pid,
+                  adaptive_workers[i].idle_reported ? "true" : "false");
+               listed++;
+            }
+         }
+         if (view.active_workers > listed)
+            trimmed = 1;
+         total_spare = adaptive_idle_workers;
+      }
+   }
+
+   offset += snprintf(workers_json + offset, sizeof(workers_json) - offset, "]");
+
+   stream_writeln(
+      sock,
+      "200 {\"worker_model\":\"%s\",\"workers\":%s,\"reuse_enabled\":false,\"total_spare\":%d,\"listed\":%d,"
+      "\"trimmed\":%s,\"config\":{\"prefork_workers\":%d,\"adaptive_min\":%d,\"adaptive_max\":%d,\"adaptive_spare\":%d},"
+      "\"active\":%d}",
+      model,
+      workers_json,
+      total_spare,
+      listed,
+      trimmed ? "true" : "false",
+      view.available ? view.prefork_workers : var_prefork_workers,
+      view.available ? view.adaptive_min_workers : var_adaptive_min_workers,
+      view.available ? view.adaptive_max_workers : var_adaptive_max_workers,
+      view.available ? view.adaptive_spare_workers : var_adaptive_spare_workers,
+      view.available ? view.active_workers : listed);
 }
