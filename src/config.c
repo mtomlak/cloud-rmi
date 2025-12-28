@@ -149,7 +149,10 @@ static void config_reset_defaults(void)
    var_unix_socket_skip_auth = 0;
    var_recovery_token = NULL;
 
-   var_interface_map_file = INTERFACE_MAP_FILE;
+   free(var_interface_map_file);
+   var_interface_map_file = strdup(INTERFACE_MAP_FILE);
+   if (var_interface_map_file == NULL)
+      die_err("Error: Failed to set default interface map file");
    var_max_payload = RMI_DEFAULT_MAX_PAYLOAD;
 
    var_worker_model = DEFAULT_WORKER_MODEL;

@@ -24,6 +24,19 @@
  * @license BSD
  */
 
+#ifdef ENABLE_DEBUG_LOGGING
+static void apply_early_debug_flags(int argc, char *argv[])
+{
+   for (int i = 1; i < argc; i++) {
+      if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+         debug_log_set(1);
+      } else if (strcmp(argv[i], "-T") == 0 || strcmp(argv[i], "--debug-traffic") == 0) {
+         debug_traffic_set(1);
+      }
+   }
+}
+#endif
+
 
 void show_help(char *this_cmd)
 {
@@ -132,6 +145,8 @@ int find_and_load_configs(char *command)
       } else
          DEBUG_LOG("Failed to load some configuration files");
    } 
+
+   return success;
 }
 
 /**
@@ -144,6 +159,10 @@ int find_and_load_configs(char *command)
 int main(int argc, char *argv[]) 
 {
    int opt, pid, daemon = 0;
+
+#ifdef ENABLE_DEBUG_LOGGING
+   apply_early_debug_flags(argc, argv);
+#endif
 
    // Try few common paths for configs and save the path
    find_and_load_configs(basename(argv[0]));
