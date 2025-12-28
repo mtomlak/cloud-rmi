@@ -411,6 +411,7 @@ int proxy_add_conn(int proxy_id, struct rmi_client_conn client)
    proxy_list[proxy_id].conns[ci].client = client;
    proxy_list[proxy_id].conns[ci].is_busy = 0;
    proxy_list[proxy_id].conns[ci].proxy_id = proxy_id;
+   proxy_list[proxy_id].conns[ci].conn_id = ci;
    proxy_list[proxy_id].conn_count++;
 
    return ci;
@@ -468,7 +469,13 @@ int proxy_start_new_conn(int proxy_id)
    proxy_mark_success(proxy);
 
    // Add socket to the list
-   return proxy_add_conn(proxy_id, client);
+   int slot = proxy_add_conn(proxy_id, client);
+   DEBUG_LOG("+ proxy-conn-new proxy_id=%d conn_id=%d total=%d spare=%d",
+      proxy_id,
+      slot,
+      proxy_list[proxy_id].conn_count,
+      proxy_get_spare_conn_count(proxy_id));
+   return slot;
 }
 
 int proxy_restart_conn(struct proxy_conn *conn)
@@ -513,6 +520,7 @@ int proxy_restart_conn(struct proxy_conn *conn)
 
    proxy_mark_success(proxy);
 
+   DEBUG_LOG("+ proxy-conn-restarted proxy_id=%d conn_id=%d", proxy_id, conn->conn_id);
    return 1;
 }
 
@@ -530,11 +538,22 @@ struct proxy_conn *proxy_get_free_conn(int proxy_id)
    proxy = proxy_list_get(proxy_id);
 
    for (i = 0; i < proxy_list[proxy_id].conn_count; i++) {
-      if (!proxy_list[proxy_id].conns[i].is_busy)
+      if (!proxy_list[proxy_id].conns[i].is_busy) {
+         DEBUG_LOG("= proxy-conn-reuse proxy_id=%d conn_id=%d spare=%d total=%d",
+            proxy_id,
+            proxy_list[proxy_id].conns[i].conn_id,
+            proxy_get_spare_conn_count(proxy_id),
+            proxy_list[proxy_id].conn_count);
          return &proxy_list[proxy_id].conns[i];
+      }
    }
 
    // If we got here, all connections are busy, need to create new one
+   DEBUG_LOG("+ proxy-conn-expand proxy_id=%d total=%d spare=%d target_spare=%d",
+      proxy_id,
+      proxy_list[proxy_id].conn_count,
+      proxy_get_spare_conn_count(proxy_id),
+      var_proxy_min_spare_conns);
    i = proxy_start_new_conn(proxy_id);
 
    if (i < 0)
@@ -1174,6 +1193,14 @@ void proxy_check_spare_conns(int proxy_id)
 {
    int i, spare_conns = proxy_get_spare_conn_count(proxy_id);
 
+   if (spare_conns < var_proxy_min_spare_conns) {
+      DEBUG_LOG("+ proxy-spare-grow proxy_id=%d spare=%d target=%d total=%d",
+         proxy_id,
+         spare_conns,
+         var_proxy_min_spare_conns,
+         proxy_list[proxy_id].conn_count);
+   }
+
    for(i = spare_conns; i < var_proxy_min_spare_conns; i++)
       proxy_start_new_conn(proxy_id);
 }
@@ -1307,8 +1334,8 @@ void proxy_init_connections_ex(int prewarm_spares)
    //if (proxy_iface_map != NULL)
    //   return;
 
-   DEBUG_LOG("proxy-init-connections pid=%d proxy_count=%d prewarm=%d",
-      (int)getpid(), proxy_count, prewarm_spares);
+   DEBUG_LOG("proxy-init-connections pid=%d proxy_count=%d prewarm=%d spare_target=%d",
+      (int)getpid(), proxy_count, prewarm_spares, var_proxy_min_spare_conns);
 
    for (i = 0; i < proxy_count; i++) {
       if (prewarm_spares) {

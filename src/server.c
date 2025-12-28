@@ -64,8 +64,19 @@ static void adaptive_clear_slot(int index);
 
 static void cleanup_listen_socket()
 {
-   if (server_owner_pid != 0 && getpid() != server_owner_pid)
+   int is_owner = (server_owner_pid == 0 || getpid() == server_owner_pid);
+
+   if (!is_owner) {
+      server_should_run = 0;
+
+      if (server_socket_fd >= 0) {
+         close(server_socket_fd);
+         server_socket_fd = -1;
+      }
+
+      DEBUG_LOG("! worker-cleanup pid=%i owner=%i", (int)getpid(), (int)server_owner_pid);
       return;
+   }
 
    log_unexpected_event(
       LOG_INFO,
@@ -254,6 +265,8 @@ static pid_t prefork_spawn_worker(int listen_fd, int is_unix_socket, int worker_
    /* Parent: log worker spawn */
    log_event(LOG_INFO, "%s-spawned worker=%d pid=%d",
       adaptive_mode ? "adaptive" : "prefork", worker_index, (int)pid);
+   DEBUG_LOG("+ %s-worker-spawn worker=%d pid=%d",
+      adaptive_mode ? "adaptive" : "prefork", worker_index, (int)pid);
    return pid;
 }
 
@@ -388,6 +401,7 @@ static void prefork_respawn_workers(int listen_fd, int is_unix_socket)
          if (new_pid > 0) {
             prefork_worker_pids[i] = new_pid;
             log_event(LOG_INFO, "prefork-respawned worker=%d pid=%d", i, (int)new_pid);
+            DEBUG_LOG("+ prefork-worker-respawn worker=%d pid=%d", i, (int)new_pid);
          }
       }
    }
@@ -414,6 +428,8 @@ static void adaptive_clear_slot(int index)
    if (adaptive_workers[index].control_fd >= 0)
       close(adaptive_workers[index].control_fd);
 
+   DEBUG_LOG("- adaptive-worker-clear idx=%d pid=%d idle_total=%d",
+      index, (int)adaptive_workers[index].pid, adaptive_idle_workers);
    adaptive_workers[index].pid = 0;
    adaptive_workers[index].control_fd = -1;
    adaptive_workers[index].idle_reported = 0;
@@ -429,12 +445,16 @@ static void adaptive_update_worker_state(int index, char state)
       if (!adaptive_workers[index].idle_reported) {
          adaptive_workers[index].idle_reported = 1;
          adaptive_idle_workers++;
+         DEBUG_LOG("= adaptive-worker-idle idx=%d pid=%d idle_total=%d",
+            index, (int)adaptive_workers[index].pid, adaptive_idle_workers);
       }
    } else if (state == 'B') {
       if (adaptive_workers[index].idle_reported) {
          adaptive_workers[index].idle_reported = 0;
          if (adaptive_idle_workers > 0)
             adaptive_idle_workers--;
+         DEBUG_LOG("= adaptive-worker-busy idx=%d pid=%d idle_total=%d",
+            index, (int)adaptive_workers[index].pid, adaptive_idle_workers);
       }
    }
 }
@@ -487,6 +507,7 @@ static void adaptive_poll_worker_states()
 
    for (int i = 0; i < nfds; i++) {
       if (pfds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+         DEBUG_LOG("- adaptive-control-closed idx=%d fd=%d revents=%d", slot_map[i], pfds[i].fd, pfds[i].revents);
          adaptive_clear_slot(slot_map[i]);
          continue;
       }
@@ -527,6 +548,8 @@ static void adaptive_trim_idle_worker()
          }
          kill(adaptive_workers[i].pid, SIGTERM);
          log_event(LOG_INFO, "adaptive-trim worker=%d pid=%d", i, (int)adaptive_workers[i].pid);
+         DEBUG_LOG("- adaptive-trim-request worker=%d pid=%d idle_total=%d",
+            i, (int)adaptive_workers[i].pid, adaptive_idle_workers);
          return;
       }
    }
@@ -560,6 +583,8 @@ static pid_t adaptive_spawn_worker(int listen_fd, int is_unix_socket, int worker
    adaptive_workers[worker_index].control_fd = pipefd[0];
    adaptive_workers[worker_index].idle_reported = 0;
    adaptive_workers[worker_index].terminating = 0;
+   DEBUG_LOG("+ adaptive-worker-spawn idx=%d pid=%d ctrl_fd=%d capacity=%d",
+      worker_index, (int)pid, pipefd[0], adaptive_worker_capacity);
    return pid;
 }
 
@@ -826,6 +851,8 @@ int server_start(int port_num, const char *unix_socket_path)
          int active = adaptive_active_workers();
 
          if (active < var_adaptive_min_workers) {
+            DEBUG_LOG("+ adaptive-scale active=%d idle=%d target_min=%d spare_target=%d max=%d",
+               active, adaptive_idle_workers, var_adaptive_min_workers, var_adaptive_spare_workers, var_adaptive_max_workers);
             int needed = var_adaptive_min_workers - active;
             for (i = 0; i < needed && !worker_pool_shutdown_requested; i++) {
                int slot = adaptive_find_free_slot();
@@ -836,6 +863,8 @@ int server_start(int port_num, const char *unix_socket_path)
                   adaptive_clear_slot(slot);
             }
          } else if (adaptive_idle_workers < var_adaptive_spare_workers && active < var_adaptive_max_workers) {
+            DEBUG_LOG("+ adaptive-scale-spare active=%d idle=%d spare_target=%d max=%d",
+               active, adaptive_idle_workers, var_adaptive_spare_workers, var_adaptive_max_workers);
             int slot = adaptive_find_free_slot();
             if (slot >= 0) {
                pid_t pid = adaptive_spawn_worker(sockfd, use_unix_socket, slot);
@@ -843,6 +872,8 @@ int server_start(int port_num, const char *unix_socket_path)
                   adaptive_clear_slot(slot);
             }
          } else if (adaptive_idle_workers > var_adaptive_spare_workers && active > var_adaptive_min_workers) {
+            DEBUG_LOG("- adaptive-scale-trim active=%d idle=%d spare_target=%d min=%d",
+               active, adaptive_idle_workers, var_adaptive_spare_workers, var_adaptive_min_workers);
             adaptive_trim_idle_worker();
          }
 
