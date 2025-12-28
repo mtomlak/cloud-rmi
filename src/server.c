@@ -203,11 +203,10 @@ static pid_t prefork_spawn_worker(int listen_fd, int is_unix_socket, int worker_
 
 #ifdef PROXY_SUPPORT
       /* In prefork mode with proxy, each worker must have its own upstream pool.
-       * Reset and initialize connections before accepting clients.
-       * Prefork mode pre-warms spare connections for better performance. */
+       * Reset proxy state; connections are initialized lazily per request to
+       * avoid blocking accept() when the upstream is not yet ready. */
       if (var_proxy) {
          proxy_reset_after_fork();
-         proxy_init_connections_ex(1);  /* prewarm_spares = true */
       }
 #endif
 
