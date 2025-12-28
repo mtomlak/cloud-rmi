@@ -433,9 +433,16 @@ int proxy_start_new_conn(int proxy_id)
 {
    struct rmi_client_conn client;
    struct proxy_server *proxy = proxy_list_get(proxy_id);
+   int spare_conns = proxy_get_spare_conn_count(proxy_id);
    int attempt = 0;
 
-   if (proxy_in_cooldown(proxy))
+   /* Allow immediate retries when we have no established connections yet.
+    * This prevents startup cooldown from permanently blocking the proxy when
+    * the first connection attempt races with the upstream listener.
+    *
+    * Additionally, bypass cooldown when no spare connections are available so
+    * we can recover quickly from transient upstream failures. */
+   if (proxy_in_cooldown(proxy) && proxy->conn_count > 0 && spare_conns > 0)
       return -1;
 
    // Connect
@@ -903,6 +910,7 @@ int proxy_pass_call_cmd_ex(
    int status_code = 0;
    int responded = 0;
    unsigned long long req_id = PROXY_REQ_ID();
+   int retried_send = 0;
 
    /* Lazy initialization of proxy connections on first operation */
    proxy_init_connections();
@@ -926,6 +934,15 @@ int proxy_pass_call_cmd_ex(
    iface_entry = proxy_get_iface_entry((char *)iface_lookup);
 
    if (iface_entry == NULL) {
+      /* Retry interface discovery lazily when the startup fetch failed
+       * (common when the proxy races the upstream listener in prefork mode). */
+      for (int i = 0; i < proxy_list_count(); i++)
+         proxy_fetch_interfaces(i);
+
+      iface_entry = proxy_get_iface_entry((char *)iface_lookup);
+   }
+
+   if (iface_entry == NULL) {
       stream_writeln(client_conn->sock, "400 Unsupported interface: %s", iface_lookup ? iface_lookup : "");
       free(response);
       free(message);
@@ -937,6 +954,22 @@ int proxy_pass_call_cmd_ex(
    DEBUG_LOG("Proxy: Passing CALL command to proxy #%i", iface_entry->proxy_id);
 
    conn = proxy_get_free_conn(iface_entry->proxy_id);
+   if (conn == NULL) {
+      /* Attempt a one-time recovery by rebuilding the upstream pool when no
+       * connections are available (for example after a transient cooldown). */
+      proxy_reset_after_fork();
+      proxy_init_connections();
+      conn = proxy_get_free_conn(iface_entry->proxy_id);
+
+      /* If still unavailable, give the upstream a short window to come up and
+       * retry once more before failing the request. */
+      if (conn == NULL) {
+         usleep(100000);  /* 100ms */
+         proxy_init_connections();
+         conn = proxy_get_free_conn(iface_entry->proxy_id);
+      }
+   }
+
    if (conn == NULL) {
       proxy_mark_failure(proxy, "conn-unavailable");
       stream_writeln(client_conn->sock, "503 Service Unavailable");
@@ -955,11 +988,18 @@ int proxy_pass_call_cmd_ex(
    if (payload != NULL) {
       const char *enc_value = (encoding != NULL && encoding[0] != '\0') ? encoding : "NONE";
 
+retry_payload_call:
       if (stream_writeln(conn->client.sock, "CALL %s %s PAYLOAD %s %zu", iface_lookup, cmd, enc_value, payload_len) < 0) {
          status_code = 503;
          snprintf(message, BUF_SZ, "Service Unavailable");
          ret = 0;
          responded = 1;
+         if (!retried_send && proxy_restart_conn(conn)) {
+            retried_send = 1;
+            proxy_mark_success(proxy);
+            PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-restart", iface_lookup, cmd, status_code, 0, 0);
+            goto retry_payload_call;
+         }
          stream_writeln(client_conn->sock, "%i %s", status_code, message);
          proxy_mark_failure(proxy, "call-send-failed");
          PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-send-failed", iface_lookup, cmd, status_code, 0, 0);
@@ -971,17 +1011,30 @@ int proxy_pass_call_cmd_ex(
          snprintf(message, BUF_SZ, "Service Unavailable");
          ret = 0;
          responded = 1;
+         if (!retried_send && proxy_restart_conn(conn)) {
+            retried_send = 1;
+            proxy_mark_success(proxy);
+            PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-restart-bytes", iface_lookup, cmd, status_code, 0, 0);
+            goto retry_payload_call;
+         }
          stream_writeln(client_conn->sock, "%i %s", status_code, message);
          proxy_mark_failure(proxy, "call-payload-write-failed");
          PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-payload-write-failed", iface_lookup, cmd, status_code, 0, 0);
          goto cleanup;
       }
    } else {
+retry_inline_call:
       if (stream_writeln(conn->client.sock, "CALL %s %s %s", iface_lookup, cmd, arg) < 0) {
          status_code = 503;
          snprintf(message, BUF_SZ, "Service Unavailable");
          ret = 0;
          responded = 1;
+         if (!retried_send && proxy_restart_conn(conn)) {
+            retried_send = 1;
+            proxy_mark_success(proxy);
+            PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-restart", iface_lookup, cmd, status_code, 0, 0);
+            goto retry_inline_call;
+         }
          stream_writeln(client_conn->sock, "%i %s", status_code, message);
          proxy_mark_failure(proxy, "call-send-failed");
          PROXY_LOG_UPSTREAM_PENDING(req_id, conn, "call-send-failed", iface_lookup, cmd, status_code, 0, 0);
@@ -1354,9 +1407,9 @@ void proxy_init_connections_ex(int prewarm_spares)
  */
 void proxy_init_connections(void)
 {
-   proxy_init_connections_ex(
-      var_worker_model == WORKER_MODEL_PREFORK ||
-      var_worker_model == WORKER_MODEL_ADAPTIVE);
+   /* Initialize connections without pre-warming spares. Lazy creation keeps
+    * worker startup and first-request latency predictable across worker models. */
+   proxy_init_connections_ex(0);
 }
 
 /**

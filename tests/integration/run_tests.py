@@ -228,6 +228,8 @@ def main() -> int:
         runner = IntegrationRunner(suite.env)
         try:
             suite_run = runner.run(suite.cases, verbose=args.verbose > 0)
+            for result in suite_run:
+                result.suite = suite.name
             suite_results.append(SuiteResult(name=suite.name, results=suite_run))
             results.extend(suite_run)
         except Exception as exc:  # pragma: no cover - integration only
@@ -247,7 +249,8 @@ def main() -> int:
     if failures:
         print("\nFailures:")
         for failure in failures:
-            print(f"- {failure.name}: {failure.message or 'see logs'}")
+            suite_name = getattr(failure, "suite", "") or "unknown"
+            print(f"- {failure.name} [{suite_name}]: {failure.message or 'see logs'}")
         return 1
 
     print("integration tests passed")

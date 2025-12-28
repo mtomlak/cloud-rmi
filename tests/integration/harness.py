@@ -529,11 +529,12 @@ class IntegrationEnvironment:
 
 @dataclass
 class TestResult:
-    name: str
-    passed: bool
-    message: str = ""
-    traces: list[WireTrace] = field(default_factory=list)
-    duration: float = 0.0
+   name: str
+   passed: bool
+   message: str = ""
+   traces: list[WireTrace] = field(default_factory=list)
+   duration: float = 0.0
+   suite: str = ""
 
 
 TestFunc = Callable[["IntegrationEnvironment"], TestResult]
