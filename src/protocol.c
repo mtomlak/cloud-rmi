@@ -10,6 +10,9 @@
 #include <math.h>
 #include <stdint.h>
 #include <syslog.h>
+#include <errno.h>
+#include <limits.h>
+#include <poll.h>
 #include "cloud-rmi.h"
 #include "config.h"
 #include "capabilities.h"
@@ -570,7 +573,48 @@ void handle_connection (int sock, int is_unix_socket)
    debug.pid = (int) getpid();
    log_traffic_event(&state, "connection-open");
 
+   const int poll_timeout_ms = (var_read_timeout <= 0 || var_read_timeout > INT_MAX / 1000)
+      ? -1
+      : var_read_timeout * 1000;
+
    while (loop) {
+      if (poll_timeout_ms >= 0) {
+         struct pollfd pfd;
+         pfd.fd = state.sock;
+         pfd.events = POLLIN;
+         pfd.revents = 0;
+
+         int pres = poll(&pfd, 1, poll_timeout_ms);
+
+         if (pres == 0) {
+            if (debug_log_enabled()) {
+               DEBUG_LOG("! conn-timeout pid=%d sock=%d timeout_ms=%d", (int)getpid(), state.sock, poll_timeout_ms);
+            }
+            loop = 0;
+            bytes = 0;
+            break;
+         }
+
+         if (pres < 0) {
+            if (errno == EINTR)
+               continue;
+
+            log_unexpected_event(LOG_WARNING, "poll-failed sock=%d errno=%d", state.sock, errno);
+            loop = 0;
+            bytes = 0;
+            break;
+         }
+
+         if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            loop = 0;
+            bytes = 0;
+            break;
+         }
+
+         if (!(pfd.revents & POLLIN))
+            continue;
+      }
+
       bytes = stream_read(state.sock, buf, BUF_SZ);
       if (bytes <= 0) {
          if (bytes < 0)
