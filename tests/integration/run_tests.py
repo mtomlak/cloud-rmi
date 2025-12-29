@@ -18,6 +18,7 @@ class SuitePlan:
     name: str
     env: IntegrationEnvironment
     cases: list
+    name_prefix: str | None = None
 
 
 @dataclass
@@ -123,9 +124,9 @@ def main() -> int:
 
     all_cases = base_cases + ([] if args.skip_unix else unix_cases)
 
-    def add_suite(name: str, env: IntegrationEnvironment, cases: list) -> None:
+    def add_suite(name: str, env: IntegrationEnvironment, cases: list, prefix: str | None = None) -> None:
         if cases:
-            suites.append(SuitePlan(name=name, env=env, cases=cases))
+            suites.append(SuitePlan(name=name, env=env, cases=cases, name_prefix=prefix))
 
     # Default run with the configured worker model (from binary defaults)
     default_server_socket = default_proxy_socket = default_upstream_socket = None
@@ -198,6 +199,7 @@ def main() -> int:
                 **variant_overrides,
             ),
             all_cases,
+            prefix=variant_name,
         )
 
     # Worker model tests (fork vs prefork)
@@ -225,7 +227,7 @@ def main() -> int:
     results: list = []
     suite_results: list[SuiteResult] = []
     for suite in suites:
-        runner = IntegrationRunner(suite.env)
+        runner = IntegrationRunner(suite.env, name_prefix=suite.name_prefix)
         try:
             suite_run = runner.run(suite.cases, verbose=args.verbose > 0)
             for result in suite_run:

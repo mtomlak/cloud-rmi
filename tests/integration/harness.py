@@ -548,9 +548,15 @@ class TestCase:
 
 
 class IntegrationRunner:
-    def __init__(self, env: IntegrationEnvironment, logger: logging.Logger | None = None):
+    def __init__(
+        self,
+        env: IntegrationEnvironment,
+        logger: logging.Logger | None = None,
+        name_prefix: str | None = None,
+    ):
         self.env = env
         self.logger = logger or LOG
+        self.name_prefix = name_prefix
 
     def run(self, cases: Iterable[TestCase], verbose: bool = False) -> list[TestResult]:
         results: list[TestResult] = []
@@ -566,12 +572,15 @@ class IntegrationRunner:
         return results
 
     def _run_case(self, case: TestCase, verbose: bool) -> TestResult:
-        print(f"testing {case.name}... ", end="", flush=True)
+        display_name = f"{self.name_prefix}:{case.name}" if self.name_prefix else case.name
+        print(f"testing {display_name}... ", end="", flush=True)
         start = time.perf_counter()
         try:
             result = case.runner(self.env)
             if not result.name:
-                result.name = case.name
+                result.name = display_name
+            elif self.name_prefix and not result.name.startswith(f"{self.name_prefix}:"):
+                result.name = f"{self.name_prefix}:{result.name}"
             outcome = "ok" if result.passed else "FAIL"
             elapsed = time.perf_counter() - start
             result.duration = elapsed
@@ -589,7 +598,7 @@ class IntegrationRunner:
             suffix = f" ({elapsed:.3f}s)" if verbose else ""
             print(f"FAIL{suffix}")
             message = str(exc)
-            self.logger.error("Test %s failed: %s", case.name, message)
+            self.logger.error("Test %s failed: %s", display_name, message)
             if verbose:
-                self.logger.exception("Exception during %s", case.name)
-            return TestResult(name=case.name, passed=False, message=message, duration=elapsed)
+                self.logger.exception("Exception during %s", display_name)
+            return TestResult(name=display_name, passed=False, message=message, duration=elapsed)

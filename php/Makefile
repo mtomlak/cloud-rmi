@@ -7,6 +7,11 @@ LIB_DIR := $(CURDIR)/../libcloudrmi
 EXT_DIR := $(CURDIR)/ext/profiweb_cloudrmi
 EXT_SO := $(EXT_DIR)/modules/profiweb_cloudrmi.so
 COMPOSER_DIR := $(CURDIR)/cloudrmi
+WORKER_MODELS ?= single fork prefork adaptive
+PREFORK_WORKERS ?= 2
+ADAPTIVE_MIN ?= 1
+ADAPTIVE_MAX ?= 4
+ADAPTIVE_SPARE ?= 1
 
 .PHONY: all build-ext clean test unit integration composer-install
 
@@ -44,9 +49,12 @@ unit: build-ext composer-install
 
 integration: build-ext composer-install
 	@if [ -n "$(INTEGRATION_TESTS)" ]; then \
-		for test in $(INTEGRATION_TESTS); do \
-			echo "Running $$test"; \
-			PROFIWEB_CLOUDRMI_EXT=$(EXT_SO) $(PHP) -d extension=$(EXT_SO) $$test || exit $$?; \
+		for model in $(WORKER_MODELS); do \
+			echo "Running PHP integration tests with worker model $$model"; \
+			for test in $(INTEGRATION_TESTS); do \
+				echo "Executing $$test"; \
+				CLOUDRMI_WORKER_MODEL=$$model CLOUDRMI_PREFORK_WORKERS=$(PREFORK_WORKERS) CLOUDRMI_ADAPTIVE_MIN=$(ADAPTIVE_MIN) CLOUDRMI_ADAPTIVE_MAX=$(ADAPTIVE_MAX) CLOUDRMI_ADAPTIVE_SPARE=$(ADAPTIVE_SPARE) PROFIWEB_CLOUDRMI_EXT=$(EXT_SO) $(PHP) -d extension=$(EXT_SO) $$test || exit $$?; \
+			done; \
 		done; \
 	else \
 		echo "No integration tests found"; \

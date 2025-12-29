@@ -1,52 +1,7 @@
 <?php
-require_once __DIR__ . '/../bootstrap.php';
+require_once __DIR__ . '/../support/test_harness.php';
 
 use ProfiWeb\CloudRMI\CloudRMIClient;
-
-function wait_for_server(string $host, int $port, int $retries = 30): void
-{
-	for ($i = 0; $i < $retries; $i++) {
-		$sock = @stream_socket_client("tcp://{$host}:{$port}", $errno, $errstr, 0.2);
-		if ($sock !== false) {
-			fclose($sock);
-			return;
-		}
-		usleep(100000);
-	}
-	throw new RuntimeException("server on {$host}:{$port} did not start");
-}
-
-function start_test_server(int $port): array
-{
-	$cmd = cloudrmi_test_command(
-		__DIR__ . '/../support/test_server.php',
-		[
-			'--host=127.0.0.1',
-			'--port=' . $port,
-			'--proto-max=2',
-		]
-	);
-	$descriptors = [
-		0 => ['pipe', 'r'],
-		1 => ['file', '/dev/null', 'a'],
-		2 => ['file', '/dev/null', 'a'],
-	];
-	$proc = proc_open($cmd, $descriptors, $pipes);
-	if (!is_resource($proc)) {
-		throw new RuntimeException('failed to start PHP test server');
-	}
-	return [$proc, $pipes];
-}
-
-function stop_server($proc, array $pipes): void
-{
-	foreach ($pipes as $pipe) {
-		fclose($pipe);
-	}
-
-	proc_terminate($proc);
-	proc_close($proc);
-}
 
 function decode_inline_response(string $raw): mixed
 {
@@ -101,12 +56,12 @@ function decode_payload_response(string $encoding, string $payload): mixed
 function read_response_body($stream, string $line): mixed
 {
 	$trimmed = trim($line);
-	if (!preg_match('/^\\d{3}\\s+(.+)$/', $trimmed, $matches)) {
+	if (!preg_match('/^\d{3}\s+(.+)$/', $trimmed, $matches)) {
 		throw new RuntimeException('malformed response line: ' . $trimmed);
 	}
 
 	$rest = $matches[1];
-	if (preg_match('/^PAYLOAD\\s+(\\S+)\\s+(\\d+)$/i', $rest, $payloadMatches)) {
+	if (preg_match('/^PAYLOAD\s+(\S+)\s+(\d+)$/i', $rest, $payloadMatches)) {
 		$length = (int) $payloadMatches[2];
 		$body = ($length > 0) ? stream_get_contents($stream, $length) : '';
 		if ($body === false || strlen($body) !== $length) {
@@ -132,63 +87,80 @@ function build_large_php_array(int $count, int $valueLength, string $char = 'V')
 	return $result;
 }
 
-$port = 19000 + random_int(0, 400);
-[$proc, $pipes] = start_test_server($port);
-wait_for_server('127.0.0.1', $port);
+cloudrmi_set_suite('php_serialization_paths');
+
+$port = cloudrmi_random_port(19000, 400);
+[$proc, $pipes, $port] = cloudrmi_start_php_server($port);
+$exitCode = 0;
 
 try {
-	$client = new CloudRMIClient('127.0.0.1', $port);
-	$client->connect();
-
+	cloudrmi_wait_for_server('127.0.0.1', $port);
 	$smallPayload = ['foo' => 'bar', 'nested' => ['n' => 1]];
-	$smallResult = $client->call('TestRmiInterface', 'mirror', [$smallPayload]);
-	if ($smallResult !== $smallPayload) {
-		throw new RuntimeException('inline PHP mirror failed');
-	}
+	$largePayload = build_large_php_array(80, 12);
 
-	$largePayload = build_large_php_array(80, 12); // comfortably above inline threshold
-	$largeResult = $client->call(
-		'TestRmiInterface',
-		'mirror',
-		[$largePayload],
-		['payload' => true, 'encoding' => 'PHP']
-	);
-	if ($largeResult !== $largePayload) {
-		throw new RuntimeException('payload PHP mirror failed');
-	}
+	cloudrmi_run_test('inline-php-mirror', function () use ($port, $smallPayload) {
+		$client = new CloudRMIClient('127.0.0.1', $port);
+		$client->connect();
+		$smallResult = $client->call('TestRmiInterface', 'mirror', [$smallPayload]);
+		$client->disconnect();
+		if ($smallResult !== $smallPayload) {
+			throw new RuntimeException('inline PHP mirror failed');
+		}
+	});
 
-	$client->disconnect();
+	cloudrmi_run_test('payload-php-mirror', function () use ($port, $largePayload) {
+		$client = new CloudRMIClient('127.0.0.1', $port);
+		$client->connect();
+		$largeResult = $client->call(
+			'TestRmiInterface',
+			'mirror',
+			[$largePayload],
+			['payload' => true, 'encoding' => 'PHP']
+		);
+		$client->disconnect();
+		if ($largeResult !== $largePayload) {
+			throw new RuntimeException('payload PHP mirror failed');
+		}
+	});
 
-	$raw = stream_socket_client("tcp://127.0.0.1:{$port}");
-	if ($raw === false) {
-		throw new RuntimeException('unable to connect raw client');
-	}
-	fgets($raw, 2048); // banner
-	fwrite($raw, "PROTO 2\r\n");
-	$protoLine = fgets($raw, 2048);
-	if ($protoLine === false || strpos($protoLine, '200 PROTO 2') === false) {
-		throw new RuntimeException('proto negotiation failed for large result check');
-	}
+	cloudrmi_run_test('payload-framing-large-result', function () use ($port) {
+		$raw = stream_socket_client("tcp://127.0.0.1:{$port}");
+		if ($raw === false) {
+			throw new RuntimeException('unable to connect raw client');
+		}
+		fgets($raw, 2048);
+		fwrite($raw, "PROTO 2\r\n");
+		$protoLine = fgets($raw, 2048);
+		if ($protoLine === false || strpos($protoLine, '200 PROTO 2') === false) {
+			fclose($raw);
+			throw new RuntimeException('proto negotiation failed for large result check');
+		}
 
-	$expectedLargeResult = build_large_php_array(120, 16, 'X');
-	$argInline = 'PHP:' . base64_encode(serialize(120));
-	fwrite($raw, "CALL TestRmiInterface largeResult {$argInline}\r\n");
-	$responseLine = fgets($raw, 4096);
-	if ($responseLine === false) {
-		throw new RuntimeException('large result response missing');
-	}
-	$trimmed = trim($responseLine);
-	if (!preg_match('/^200\\s+PAYLOAD\\s+PHP\\s+(\\d+)$/i', $trimmed)) {
-		throw new RuntimeException('large result did not use payload framing: ' . $trimmed);
-	}
+		$expectedLargeResult = build_large_php_array(120, 16, 'X');
+		$argInline = 'PHP:' . base64_encode(serialize(120));
+		fwrite($raw, "CALL TestRmiInterface largeResult {$argInline}\r\n");
+		$responseLine = fgets($raw, 4096);
+		if ($responseLine === false) {
+			fclose($raw);
+			throw new RuntimeException('large result response missing');
+		}
+		$trimmed = trim($responseLine);
+		if (!preg_match('/^200\s+PAYLOAD\s+PHP\s+(\d+)$/i', $trimmed)) {
+			fclose($raw);
+			throw new RuntimeException('large result did not use payload framing: ' . $trimmed);
+		}
 
-	$body = read_response_body($raw, $responseLine);
-	if ($body !== $expectedLargeResult) {
-		throw new RuntimeException('large result payload mismatch');
-	}
-	fclose($raw);
+		$body = read_response_body($raw, $responseLine);
+		fclose($raw);
+		if ($body !== $expectedLargeResult) {
+			throw new RuntimeException('large result payload mismatch');
+		}
+	});
+} catch (Throwable $e) {
+	$exitCode = 1;
 } finally {
-	stop_server($proc, $pipes);
+	cloudrmi_stop_process($proc, $pipes);
+	cloudrmi_print_timing_summary();
 }
 
-fwrite(STDOUT, "PHP serialization integration tests passed\n");
+exit($exitCode);
