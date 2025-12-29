@@ -66,29 +66,67 @@ class TestRmiHandler implements TestRmiInterface
 
 class TestRMIServer extends CloudRMIServer
 {
-	public function __construct(string $host, int $port, int $maxProto, bool $enableFork, ?string $unixSocketPath = null)
-	{
+	public function __construct(
+		string $host,
+		int $port,
+		int $maxProto,
+		string $workerModel,
+		?string $unixSocketPath = null,
+		?int $preforkWorkers = null,
+		?array $adaptiveBounds = null
+	) {
 		parent::__construct();
 		$this->host = $host;
 		$this->port = $port;
-		$this->disableFork = !$enableFork;
-		$this->setWorkerModel($enableFork ? self::WORKER_MODEL_FORK : self::WORKER_MODEL_SINGLE);
-		$this->enableAsyncCapability = $enableFork;
+		$this->disableFork = ($workerModel === self::WORKER_MODEL_SINGLE);
+		$this->setWorkerModel($workerModel);
+		$this->enableAsyncCapability = ($workerModel !== self::WORKER_MODEL_SINGLE);
 		$this->setMaxProtocolVersion($maxProto);
 		$this->setRequireAuth(false);
 		$this->readTimeout = 5;
 		$this->setUnixSocketPath($unixSocketPath);
+
+		if ($preforkWorkers !== null) {
+			$this->setPreforkWorkers($preforkWorkers);
+		}
+
+		if ($adaptiveBounds !== null) {
+			[$min, $max, $spare] = $adaptiveBounds;
+			$this->setAdaptiveWorkerBounds($min, $max, $spare);
+		}
 	}
 }
 
-$options = getopt('', ['port:', 'host::', 'proto-max::', 'enable-fork::', 'unix-socket::']);
+$options = getopt('', [
+	'port:',
+	'host::',
+	'proto-max::',
+	'worker-model::',
+	'enable-fork::',
+	'unix-socket::',
+	'prefork-workers::',
+	'adaptive-min::',
+	'adaptive-max::',
+	'adaptive-spare::',
+]);
+
 $port = isset($options['port']) ? (int) $options['port'] : 15555;
 $host = $options['host'] ?? '127.0.0.1';
 $protoMax = isset($options['proto-max']) ? (int) $options['proto-max'] : 2;
-$enableFork = isset($options['enable-fork']) && $options['enable-fork'] !== '0';
+$workerModel = strtolower((string) ($options['worker-model'] ?? getenv('CLOUDRMI_WORKER_MODEL') ?? 'single'));
+$preforkWorkers = isset($options['prefork-workers']) ? (int) $options['prefork-workers'] : null;
+$adaptiveBounds = [
+	isset($options['adaptive-min']) ? (int) $options['adaptive-min'] : 1,
+	isset($options['adaptive-max']) ? (int) $options['adaptive-max'] : 4,
+	isset($options['adaptive-spare']) ? (int) $options['adaptive-spare'] : 1,
+];
 $unixSocketPath = $options['unix-socket'] ?? null;
 
-$server = new TestRMIServer($host, $port, $protoMax, $enableFork, $unixSocketPath);
+if (isset($options['enable-fork']) && !array_key_exists('worker-model', $options)) {
+	$workerModel = ($options['enable-fork'] !== '0') ? CloudRMIServer::WORKER_MODEL_FORK : CloudRMIServer::WORKER_MODEL_SINGLE;
+}
+
+$server = new TestRMIServer($host, $port, $protoMax, $workerModel, $unixSocketPath, $preforkWorkers, $adaptiveBounds);
 
 $handler = new TestRmiHandler();
 $server->bind(TestRmiInterface::class, $handler);
