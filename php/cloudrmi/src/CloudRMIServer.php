@@ -367,9 +367,9 @@ class CloudRMIServer
 		if (count($this->adaptiveWorkers) >= $this->adaptiveMaxWorkers)
 			return;
 
-		$pair = [];
+		$pair = $this->createSocketPair();
 
-		if (!@stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP, $pair))
+		if (count($pair) !== 2)
 			return;
 
 		$pid = pcntl_fork();
@@ -398,6 +398,25 @@ class CloudRMIServer
 			'state' => 'starting',
 			'last' => microtime(true),
 		];
+	}
+
+	protected function createSocketPair(): array
+	{
+		try {
+			$pair = @stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+		} catch (\ArgumentCountError $e) {
+			$pair = [];
+
+			if (!@stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP, $pair))
+				return [];
+
+			return $pair;
+		}
+
+		if ($pair === false || !is_array($pair) || count($pair) !== 2)
+			return [];
+
+		return $pair;
 	}
 
 	protected function pollAdaptiveWorkers()
