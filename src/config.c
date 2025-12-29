@@ -280,7 +280,7 @@ int read_config(char *config_file)
          DEBUG_LOG("config:set start_delay=%d", var_start_delay);
       }
       else if (!strcasecmp(conf_name, "worker_model")) {
-         if (!strcasecmp(conf_value, "fork"))
+         if (!strcasecmp(conf_value, "single") || !strcasecmp(conf_value, "fork"))
             var_worker_model = WORKER_MODEL_FORK;
          else if (!strcasecmp(conf_value, "prefork"))
             var_worker_model = WORKER_MODEL_PREFORK;

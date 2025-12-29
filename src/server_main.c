@@ -64,7 +64,7 @@ void show_help(char *this_cmd)
 	printf("\t-p set port number (default: %d)\n", var_port);
 	printf("\t-u set unix socket path (default: %s)\n", var_unix_socket_path ? var_unix_socket_path : "disabled");
 	printf("\t-t set authentication token\n");
-	printf("\t-w set worker model: fork, prefork, or adaptive (default: %s)\n",
+	printf("\t-w set worker model: single, fork, prefork, or adaptive (default: %s)\n",
 		worker_model_to_string(var_worker_model));
 	printf("\t-W set number of prefork workers (default: %d)\n", var_prefork_workers);
 	printf("\t-M set minimum adaptive workers (default: %d)\n", var_adaptive_min_workers);
@@ -88,7 +88,7 @@ void show_help(char *this_cmd)
    rmi_capabilities_to_tokens(rmi_get_compiled_capabilities(), caps_buf, sizeof(caps_buf));
    printf("\tprotocol extensions\t%s\n", caps_buf);   
    printf("\tkernel interfaces\tPOSIX\n");
-   printf("\tworker models\t\tfork, prefork, adaptive\n");
+   printf("\tworker models\t\tsingle, fork, prefork, adaptive\n");
    printf("\tdefault model\t\tfork\n");
    printf("\tbuild symbols\t\t");
 #ifdef PROXY_SUPPORT
@@ -271,10 +271,10 @@ int main(int argc, char *argv[])
 #endif
 
             case 'w':
-               if (strcasecmp(optarg, "prefork") == 0)
-                  var_worker_model = WORKER_MODEL_PREFORK;
-               else if (strcasecmp(optarg, "fork") == 0)
+               if (strcasecmp(optarg, "single") == 0 || strcasecmp(optarg, "fork") == 0)
                   var_worker_model = WORKER_MODEL_FORK;
+               else if (strcasecmp(optarg, "prefork") == 0)
+                  var_worker_model = WORKER_MODEL_PREFORK;
                else if (strcasecmp(optarg, "adaptive") == 0)
                   var_worker_model = WORKER_MODEL_ADAPTIVE;
                else
