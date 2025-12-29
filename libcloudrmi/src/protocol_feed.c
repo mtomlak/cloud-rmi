@@ -234,6 +234,44 @@ rmi_status_t rmi_protocol_feed(
         return RMI_E_OVERFLOW;
     }
 
+    if (ctx->state == RMI_PROTOCOL_IDLE) {
+        uint8_t *newline = memchr(ctx->buffer, '\n', ctx->len);
+        if (newline != NULL) {
+            size_t line_end = (size_t)(newline - ctx->buffer);
+            size_t line_len = line_end;
+
+            if (line_end > 0 && ctx->buffer[line_end - 1] == '\r')
+                line_len--;
+
+            if (line_len <= RMI_MAX_LINE) {
+                char saved = (char)ctx->buffer[line_len];
+                ctx->buffer[line_len] = '\0';
+
+                rmi_event_t parsed;
+                rmi_error_t parse_err;
+                if (rmi_protocol_handle_line(ctx, (const char *)ctx->buffer, &parsed, &parse_err)) {
+                    if (parsed.type == RMI_EVENT_CALL &&
+                        parsed.argc >= 6 &&
+                        strcasecmp(parsed.arg3, "payload") == 0) {
+                        char *endptr = NULL;
+                        unsigned long long payload_len = strtoull(parsed.arg5, &endptr, 10);
+                        if (endptr != parsed.arg5 && *endptr == '\0' && payload_len > ctx->max_payload) {
+                            if (err != NULL) {
+                                err->code = RMI_ERROR_BAD_REQUEST;
+                                err->message = "Invalid payload length";
+                            }
+                            ctx->buffer[line_len] = (uint8_t)saved;
+                            rmi_protocol_reset(ctx);
+                            return RMI_E_OVERFLOW;
+                        }
+                    }
+                }
+
+                ctx->buffer[line_len] = (uint8_t)saved;
+            }
+        }
+    }
+
     return RMI_OK;
 }
 
